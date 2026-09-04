@@ -14,6 +14,16 @@
 `MoleculeData`，再由 `molgr.utils.converter` 转成 RDKit。
 - 金属体系采用“先重建无金属有机骨架，再选择金属电子态，最后只为赢家回插金属”的统一架构。
 
+## 架构总览
+
+图 1 是面向出版物的紧凑算法总览。图中有意使用抽象节点名称，将端到端数据流、无金属重建
+和共振处理细节分开表示。可编辑源文件见
+[`ALGORITHM_ARCHITECTURE.drawio`](ALGORITHM_ARCHITECTURE.drawio)。
+
+![MolGR 端到端分子图重建架构](ALGORITHM_ARCHITECTURE.svg)
+
+*图 1. MolGR 端到端分子图重建架构。*
+
 ## 术语约定
 
 - `discordance` 统一译为“失谐”，表示候选分子图偏离自然、内部协调电子结构的特征及其累积程度；不译为泛化的“不一致”。
@@ -74,7 +84,14 @@ MolGR 的统一算法可以按七层理解：
 - `MetalCandidateState`：一个金属电子态组合及其诱导的 no-metal 目标桶，可绑定共享的 `ReconstructionState`。
 - `MolGRConfig`：统一运行时配置，包含 resonance、metal scoring、metal radical inference 和 C++ 后端开关；force-field 评分固定使用 UFF。
 
-## 调用图
+图 1 中的候选分数是单一的有机骨架 UFF 分数。每个通过验证的候选只评估一次，之后由无金属选优
+步骤复用。金属态选择还会加入失谐度和电子态一致性判据，并不是再引入一个独立的金属分数。
+
+## 实现视图
+
+下面两类视图用于说明后端路由和调用顺序，是图 1 的实现级补充，不应理解为额外的算法阶段。
+
+### 调用图
 
 ```mermaid
 flowchart TD
@@ -131,7 +148,7 @@ flowchart TD
     Post --> Out["Chem.Mol"]
 ```
 
-## 数据流动时序图
+### 数据流动时序图
 
 ```mermaid
 sequenceDiagram
@@ -191,7 +208,9 @@ sequenceDiagram
     CV-->>User: Chem.Mol
 ```
 
-## 无金属准备、种子枚举与恢复层
+## 算法细节
+
+### 无金属准备、种子枚举与恢复层
 
 无金属重建的确定性准备阶段由
 [`src/molgr/fallback/utils/no_metals/preparation.py`](../../src/molgr/fallback/utils/no_metals/preparation.py)
@@ -217,7 +236,7 @@ sequenceDiagram
 processed 状态不会重复计算。首个产生有效候选的层会终止后续扩展；此后也不存在独立的
 direct 候选路径。
 
-## 共振恢复策略
+### 共振恢复策略
 
 共振搜索逐层消费种子，并通过共享 session 在所有已搜索层之间全局去重。当前策略是：
 
@@ -238,11 +257,11 @@ direct 候选路径。
   3. 更少的多余自由基标记
   4. 更低 force-field 分数
 
-## 金属搜索与选择
+### 金属搜索与选择
 
 金属路径的关键不是直接枚举所有金属态笛卡尔积，而是先压缩搜索空间。
 
-### 金属态枚举
+#### 金属态枚举
 
 对每个 OpenBabel 识别为 metal 的原子：
 
@@ -262,7 +281,7 @@ direct 候选路径。
 
 金属局域未成对电子会优先消耗输入自由基预算，no-metal 目标为 `max(0, 输入自由基数 - 金属局域自由基数)`。当金属局域自旋超过净自旋目标时，允许其表示反平行耦合，不再淘汰该状态，也不会产生负的有机自由基目标。这样既保留通常的预算关系，也能让模糊区的高低自旋分支进入重建。
 
-### 搜索空间压缩
+#### 搜索空间压缩
 
 金属候选组合经过三层压缩：
 
@@ -278,7 +297,7 @@ DP 合并后的 target bucket key 是：
 
 这意味着多个不同金属态组合如果诱导相同的无金属目标，只会触发一次无金属重建。
 
-### 金属候选评分
+#### 金属候选评分
 
 每个 `MetalCandidateState` 绑定一个共享的 `ReconstructionState` 后评分。候选选择使用：
 
@@ -296,7 +315,7 @@ DP 合并后的 target bucket key 是：
   - 自由基局域化惩罚
 - 局部金属配位失谐检查：基于内圈可见性、形式电荷符号、可见双自由基和电荷平衡例外。
 
-### 金属候选失谐结构特征
+#### 金属候选失谐结构特征
 
 失谐结构用于识别错误金属价态候选诱导出的不协调有机-金属组合。算法不会根据失谐结构反向调整当前候选的金属价态，因为金属搜索已经枚举了所有可用价态；正确价态对应的候选应当不会出现这些失谐特征。
 
@@ -390,7 +409,9 @@ DP 合并后的 target bucket key 是：
   force_field_score, combination_index)`。
 - 入选候选仍会记录用于派生失谐度的有机电子态指标；已移除的金属环境评分指标不再存在于运行时 metadata。
 
-## C++ 后端已实现的额外优化
+## 实现与验证
+
+### C++ 后端已实现的额外优化
 
 C++ 后端是 Python fallback 语义的加速实现。下面这些优化可以改变调度、缓存和线程安全实现
 细节，但同一个 `MolGRConfig` 下不得改变候选集合、候选顺序、评分 key、平局打破逻辑或最终
@@ -470,7 +491,7 @@ C++ 后端是 Python fallback 语义的加速实现。下面这些优化可以�
 - resonance candidate parallelism 的调度成本高于收益，当前版本不再保留对应 C++ 配置项。
 - `SearchResonanceCandidates(...)` 仍按串行流程准备 resonance candidates。
 
-## C++/Python 后端一致性护栏
+### C++/Python 后端一致性护栏
 
 Python fallback 是语义参考。C++ 后端可以缓存、并行、预计算，或使用线程安全 vendor
 子模块，但这些优化必须保持相同 `MolGRConfig` 下的候选集合、候选顺序、评分 key 和最终
@@ -553,7 +574,7 @@ bash scripts/benchmark_env.sh run python benchmarks/tmqmg_xyz_benchmark/run.py \
 只有在测吞吐时才增加 `--process-workers`。进程级并行会与 C++ target-bucket 线程叠加，
 过高 worker 数会竞争同一批 CPU 资源。
 
-## 维护边界
+### 维护边界
 
 修改算法时应按以下边界验证：
 

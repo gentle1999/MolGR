@@ -19,6 +19,17 @@ Current status:
   reconstruct the metal-free organic core first, then select metal states, and
   only reinsert metals for the final winner
 
+## Architecture Overview
+
+Figure 1 is the compact, publication-oriented overview of the algorithm. It
+keeps node labels abstract and separates the end-to-end flow from the
+metal-free reconstruction and resonance-processing details. The editable source
+is [`ALGORITHM_ARCHITECTURE.drawio`](ALGORITHM_ARCHITECTURE.drawio).
+
+![MolGR end-to-end reconstruction architecture](ALGORITHM_ARCHITECTURE.svg)
+
+*Figure 1. MolGR end-to-end reconstruction architecture.*
+
 ## Terminology
 
 - `discordance` means the features and accumulated penalty by which a candidate
@@ -88,7 +99,18 @@ Key state objects:
 - `MetalCandidateState`: one metal assignment and its induced no-metal target bucket, optionally bound to a shared `ReconstructionState`
 - `MolGRConfig`: unified runtime config for resonance, metal scoring, metal radical inference, and C++ backend switches; force-field scoring is fixed to UFF
 
-## Call Graph
+The candidate score in Figure 1 is a single organic-core UFF score. It is
+evaluated once for each validated candidate and reused by the no-metal selection
+step. Metal-state selection adds discordance and electronic-consistency criteria;
+it does not introduce a second independent metal score.
+
+## Implementation Views
+
+The following views expose backend routing and call order. They complement the
+publication-oriented overview and should not be read as additional algorithm
+stages.
+
+### Call Graph
 
 ```mermaid
 flowchart TD
@@ -145,7 +167,7 @@ flowchart TD
     Post --> Out["Chem.Mol"]
 ```
 
-## Data-Flow Sequence Diagram
+### Data-Flow Sequence Diagram
 
 ```mermaid
 sequenceDiagram
@@ -205,7 +227,9 @@ sequenceDiagram
     CV-->>User: Chem.Mol
 ```
 
-## Metal-Free Preparation, Seed Enumeration, And Recovery
+## Algorithm Details
+
+### Metal-Free Preparation, Seed Enumeration, And Recovery
 
 The deterministic metal-free preparation is aligned between
 [`src/molgr/fallback/utils/no_metals/preparation.py`](../../src/molgr/fallback/utils/no_metals/preparation.py)
@@ -238,7 +262,7 @@ Pareto traversal labels, and processed states discovered by an earlier layer are
 not recomputed. Search stops at the first layer with a valid candidate. There is
 no separate direct-candidate path after this point.
 
-## Resonance Recovery
+### Resonance Recovery
 
 Resonance search consumes one discrepancy layer at a time while deduplicating
 globally across the shared session.
@@ -264,12 +288,12 @@ Current behavior:
   3. fewer excess radical labels
   4. lower force-field score
 
-## Metal Search and Selection
+### Metal Search and Selection
 
 The metal-aware pipeline does not enumerate the full Cartesian product and then
 score everything. It compresses the search space first.
 
-### Metal-state enumeration
+#### Metal-state enumeration
 
 For each atom that OpenBabel classifies as a metal:
 
@@ -306,7 +330,7 @@ the state or produce a negative organic target. This lets ambiguous ligand-field
 branches reach reconstruction while preserving the ordinary radical budget when
 it is sufficient.
 
-### Search-space compression
+#### Search-space compression
 
 The current pipeline compresses metal combinations in three steps:
 
@@ -323,7 +347,7 @@ The DP result is grouped by:
 So different metal assignments that induce the same metal-free target only pay
 for one metal-free reconstruction.
 
-### Metal candidate scoring
+#### Metal candidate scoring
 
 Each `MetalCandidateState` is scored after attaching a shared
 `ReconstructionState`. Candidate selection uses:
@@ -353,7 +377,7 @@ Each `MetalCandidateState` is scored after attaching a shared
 - local metal-coordination discordance checks based on inner-sphere visibility,
   formal charge signs, visible diradicals, and charge-balance exceptions
 
-### Metal candidate discordance features
+#### Metal candidate discordance features
 
 Discordance features identify chemically incoherent organic-metal combinations
 induced by an incorrect metal-valence candidate. The algorithm does not use
@@ -551,7 +575,9 @@ Final selection keeps the feature layers explicit:
   derive discordance, but the removed metal-environment scoring metrics no
   longer exist in the runtime metadata
 
-## Extra C++ Optimizations
+## Implementation and Validation
+
+### Extra C++ Optimizations
 
 The C++ backend is the accelerated implementation of the Python fallback
 semantics. The optimizations below may change scheduling, caching, and
@@ -641,7 +667,7 @@ Implementation note:
   fields for it
 - `SearchResonanceCandidates(...)` still prepares resonance candidates serially
 
-## C++/Python Parity Guardrails
+### C++/Python Parity Guardrails
 
 The Python fallback is the semantic reference. The C++ backend may cache,
 parallelize, precompute, or use thread-safe vendor submodules, but those changes
@@ -734,7 +760,7 @@ Increase `--process-workers` only for throughput measurements. Process-level
 parallelism stacks with C++ target-bucket threads, so high worker counts can
 compete for the same CPU resources.
 
-## Maintenance Boundaries
+### Maintenance Boundaries
 
 When changing algorithmic behavior:
 

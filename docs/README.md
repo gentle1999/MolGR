@@ -15,6 +15,8 @@ This directory contains project documentation beyond the root README.
 
 - [`architecture/ALGORITHM_ARCHITECTURE.md`](architecture/ALGORITHM_ARCHITECTURE.md): English algorithm architecture reference.
 - [`architecture/ALGORITHM_ARCHITECTURE.zh-CN.md`](architecture/ALGORITHM_ARCHITECTURE.zh-CN.md): Chinese algorithm architecture reference.
+- [`architecture/ALGORITHM_ARCHITECTURE.svg`](architecture/ALGORITHM_ARCHITECTURE.svg): compact publication-oriented architecture figure.
+- [`architecture/ALGORITHM_ARCHITECTURE.drawio`](architecture/ALGORITHM_ARCHITECTURE.drawio): editable source for the architecture figure.
 
 These files cover the public `xyz_to_rdmol(...)` API, Python fallback reference backend,
 C++ `_core` backend, metal-aware reconstruction, resonance recovery, scoring, C++ optimizations,

@@ -15,6 +15,8 @@
 
 - [`architecture/ALGORITHM_ARCHITECTURE.md`](architecture/ALGORITHM_ARCHITECTURE.md)：英文算法架构说明。
 - [`architecture/ALGORITHM_ARCHITECTURE.zh-CN.md`](architecture/ALGORITHM_ARCHITECTURE.zh-CN.md)：中文算法架构说明。
+- [`architecture/ALGORITHM_ARCHITECTURE.svg`](architecture/ALGORITHM_ARCHITECTURE.svg)：紧凑的出版物级算法架构图。
+- [`architecture/ALGORITHM_ARCHITECTURE.drawio`](architecture/ALGORITHM_ARCHITECTURE.drawio)：架构图可编辑源文件。
 
 这些文档覆盖公开入口 `xyz_to_rdmol(...)`、Python fallback 参考后端、C++ `_core`
 后端、金属感知重建、共振恢复、评分策略、C++ 优化和维护边界。

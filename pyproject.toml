@@ -4,10 +4,8 @@ dynamic = ["version"]
 description = "Reconstruct molecular graphs from XYZ coordinates with RDKit and Open Babel."
 readme = "README.md"
 license = { file = "LICENSE" }
-authors = [
-    { name = "Miao-jiong Tang", email = "mj_t@zju.edu.cn" },
-    { name = "Ying-zi Luo" },
-]
+authors = [{ name = "Miao-jiong Tang" }, { name = "Ying-zi Luo" }]
+maintainers = [{ name = "Miao-jiong Tang", email = "mj_t@zju.edu.cn" }]
 requires-python = ">=3.8"
 keywords = [
     "cheminformatics",

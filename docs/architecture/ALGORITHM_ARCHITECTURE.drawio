@@ -1,0 +1,245 @@
+<mxfile host="65bd71144e">
+    <diagram id="molgr-framework" name="Page-1">
+        <mxGraphModel dx="2419" dy="1234" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1700" pageHeight="850" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="panel_left" value="HIGH-LEVEL FLOW" style="swimlane;html=1;whiteSpace=wrap;rounded=0;horizontal=1;startSize=32;fillColor=none;strokeColor=#000000;fontColor=#000000;fontFamily=Arial;fontSize=15;fontStyle=1;align=left;verticalAlign=middle;spacingLeft=12;" parent="1" vertex="1">
+                    <mxGeometry x="290" y="40" width="350" height="850" as="geometry"/>
+                </mxCell>
+                <mxCell id="4" value="RDKit Molecule object&lt;div&gt;&lt;font style=&quot;font-size: 12px;&quot;&gt;with full features&lt;/font&gt;&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontFamily=Arial;fontSize=15;spacing=6;arcSize=8;" parent="panel_left" vertex="1">
+                    <mxGeometry x="50" y="780" width="250" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="l_metal" value="Metal present?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontFamily=Arial;fontSize=14;spacing=4;" parent="panel_left" vertex="1">
+                    <mxGeometry x="70" y="140" width="210" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="l_states" value="Layered metal-state search&lt;br&gt;&lt;span style=&quot;font-size:12px&quot;&gt;feasible valence + spin&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontFamily=Arial;fontSize=15;spacing=6;arcSize=8;" parent="panel_left" vertex="1">
+                    <mxGeometry x="50" y="240" width="250" height="52" as="geometry"/>
+                </mxCell>
+                <mxCell id="e_l_metal_states" value="yes" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#000000;fontColor=#000000;fontSize=12;endArrow=block;endFill=1;" parent="panel_left" source="l_metal" target="l_states" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="l_reconstruct" value="Metal-free reconstruction&lt;br&gt;&lt;span style=&quot;font-size:12px&quot;&gt;per feasible state&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontFamily=Arial;fontSize=15;spacing=6;arcSize=8;" parent="panel_left" vertex="1">
+                    <mxGeometry x="50" y="330" width="250" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="e_l_metal_reconstruct" value="no" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#000000;fontColor=#000000;fontSize=12;endArrow=block;endFill=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" parent="panel_left" source="l_metal" target="l_reconstruct" edge="1">
+                    <mxGeometry x="-0.2451" relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="330" y="170"/>
+                            <mxPoint x="330" y="355"/>
+                        </Array>
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e_l_states_reconstruct" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#000000;fontColor=#000000;fontSize=12;endArrow=block;endFill=1;" parent="panel_left" source="l_states" target="l_reconstruct" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="l_input" value="Molecular geometry&lt;br&gt;&lt;span style=&quot;font-size:12px&quot;&gt;XYZ · charge · multiplicity&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontFamily=Arial;fontSize=15;spacing=6;arcSize=8;" parent="panel_left" vertex="1">
+                    <mxGeometry x="50" y="50" width="250" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="e_l_input_metal" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#000000;fontColor=#000000;fontSize=12;endArrow=block;endFill=1;" parent="panel_left" source="l_input" target="l_metal" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="l_optimize" value="Rank valence/spin states&lt;br&gt;&lt;span style=&quot;font-size:12px&quot;&gt;discordance-based selection&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontFamily=Arial;fontSize=15;spacing=6;arcSize=8;" parent="panel_left" vertex="1">
+                    <mxGeometry x="50" y="420" width="250" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="e_l_reconstruct_optimize" value="metal path" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#000000;fontColor=#000000;fontSize=12;endArrow=block;endFill=1;" parent="panel_left" source="l_reconstruct" target="l_optimize" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="l_restore" value="Combine metal and graph&lt;br&gt;&lt;span style=&quot;font-size:12px&quot;&gt;if present&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontFamily=Arial;fontSize=15;spacing=6;arcSize=8;" parent="panel_left" vertex="1">
+                    <mxGeometry x="50" y="510" width="250" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="e_l_optimize_restore" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#000000;fontColor=#000000;fontSize=12;endArrow=block;endFill=1;" parent="panel_left" source="l_optimize" target="l_restore" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="6" style="edgeStyle=none;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" parent="panel_left" source="l_output" target="5" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="l_output" value="Final molecular graph" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontFamily=Arial;fontSize=15;spacing=6;arcSize=8;" parent="panel_left" vertex="1">
+                    <mxGeometry x="50" y="600" width="250" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="e_l_reconstruct_output" value="metal-free path" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#000000;fontColor=#000000;fontSize=12;endArrow=block;endFill=1;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="panel_left" source="l_reconstruct" target="l_output" edge="1">
+                    <mxGeometry x="-0.5455" y="30" relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="20" y="355"/>
+                            <mxPoint x="20" y="625"/>
+                        </Array>
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e_l_restore_output" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#000000;fontColor=#000000;fontSize=12;endArrow=block;endFill=1;" parent="panel_left" source="l_restore" target="l_output" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="7" style="edgeStyle=none;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" parent="panel_left" source="5" target="4" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="5" value="Post-processing&lt;div&gt;&lt;font style=&quot;font-size: 12px;&quot;&gt;dative bonds &amp;amp; stereochemistry&lt;/font&gt;&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontFamily=Arial;fontSize=15;spacing=6;arcSize=8;" parent="panel_left" vertex="1">
+                    <mxGeometry x="50" y="690" width="250" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="panel_center" value="METAL-FREE RECONSTRUCTION" style="swimlane;html=1;whiteSpace=wrap;rounded=0;horizontal=1;startSize=32;fillColor=#dae8fc;strokeColor=#6c8ebf;fontFamily=Arial;fontSize=15;fontStyle=1;align=left;verticalAlign=middle;spacingLeft=12;" parent="1" vertex="1">
+                    <mxGeometry x="660" y="40" width="580" height="530" as="geometry"/>
+                </mxCell>
+                <mxCell id="c_valid" value="Select best organic graph&lt;br&gt;&lt;span style=&quot;font-size:12px&quot;&gt;reuse score; selection key&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontFamily=Arial;fontSize=15;spacing=6;arcSize=8;" parent="panel_center" vertex="1">
+                    <mxGeometry x="40" y="470" width="210" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="c_score" value="Candidate scoring&lt;br&gt;&lt;span style=&quot;font-size:12px&quot;&gt;UFF energy based score&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontFamily=Arial;fontSize=15;spacing=6;arcSize=8;" parent="panel_center" vertex="1">
+                    <mxGeometry x="40" y="390" width="210" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="c_fail" value="No valid reconstruction&lt;br&gt;&lt;span style=&quot;font-size:12px&quot;&gt;skip state&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontFamily=Arial;fontSize=15;spacing=6;arcSize=8;" parent="panel_center" vertex="1">
+                    <mxGeometry x="330" y="470" width="220" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="c_found" value="Candidates found?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontFamily=Arial;fontSize=14;spacing=4;" parent="panel_center" vertex="1">
+                    <mxGeometry x="50" y="310" width="190" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="e_c_found_recovery_fail" value="no (recovery)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#000000;fontColor=#000000;fontSize=12;endArrow=block;endFill=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="panel_center" source="c_found" target="c_fail" edge="1">
+                    <mxGeometry x="-0.4077" relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="145" y="370"/>
+                            <mxPoint x="270" y="370"/>
+                            <mxPoint x="270" y="490"/>
+                        </Array>
+                        <mxPoint x="-1" as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e_c_found_score" value="yes" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#000000;fontColor=#000000;fontSize=12;endArrow=block;endFill=1;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="panel_center" source="c_found" target="c_score" edge="1">
+                    <mxGeometry x="0.0769" relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="20" y="330"/>
+                            <mxPoint x="20" y="410"/>
+                        </Array>
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="c_recovery_tiers" value="Ordered recovery&lt;br&gt;&lt;span style=&quot;font-size:12px&quot;&gt;T1 deformed-pi; T2 bond cleavage&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontFamily=Arial;fontSize=15;spacing=6;arcSize=8;" parent="panel_center" vertex="1">
+                    <mxGeometry x="330" y="310" width="220" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="c_more_layers" value="More d layers?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontFamily=Arial;fontSize=14;spacing=4;" parent="panel_center" vertex="1">
+                    <mxGeometry x="330" y="390" width="220" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="e_c_more_recovery" value="no" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#000000;fontColor=#000000;fontSize=12;endArrow=block;endFill=1;" parent="panel_center" source="c_more_layers" target="c_recovery_tiers" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e_c_found_more" value="no (primary)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#000000;fontColor=#000000;fontSize=12;endArrow=block;endFill=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="panel_center" source="c_found" target="c_more_layers" edge="1">
+                    <mxGeometry x="-0.4118" relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="290" y="330"/>
+                            <mxPoint x="290" y="410"/>
+                        </Array>
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="c_input" value="Metal-free input&lt;br&gt;&lt;span style=&quot;font-size:12px&quot;&gt;XYZ · charge · multiplicity&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontFamily=Arial;fontSize=15;spacing=6;arcSize=8;" parent="panel_center" vertex="1">
+                    <mxGeometry x="170" y="50" width="220" height="38" as="geometry"/>
+                </mxCell>
+                <mxCell id="c_prepare" value="Active-center generation&lt;br&gt;&lt;span style=&quot;font-size:12px&quot;&gt;initial charge + radical labels&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontFamily=Arial;fontSize=15;spacing=6;arcSize=8;" parent="panel_center" vertex="1">
+                    <mxGeometry x="170" y="110" width="220" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="c_seeds" value="Neighbor-radical seeds&lt;br&gt;&lt;span style=&quot;font-size:12px&quot;&gt;discrepancy layers d = 0,...,D&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontFamily=Arial;fontSize=15;spacing=6;arcSize=8;" parent="panel_center" vertex="1">
+                    <mxGeometry x="170" y="170" width="220" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="c_resonance" value="Resonance processing&lt;br&gt;&lt;span style=&quot;font-size:12px&quot;&gt;one-electron moves + quenching&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontFamily=Arial;fontSize=15;spacing=6;arcSize=8;" parent="panel_center" vertex="1">
+                    <mxGeometry x="170" y="230" width="220" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="e_c_input_prepare" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#000000;fontColor=#000000;fontSize=12;endArrow=block;endFill=1;" parent="panel_center" source="c_input" target="c_prepare" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e_c_prepare_seeds" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#000000;fontColor=#000000;fontSize=12;endArrow=block;endFill=1;" parent="panel_center" source="c_prepare" target="c_seeds" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e_c_seeds_resonance" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#000000;fontColor=#000000;fontSize=12;endArrow=block;endFill=1;" parent="panel_center" source="c_seeds" target="c_resonance" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e_c_more_seeds" value="yes · next d" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#000000;fontColor=#000000;fontSize=12;dashed=1;dashPattern=4 4;endArrow=block;endFill=1;entryX=1;entryY=0.5;entryDx=0;entryDy=0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;" parent="panel_center" source="c_more_layers" target="c_seeds" edge="1">
+                    <mxGeometry x="0.4" relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="560" y="410"/>
+                            <mxPoint x="560" y="190"/>
+                        </Array>
+                        <mxPoint x="425" y="320" as="sourcePoint"/>
+                        <mxPoint x="90" y="120" as="targetPoint"/>
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e_c_recovery_reenter" value="re-enter" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#000000;fontColor=#000000;fontSize=12;endArrow=block;endFill=1;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;dashed=1;" parent="panel_center" source="c_recovery_tiers" target="c_resonance" edge="1">
+                    <mxGeometry x="-0.4912" relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="440" y="250"/>
+                        </Array>
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e_c_resonance_found" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#000000;fontColor=#000000;fontSize=12;endArrow=block;endFill=1;exitX=0;exitY=0.5;exitDx=0;exitDy=0;" parent="panel_center" source="c_resonance" target="c_found" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="145" y="250"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e_c_score_valid" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#000000;fontColor=#000000;fontSize=12;endArrow=block;endFill=1;" parent="panel_center" source="c_score" target="c_valid" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="panel_right" value="RESONANCE PROCESSING" style="swimlane;html=1;whiteSpace=wrap;rounded=0;horizontal=1;startSize=32;fillColor=#d5e8d4;strokeColor=#82b366;fontFamily=Arial;fontSize=15;fontStyle=1;align=left;verticalAlign=middle;spacingLeft=12;" parent="1" vertex="1">
+                    <mxGeometry x="660" y="590" width="580" height="300" as="geometry"/>
+                </mxCell>
+                <mxCell id="r_seed" value="Seed expansion" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontFamily=Arial;fontSize=15;spacing=6;arcSize=8;" parent="panel_right" vertex="1">
+                    <mxGeometry x="40" y="50" width="230" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="r_bound" value="Bounded traversal&lt;br&gt;&lt;span style=&quot;font-size:12px&quot;&gt;depth + discrepancy bounds&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontFamily=Arial;fontSize=15;spacing=6;arcSize=8;" parent="panel_right" vertex="1">
+                    <mxGeometry x="40" y="110" width="230" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="e_r_seed_bound" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#000000;fontColor=#000000;fontSize=12;endArrow=block;endFill=1;" parent="panel_right" source="r_seed" target="r_bound" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="r_move" value="Active-center rearrangement&lt;br&gt;&lt;span style=&quot;font-size:12px&quot;&gt;one-electron move across pi bonds&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontFamily=Arial;fontSize=15;spacing=6;arcSize=8;" parent="panel_right" vertex="1">
+                    <mxGeometry x="40" y="170" width="230" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="e_r_bound_move" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#000000;fontColor=#000000;fontSize=12;endArrow=block;endFill=1;" parent="panel_right" source="r_bound" target="r_move" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e_r_move_bound" value="next move" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#000000;fontColor=#000000;fontSize=12;dashed=1;dashPattern=4 4;endArrow=block;endFill=1;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="panel_right" source="r_move" target="r_bound" edge="1">
+                    <mxGeometry y="-20" relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="20" y="190"/>
+                            <mxPoint x="20" y="130"/>
+                        </Array>
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="r_raw_dedup" value="Raw-state deduplication&lt;br&gt;&lt;span style=&quot;font-size:12px&quot;&gt;state key&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontFamily=Arial;fontSize=15;spacing=6;arcSize=8;" parent="panel_right" vertex="1">
+                    <mxGeometry x="290" y="50" width="250" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="e_r_move_raw" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#000000;fontColor=#000000;fontSize=12;endArrow=block;endFill=1;" parent="panel_right" source="r_move" target="r_raw_dedup" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="280" y="190"/>
+                            <mxPoint x="280" y="70"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="r_normalize" value="Active-center quenching&lt;br&gt;&lt;span style=&quot;font-size:12px&quot;&gt;bond-order + charge cleanup&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontFamily=Arial;fontSize=15;spacing=6;arcSize=8;" parent="panel_right" vertex="1">
+                    <mxGeometry x="290" y="110" width="250" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="e_r_raw_normalize" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#000000;fontColor=#000000;fontSize=12;endArrow=block;endFill=1;" parent="panel_right" source="r_raw_dedup" target="r_normalize" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="r_processed_dedup" value="Processed-state deduplication&lt;br&gt;&lt;span style=&quot;font-size:12px&quot;&gt;state key&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontFamily=Arial;fontSize=15;spacing=6;arcSize=48;" parent="panel_right" vertex="1">
+                    <mxGeometry x="290" y="170" width="250" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="e_r_normalize_processed" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#000000;fontColor=#000000;fontSize=12;endArrow=block;endFill=1;" parent="panel_right" source="r_normalize" target="r_processed_dedup" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="r_validate" value="Candidate validation&lt;br&gt;&lt;span style=&quot;font-size:12px&quot;&gt;target charge + spin&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontFamily=Arial;fontSize=15;spacing=6;arcSize=8;" parent="panel_right" vertex="1">
+                    <mxGeometry x="40" y="240" width="500" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="e_r_processed_validate" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#000000;fontColor=#000000;fontSize=12;endArrow=block;endFill=1;" parent="panel_right" source="r_processed_dedup" target="r_validate" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="415" y="220"/>
+                            <mxPoint x="290" y="220"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+</mxfile>
