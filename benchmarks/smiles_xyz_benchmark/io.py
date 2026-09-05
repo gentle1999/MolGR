@@ -15,6 +15,7 @@ SUMMARY_COLUMNS: tuple[str, ...] = (
     "fail_count",
     "skip_count",
     "comparison_skip_count",
+    "inconclusive_count",
     "avg_ms_total",
     "p50_ms_total",
     "p95_ms_total",
@@ -30,6 +31,7 @@ RESULT_COLUMNS: tuple[str, ...] = (
     "error",
     "predicted_smiles",
     "equivalent",
+    "evaluator_decision",
     "equivalence_method",
     "comparison_skipped",
     "comparison_skip_reason",
@@ -72,7 +74,12 @@ def summarize_results(results: list[BenchmarkResult]) -> list[dict[str, str | in
         timings = [row.timing_ms_total for row in timed_rows]
         count = len(denominator_rows)
         success_count = sum(1 for row in denominator_rows if row.equivalent is True)
-        fail_count = count - success_count
+        inconclusive_count = sum(
+            1
+            for row in denominator_rows
+            if getattr(row, "evaluator_decision", None) == "inconclusive"
+        )
+        fail_count = count - success_count - inconclusive_count
         skip_count = sum(1 for row in rows if row.status == "skipped")
         comparison_skip_count = sum(1 for row in rows if row.comparison_skipped)
 
@@ -85,6 +92,7 @@ def summarize_results(results: list[BenchmarkResult]) -> list[dict[str, str | in
                 "fail_count": fail_count,
                 "skip_count": skip_count,
                 "comparison_skip_count": comparison_skip_count,
+                "inconclusive_count": inconclusive_count,
                 "avg_ms_total": avg_ms,
                 "p50_ms_total": _percentile(timings, 0.50),
                 "p95_ms_total": _percentile(timings, 0.95),
@@ -118,6 +126,7 @@ def write_results_csv(path: Path, results: list[BenchmarkResult]) -> None:
                 "error": result.error,
                 "predicted_smiles": result.predicted_smiles,
                 "equivalent": result.equivalent,
+                "evaluator_decision": getattr(result, "evaluator_decision", None),
                 "equivalence_method": result.equivalence_method,
                 "comparison_skipped": getattr(result, "comparison_skipped", False),
                 "comparison_skip_reason": getattr(result, "comparison_skip_reason", None),

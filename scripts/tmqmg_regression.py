@@ -45,7 +45,7 @@ from molgr.fallback.utils.consts import NON_METAL_DICT
 from molgr.fallback.utils.electrons import set_unpaired_electron_count
 from molgr.fallback.utils.force_field import force_field_evaluation
 from molgr.interface import xyz_to_rdmol
-from molgr.utils.equivalence import check_equivalence
+from molgr.utils.equivalence import evaluate_equivalence
 
 
 RDLogger.DisableLog("rdApp.*")  # type: ignore[arg-type]
@@ -66,6 +66,7 @@ RESULT_FIELDNAMES = (
     "molgr_smiles_canonical",
     "equivalent",
     "strict_equivalent",
+    "evaluator_decision",
     "equivalence_method",
     "equivalence_reason",
     "spin_source",
@@ -240,6 +241,7 @@ def _empty_result(row_index: int, row: dict[str, str], xyz_path: Path) -> dict[s
         "molgr_status": "",
         "equivalent": "",
         "strict_equivalent": "",
+        "evaluator_decision": "",
         "equivalence_method": "",
         "equivalence_reason": "",
         "reference_answer_wrong": "",
@@ -792,14 +794,25 @@ def _process_row(
 
     if reference_mol is not None:
         try:
-            equivalent, info = check_equivalence(molgr_mol, reference_mol, use_chirality=False)
-            result["strict_equivalent"] = equivalent
-            result["equivalent"] = equivalent
+            info = evaluate_equivalence(molgr_mol, reference_mol, use_chirality=False)
+            decision = info.decision.value
+            result["evaluator_decision"] = decision
+            result["strict_equivalent"] = (
+                True if decision == "equivalent" else False if decision == "not_equivalent" else ""
+            )
+            result["equivalent"] = (
+                True
+                if decision == "equivalent"
+                else False
+                if decision == "not_equivalent"
+                else "inconclusive"
+            )
             result["equivalence_method"] = info.method.value if info.method is not None else ""
             result["equivalence_reason"] = info.reason
         except Exception as exc:  # noqa: BLE001
             result["equivalent"] = ""
             result["strict_equivalent"] = ""
+            result["evaluator_decision"] = ""
             result["equivalence_method"] = ""
             result["equivalence_reason"] = f"equivalence_failed: {type(exc).__name__}: {exc}"
 
@@ -810,7 +823,7 @@ def _process_row(
         result["reference_answer_status"] = "formula_mismatch"
         result["reference_answer_reason"] = formula_wrong_reason
         result["equivalent"] = "formula_mismatch"
-    elif whitelist_entry is not None and result["strict_equivalent"] is not True:
+    elif whitelist_entry is not None and result["evaluator_decision"] == "not_equivalent":
         whitelist_applied = True
         whitelist_status = whitelist_entry["status"]
         result["equivalent"] = whitelist_status

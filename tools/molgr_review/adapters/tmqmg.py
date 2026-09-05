@@ -139,6 +139,7 @@ class BenchmarkRow:
     comparison_skipped: str
     comparison_skip_reason: str
     timing_ms_total: float
+    evaluator_decision: str = ""
 
     @classmethod
     def from_csv(cls, label: str, row: dict[str, str]) -> BenchmarkRow:
@@ -163,6 +164,7 @@ class BenchmarkRow:
             comparison_skipped=row.get("comparison_skipped", ""),
             comparison_skip_reason=row.get("comparison_skip_reason", ""),
             timing_ms_total=timing_ms_total,
+            evaluator_decision=row.get("evaluator_decision", ""),
         )
 
 
@@ -486,7 +488,10 @@ def _signature(row: BenchmarkRow | None) -> str:
     return f"ok:{row.predicted_smiles}"
 
 
-def _results_equivalent(left: BenchmarkRow | None, right: BenchmarkRow | None) -> tuple[bool, str]:
+def _results_equivalent(
+    left: BenchmarkRow | None,
+    right: BenchmarkRow | None,
+) -> tuple[bool | None, str]:
     if left is None or right is None:
         return left is right, "missing result"
     if left.status != "ok" or right.status != "ok":
@@ -499,17 +504,22 @@ def _results_equivalent(left: BenchmarkRow | None, right: BenchmarkRow | None) -
     try:
         from rdkit import Chem
 
-        from molgr.utils.equivalence import check_equivalence
+        from molgr.utils.equivalence import evaluate_equivalence
 
         left_mol = Chem.MolFromSmiles(left.predicted_smiles)
         right_mol = Chem.MolFromSmiles(right.predicted_smiles)
         if left_mol is None or right_mol is None:
             return False, "predicted_smiles_parse_failed"
-        equivalent, info = check_equivalence(
-            left_mol, right_mol, use_chirality=False, max_resonance=100
-        )
+        info = evaluate_equivalence(left_mol, right_mol, use_chirality=False, max_resonance=100)
         reason = info.reason if info is not None else ""
-        return bool(equivalent), reason or "molgr_equivalence"
+        equivalent = (
+            True
+            if info.decision.value == "equivalent"
+            else False
+            if info.decision.value == "not_equivalent"
+            else None
+        )
+        return equivalent, reason or "molgr_equivalence"
     except Exception as exc:  # noqa: BLE001
         return False, f"{type(exc).__name__}: {exc}"
 
@@ -517,7 +527,7 @@ def _results_equivalent(left: BenchmarkRow | None, right: BenchmarkRow | None) -
 def _python_results_equivalent(
     left: BenchmarkRow | None,
     right: BenchmarkRow | None,
-) -> tuple[bool, str]:
+) -> tuple[bool | None, str]:
     return _results_equivalent(left, right)
 
 
@@ -690,7 +700,7 @@ def _case_issue(
             fallback = rows_by_key.get((label, "molgr_fallback"))
             cpp = rows_by_key.get((label, "molgr_cpp"))
             equivalent, reason = _results_equivalent(fallback, cpp)
-            if fallback is not None and cpp is not None and not equivalent:
+            if fallback is not None and cpp is not None and equivalent is False:
                 backend_mismatches.append(label)
                 backend_mismatch_reasons.append(f"{label}:{reason}")
 
@@ -706,7 +716,7 @@ def _case_issue(
                 baseline,
                 candidate,
             )
-            if not equivalent:
+            if equivalent is False:
                 mismatched_reasons.append(f"{baseline_label}_vs_{label}:{reason}")
         if mismatched_reasons:
             python_mismatches.append(method_id)

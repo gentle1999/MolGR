@@ -15,11 +15,19 @@ import pytest
 pytest.importorskip("openbabel")
 pytest.importorskip("rdkit")
 
+from openbabel import openbabel as ob
 from rdkit import Chem, RDLogger
 from rdkit.Chem import rdDistGeom
 
+from molgr import _core as core
+from molgr.fallback.pipeline.reconstruct_without_metals import xyz_to_omol_no_metal_state
+from molgr.fallback.utils.electrons import (
+    get_lone_pair_count,
+    get_unpaired_electron_count,
+    has_unresolved_two_electron_center,
+)
 from molgr.interface import xyz_to_rdmol
-from molgr.utils.equivalence import check_equivalence
+from molgr.utils.equivalence import EquivalenceDecision, evaluate_equivalence
 
 
 RDLogger.DisableLog("rdApp.*")  # type: ignore
@@ -61,7 +69,7 @@ def _ordered_atom_signature(mol: Chem.Mol) -> tuple[tuple[Any, ...], ...]:
             atom.GetNoImplicit(),
             atom.GetIsAromatic(),
         )
-        for atom in mol.GetAtoms()
+        for atom in mol.GetAtoms()  # pyright: ignore[reportCallIssue]
     )
 
 
@@ -75,7 +83,7 @@ def _ordered_bond_signature(mol: Chem.Mol) -> tuple[tuple[Any, ...], ...]:
                 bond.GetIsAromatic(),
                 str(bond.GetStereo()),
             )
-            for bond in mol.GetBonds()
+            for bond in mol.GetBonds()  # pyright: ignore[reportCallIssue]
         )
     )
 
@@ -86,6 +94,82 @@ def _reconstruction_signature(mol: Chem.Mol) -> tuple[Any, ...]:
         _ordered_atom_signature(mol),
         _ordered_bond_signature(mol),
     )
+
+
+def _assert_internal_states_differ_by_elementary_three_center_shift(
+    xyz_block: str,
+    total_charge: int,
+    total_radical_electrons: int,
+) -> None:
+    """Prove backend parity before toolkit-specific RDKit aromaticity perception."""
+
+    cpp = core.pipeline.reconstruct_without_metals.xyz_to_omol_no_metal(
+        xyz_block,
+        total_charge,
+        total_radical_electrons,
+    )
+    python = xyz_to_omol_no_metal_state(
+        xyz_block,
+        total_charge,
+        total_radical_electrons,
+    )
+    assert cpp is not None
+    assert python is not None
+
+    cpp_atoms = [
+        (
+            int(atom.atomic_num),
+            int(atom.formal_charge),
+            int(atom.radical_num),
+            int(atom.lone_pair_count),
+            bool(atom.unresolved_two_electron_center),
+        )
+        for atom in cpp.atoms
+    ]
+    python_atoms = [
+        (
+            int(atom.GetAtomicNum()),
+            int(atom.GetFormalCharge()),
+            int(get_unpaired_electron_count(atom)),
+            int(get_lone_pair_count(atom)),
+            bool(has_unresolved_two_electron_center(atom)),
+        )
+        for atom in ob.OBMolAtomIter(python.omol.OBMol)  # pyright: ignore[reportCallIssue]
+    ]
+    assert len(cpp_atoms) == len(python_atoms)
+    assert [atom[:2] + atom[3:] for atom in cpp_atoms] == [
+        atom[:2] + atom[3:] for atom in python_atoms
+    ]
+
+    radical_deltas = [right[2] - left[2] for left, right in zip(cpp_atoms, python_atoms)]
+    radical_endpoints = [index for index, delta in enumerate(radical_deltas) if delta]
+    assert len(radical_endpoints) == 2
+    assert sorted(radical_deltas[index] for index in radical_endpoints) == [-1, 1]
+
+    cpp_bonds = {
+        tuple(sorted((int(bond.begin_atom_idx) - 1, int(bond.end_atom_idx) - 1))): int(bond.order)
+        for bond in cpp.bonds
+    }
+    python_bonds = {
+        tuple(sorted((int(bond.GetBeginAtomIdx()) - 1, int(bond.GetEndAtomIdx()) - 1))): int(
+            bond.GetBondOrder()
+        )
+        for bond in ob.OBMolBondIter(python.omol.OBMol)  # pyright: ignore[reportCallIssue]
+    }
+    assert cpp_bonds.keys() == python_bonds.keys()
+    changed_bonds = {
+        bond: python_bonds[bond] - cpp_order
+        for bond, cpp_order in cpp_bonds.items()
+        if python_bonds[bond] != cpp_order
+    }
+    assert len(changed_bonds) == 2
+    assert sorted(changed_bonds.values()) == [-1, 1]
+
+    first_bond, second_bond = changed_bonds
+    centers = set(first_bond) & set(second_bond)
+    assert len(centers) == 1
+    center = next(iter(centers))
+    assert {*(set(first_bond) - {center}), *(set(second_bond) - {center})} == set(radical_endpoints)
 
 
 def _assert_coordinates_match(cpp_mol: Chem.Mol, python_mol: Chem.Mol) -> None:
@@ -129,13 +213,20 @@ def _assert_backend_results_match(
         # the exact signature as the primary parity contract, but compare the
         # normalized molecular semantics when only toolkit representation
         # differs.
-        equivalent, info = check_equivalence(
+        result = evaluate_equivalence(
             cpp_mol,
             python_mol,
             use_chirality=False,
             max_resonance=100,
         )
-        assert equivalent, info.reason
+        if result.decision == EquivalenceDecision.INCONCLUSIVE:
+            _assert_internal_states_differ_by_elementary_three_center_shift(
+                xyz_block,
+                total_charge,
+                total_radical_electrons,
+            )
+        else:
+            assert result.decision == EquivalenceDecision.EQUIVALENT, result.reason
     _assert_coordinates_match(cpp_mol, python_mol)
 
 

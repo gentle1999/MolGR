@@ -45,7 +45,7 @@ from fixture_builder import (
     resolve_xyz_path,
     sync_review_fixture,
 )
-from molgr.utils.equivalence import check_equivalence
+from molgr.utils.equivalence import evaluate_equivalence
 from project_runtime import validate_project_runtime
 from scripts.reconstruction_trace import TraceInputCase, render_trace_report
 
@@ -251,6 +251,7 @@ def _live_candidate_comparison(mol: Chem.Mol, snapshot_smiles: str) -> dict[str,
             live_smiles == snapshot_smiles if snapshot_smiles else None
         ),
         "live_matches_candidate_snapshot": None,
+        "live_candidate_equivalence_decision": "",
         "live_candidate_equivalence_method": "",
         "live_candidate_equivalence_reason": "",
     }
@@ -263,8 +264,12 @@ def _live_candidate_comparison(mol: Chem.Mol, snapshot_smiles: str) -> dict[str,
         comparison["live_candidate_equivalence_reason"] = "candidate_snapshot_smiles_invalid"
         return comparison
 
-    equivalent, info = check_equivalence(mol, snapshot, use_chirality=False)
-    comparison["live_matches_candidate_snapshot"] = equivalent
+    info = evaluate_equivalence(mol, snapshot, use_chirality=False)
+    decision = info.decision.value
+    comparison["live_candidate_equivalence_decision"] = decision
+    comparison["live_matches_candidate_snapshot"] = (
+        True if decision == "equivalent" else False if decision == "not_equivalent" else None
+    )
     comparison["live_candidate_equivalence_method"] = info.method.value if info.method else ""
     comparison["live_candidate_equivalence_reason"] = info.reason
     return comparison
@@ -729,7 +734,9 @@ class ReviewHandler(BaseHTTPRequestHandler):
                     "live_candidate_status": "failed",
                     "live_candidate_smiles": "",
                     "live_candidate_smiles_exact_match": None,
+                    "live_matches_candidate_snapshot": None,
                     "candidate_snapshot_smiles": snapshot_smiles,
+                    "live_candidate_equivalence_decision": "",
                     "live_candidate_equivalence_reason": "live_reconstruction_failed",
                     "error": f"{type(exc).__name__}: {exc}",
                     "render_error": "",

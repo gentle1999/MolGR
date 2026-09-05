@@ -321,7 +321,7 @@ def _run_case_method(
     case_timeout_seconds: float | None,
     precomputed_output: MethodRunOutput | None = None,
 ) -> BenchmarkResult:
-    from molgr.utils.equivalence import check_equivalence
+    from molgr.utils.equivalence import evaluate_equivalence
 
     comparison_annotation = case.get("comparison_annotation")
     comparison_skipped = bool(
@@ -388,14 +388,17 @@ def _run_case_method(
     error = output.error
     equivalent = output.equivalent
     equivalence_method = output.equivalence_method
+    evaluator_decision = None
     ground_truth_rdmol = case.get("ground_truth_rdmol")
     reference_error = case.get("reference_error")
     if comparison_skipped:
         equivalent = None
         equivalence_method = None
+        evaluator_decision = None
     elif reference_error is not None:
         equivalent = None
         equivalence_method = None
+        evaluator_decision = None
         comparison_skipped = True
         comparison_skip_reason = str(reference_error)
     elif ground_truth_rdmol is not None and output.rdkit_mol is not None:
@@ -407,23 +410,32 @@ def _run_case_method(
                     comparison_mol = Chem.MolFromSmiles(output.predicted_smiles)
                     if comparison_mol is None:
                         raise ValueError("predicted_smiles could not be reparsed")
-                is_equivalent, info = check_equivalence(
+                info = evaluate_equivalence(
                     ground_truth_rdmol,
                     comparison_mol,
                     # tmQMg reference SMILES do not consistently encode stereochemistry.
                     use_chirality=False,
                     max_resonance=100,
                 )
-            equivalent = is_equivalent
+            evaluator_decision = info.decision.value
+            equivalent = (
+                True
+                if evaluator_decision == "equivalent"
+                else False
+                if evaluator_decision == "not_equivalent"
+                else None
+            )
             equivalence_method = info.method.value if info.method is not None else None
         except CaseTimeoutError as exc:
             equivalent = None
             equivalence_method = None
+            evaluator_decision = None
             comparison_skipped = True
             comparison_skip_reason = str(exc)
         except Exception as exc:  # noqa: BLE001
             equivalent = None
             equivalence_method = None
+            evaluator_decision = None
             comparison_skipped = True
             comparison_skip_reason = f"equivalence check failed: {exc}"
         finally:
@@ -439,6 +451,7 @@ def _run_case_method(
         predicted_smiles=output.predicted_smiles,
         equivalent=equivalent,
         equivalence_method=equivalence_method,
+        evaluator_decision=evaluator_decision,
         timing_ms_total=method_elapsed_ms,
         timing_ms_breakdown=breakdown,
         case_id=case.get("id"),

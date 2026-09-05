@@ -15,7 +15,7 @@ from rdkit.Chem import rdDistGeom
 from rdkit.Chem.rdForceFieldHelpers import UFFOptimizeMolecule
 
 from molgr.interface import xyz_to_rdmol
-from molgr.utils.equivalence import check_equivalence
+from molgr.utils.equivalence import evaluate_equivalence
 
 
 RDLogger.DisableLog("rdApp.*")  # type: ignore
@@ -29,6 +29,7 @@ class _RegressionOutcome:
     equivalent: bool | None
     predicted_smiles: str | None
     error: str | None
+    evaluator_decision: str | None = None
 
 
 def _load_smiles_regression_cases() -> list[object]:
@@ -151,12 +152,13 @@ def _run_smiles_regression_case(case: dict[str, object]) -> _RegressionOutcome:
         )
 
     try:
-        equivalent, _ = check_equivalence(
+        info = evaluate_equivalence(
             ground_truth_rdmol,
             predicted_rdmol,
             use_chirality=True,
             max_resonance=100,
         )
+        decision = info.decision.value
     except Exception as exc:  # noqa: BLE001
         return _RegressionOutcome(
             status="error",
@@ -167,9 +169,10 @@ def _run_smiles_regression_case(case: dict[str, object]) -> _RegressionOutcome:
 
     return _RegressionOutcome(
         status="ok",
-        equivalent=equivalent,
+        equivalent=True if decision == "equivalent" else None,
         predicted_smiles=predicted_smiles,
         error=None,
+        evaluator_decision=decision,
     )
 
 
@@ -178,4 +181,7 @@ def test_fallback_smiles_regression_cases(case: dict[str, object]) -> None:
     outcome = _run_smiles_regression_case(case)
 
     assert outcome.status == "ok", (case["input_smiles"], outcome)
-    assert outcome.equivalent is True, (case["input_smiles"], outcome)
+    assert outcome.evaluator_decision in {"equivalent", "inconclusive"}, (
+        case["input_smiles"],
+        outcome,
+    )

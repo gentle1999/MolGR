@@ -58,7 +58,7 @@ def _run_case_method(
     *,
     case_timeout_seconds: float | None,
 ) -> BenchmarkResult:
-    check_equivalence = import_module("molgr.utils.equivalence").check_equivalence
+    evaluate_equivalence = import_module("molgr.utils.equivalence").evaluate_equivalence
 
     if case.get("provider_error"):
         breakdown = {"method_ms": 0.0, "equivalence_ms": 0.0}
@@ -106,31 +106,41 @@ def _run_case_method(
     error = output.error
     equivalent = output.equivalent
     equivalence_method = output.equivalence_method
+    evaluator_decision = None
 
     ground_truth_rdmol = case.get("ground_truth_rdmol")
     if ground_truth_rdmol is not None and output.rdkit_mol is not None:
         equivalence_started = time.perf_counter()
         try:
             with case_timeout(case_timeout_seconds, f"{method_id} equivalence {case['case_idx']}"):
-                is_equivalent, info = check_equivalence(
+                info = evaluate_equivalence(
                     ground_truth_rdmol,
                     output.rdkit_mol,
                     use_chirality=True,
                     max_resonance=100,
                 )
-            equivalent = is_equivalent
+            evaluator_decision = info.decision.value
+            equivalent = (
+                True
+                if evaluator_decision == "equivalent"
+                else False
+                if evaluator_decision == "not_equivalent"
+                else None
+            )
             equivalence_method = info.method.value if info.method is not None else None
         except CaseTimeoutError as exc:
             status = "error"
             error = str(exc) if error is None else f"{error}; {exc}"
             equivalent = None
             equivalence_method = None
+            evaluator_decision = None
         except Exception as exc:  # noqa: BLE001
             status = "error"
             equivalence_error = f"equivalence check failed: {exc}"
             error = f"{error}; {equivalence_error}" if error else equivalence_error
             equivalent = None
             equivalence_method = None
+            evaluator_decision = None
         finally:
             breakdown["equivalence_ms"] = (time.perf_counter() - equivalence_started) * 1000.0
 
@@ -144,6 +154,7 @@ def _run_case_method(
         predicted_smiles=output.predicted_smiles,
         equivalent=equivalent,
         equivalence_method=equivalence_method,
+        evaluator_decision=evaluator_decision,
         timing_ms_total=method_elapsed_ms,
         timing_ms_breakdown=breakdown,
     )

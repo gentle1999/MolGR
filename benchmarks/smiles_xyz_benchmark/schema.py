@@ -23,6 +23,7 @@ class BenchmarkResult:
     case_id: str | None = None
     comparison_skipped: bool = False
     comparison_skip_reason: str | None = None
+    evaluator_decision: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
