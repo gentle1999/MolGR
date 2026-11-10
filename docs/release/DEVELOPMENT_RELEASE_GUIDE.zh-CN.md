@@ -70,9 +70,9 @@ flowchart TD
     依赖包提供 `openbabel-3.dll`。CPython 3.8 使用 `delvewheel 1.10.0`，更高版本
     Python 使用 `delvewheel 1.13.0`，因为 `delvewheel 1.11+` 要求 Python 3.9 或更高版本。
     CMake 链接两个依赖包系列都提供的 `openbabel/bin/openbabel-3.lib` 导入库。
-  - macOS：`macos-13` 原生 `x86_64`，`macos-14` 原生 `arm64`。
+  - macOS：`macos-15-intel` 原生 `x86_64`，`macos-latest` 显式指定 `arm64`；两者保留 `MACOSX_DEPLOYMENT_TARGET=14.0`。
 - 运行时依赖中保持 `rdkit>=2023.9.6` 不锁死版本，让新系统可安装更新的 RDKit wheel，低 glibc 系统则由 pip 选择当前 Python/平台上最新的兼容 RDKit wheel。根目录 [`uv.lock`](../../uv.lock) 只是本地开发解析，可能在部分 Python 分支选择旧版 RDKit；它不是发布 wheel 的版本上限。
-- 仅在以下条件全部满足时发布 PyPI：
+- 自动 Release 发布仅在以下条件全部满足时发布 PyPI：
   - `release.published`
   - `prerelease == false`
   - `target_commitish == main`
@@ -132,3 +132,16 @@ Runner/action 解析配置：
 - `develop` 是持续内网测试包通道。
 - `main` 的 `rc` / `.dev` 标签是内网预发布通道。
 - 稳定标签 `vX.Y.Z` 仅用于正式发布。
+
+
+### 恢复中断的正式发布
+
+修复 `main` 上的 CI 后，在 `main` 手动运行工作流并设置 `release_tag=v0.1.10`，
+可明确启用该已有版本的重新构建和发布。工作流验证标签属于 `main` 历史，
+且对应已发布、非预发布、目标为 `main` 的 GitHub Release，再将所有构建、测试和
+部署固定到标签提交；不移动已发布标签。留空 `release_tag` 时，
+`build_release_wheels=true` 仍只构建而不发布。
+
+```sh
+gh workflow run ci.yaml --ref main -f release_tag=v0.1.10
+```
