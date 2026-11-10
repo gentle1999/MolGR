@@ -8,6 +8,7 @@
 
 #include "molgr/utils/utils.h"
 #include "molgr/utils/conversions.h"
+#include "molgr/utils/electrons.h"
 
 #include <openbabel/mol.h>
 #include <openbabel/atom.h>

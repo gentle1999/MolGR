@@ -55,6 +55,9 @@ PYBIND11_MODULE(_core, m)
     auto m_utils = m.def_submodule("utils", "Utilities and Data Structures");
     molgr::bind::bind_utils(m_utils);
 
+    auto m_equivalence = m.def_submodule("equivalence", "Native graph and resonance equivalence");
+    molgr::bind::bind_equivalence(m_equivalence);
+
     auto m_pipeline = m.def_submodule("pipeline", "Pipeline-level helpers");
     molgr::bind::bind_pipeline(m_pipeline);
 

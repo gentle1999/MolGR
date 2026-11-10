@@ -21,9 +21,9 @@ def _get_int_data(atom: ob.OBAtom, attribute: str) -> int:
 
 
 def _set_int_data(atom: ob.OBAtom, attribute: str, value: int) -> None:
+    """Preserve explicit zero; missing generic data continues to mean unknown."""
+
     atom.DeleteData(attribute)
-    if value == 0:
-        return
     data = ob.OBPairData()
     data.SetAttribute(attribute)
     data.SetValue(str(int(value)))

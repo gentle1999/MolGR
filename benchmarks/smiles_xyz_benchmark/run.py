@@ -71,7 +71,12 @@ def _run_case_method(
     case_timeout_seconds: float | None,
     precomputed_output: MethodRunOutput | None = None,
 ) -> BenchmarkResult:
-    evaluate_equivalence = import_module("molgr.utils.equivalence").evaluate_equivalence
+    equivalence = import_module("molgr.utils.equivalence")
+    reference_status = case.get("reference_status") or "valid"
+    reference_reason = case.get("reference_reason")
+    if case.get("ground_truth_rdmol") is None and reference_status == "valid":
+        reference_status = "unresolved"
+        reference_reason = reference_reason or "Missing or unparseable reference molecule"
 
     if case.get("provider_error"):
         breakdown = {"method_ms": 0.0, "equivalence_ms": 0.0}
@@ -87,6 +92,8 @@ def _run_case_method(
             equivalence_method=None,
             timing_ms_total=0.0,
             timing_ms_breakdown=breakdown,
+            reference_status=reference_status,
+            reference_reason=reference_reason,
         )
 
     started = time.perf_counter()
@@ -109,6 +116,8 @@ def _run_case_method(
                 equivalence_method=None,
                 timing_ms_total=method_elapsed_ms,
                 timing_ms_breakdown=breakdown,
+                reference_status=reference_status,
+                reference_reason=reference_reason,
             )
         method_elapsed_ms = (time.perf_counter() - started) * 1000.0
     else:
@@ -122,8 +131,8 @@ def _run_case_method(
 
     status = output.status
     error = output.error
-    equivalent = output.equivalent
-    equivalence_method = output.equivalence_method
+    equivalent = None
+    equivalence_method = None
     evaluator_decision = None
 
     ground_truth_rdmol = case.get("ground_truth_rdmol")
@@ -131,7 +140,7 @@ def _run_case_method(
         equivalence_started = time.perf_counter()
         try:
             with case_timeout(case_timeout_seconds, f"{method_id} equivalence {case['case_idx']}"):
-                info = evaluate_equivalence(
+                info = equivalence.evaluate_equivalence(
                     ground_truth_rdmol,
                     output.rdkit_mol,
                     use_chirality=True,
@@ -139,11 +148,9 @@ def _run_case_method(
                 )
             evaluator_decision = info.decision.value
             equivalent = (
-                True
-                if evaluator_decision == "equivalent"
-                else False
-                if evaluator_decision == "not_equivalent"
-                else None
+                None
+                if info.decision == equivalence.EquivalenceDecision.INCONCLUSIVE
+                else info.decision == equivalence.EquivalenceDecision.EQUIVALENT
             )
             equivalence_method = info.method.value if info.method is not None else None
         except CaseTimeoutError as exc:
@@ -173,6 +180,8 @@ def _run_case_method(
         equivalent=equivalent,
         equivalence_method=equivalence_method,
         evaluator_decision=evaluator_decision,
+        reference_status=reference_status,
+        reference_reason=reference_reason,
         timing_ms_total=method_elapsed_ms,
         timing_ms_breakdown=breakdown,
     )

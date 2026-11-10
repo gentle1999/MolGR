@@ -9,6 +9,7 @@
 #include "molgr/utils/smarts.h"
 #include "molgr/utils/utils.h"
 #include "molgr/vendor/openbabel_conversion.h"
+#include "molgr/vendor/openbabel_copy.h"
 #include "molgr/vendor/openbabel_threading.h"
 
 #include <openbabel/atom.h>
@@ -821,8 +822,7 @@ namespace molgr
             const OpenBabel::OBMol &mol,
             const std::tuple<int, int, int> &idxs)
         {
-            auto new_mol = std::make_shared<OpenBabel::OBMol>(
-                molgr::utils::CloneMolTopologyOnly(mol));
+            auto new_mol = molgr::utils::CloneMolTopologyShared(mol);
             OpenBabel::OBAtom *atom1 = new_mol->GetAtom(std::get<0>(idxs));
             OpenBabel::OBAtom *atom3 = new_mol->GetAtom(std::get<2>(idxs));
             OpenBabel::OBBond *bond1 = new_mol->GetBond(std::get<0>(idxs), std::get<1>(idxs));
@@ -859,7 +859,10 @@ namespace molgr
             result.reserve(moves.size());
             for (const auto &move : moves)
             {
-                result.push_back(MaterializeOneStepResonance(mol, move.idxs));
+                const auto resonance = MaterializeOneStepResonance(mol, move.idxs);
+                std::lock_guard<std::recursive_mutex> lock(
+                    molgr::vendor::openbabel_threading::NativeOpenBabelMutex());
+                result.push_back(resonance);
             }
             return result;
         }
@@ -950,8 +953,7 @@ namespace molgr
             int total_radical_electrons)
         {
             auto machine = molgr::state::OmolStateMachine(
-                std::make_shared<OpenBabel::OBMol>(
-                    molgr::utils::CloneMolTopologyOnly(mol)),
+                molgr::utils::CloneMolTopologyShared(mol),
                 charge,
                 {},
                 {},
@@ -1019,8 +1021,11 @@ namespace molgr
                       }) ||
                   hit;
             hit = machine.RunOmolStage(std::nullopt, molgr::reconstruct::CleanResonances) || hit;
+            const auto result = molgr::utils::CloneMolTopologyOnly(*machine.omol);
+            std::lock_guard<std::recursive_mutex> lock(
+                molgr::vendor::openbabel_threading::NativeOpenBabelMutex());
             return std::make_tuple(
-                molgr::utils::CloneMolTopologyOnly(*machine.omol),
+                result,
                 machine.given_charge,
                 hit);
         }
@@ -1036,6 +1041,8 @@ namespace molgr
                 charge,
                 total_charge,
                 total_radical_electrons);
+            std::lock_guard<std::recursive_mutex> lock(
+                molgr::vendor::openbabel_threading::NativeOpenBabelMutex());
             return {std::get<0>(processed), std::get<1>(processed)};
         }
     }

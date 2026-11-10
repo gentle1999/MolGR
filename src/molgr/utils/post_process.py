@@ -15,7 +15,7 @@ from rdkit import Chem
 
 from molgr.config import CONFIG, MolGRConfig
 from molgr.fallback.utils.consts import NON_METAL_DICT
-from molgr.fallback.utils.electrons import LONE_PAIR_COUNT_PROP
+from molgr.fallback.utils.electrons import LONE_PAIR_COUNT_PROP, UNPAIRED_ELECTRON_COUNT_PROP
 from molgr.utils.converter import (
     get_atom_lone_pair_count,
     get_atom_unpaired_electrons,
@@ -70,7 +70,7 @@ def _is_explicit_carbyne_center(atom: Chem.Atom) -> bool:
 
 def _consume_active_lone_pair(atom: Chem.Atom) -> None:
     if atom.HasProp(LONE_PAIR_COUNT_PROP):
-        atom.ClearProp(LONE_PAIR_COUNT_PROP)
+        atom.SetIntProp(LONE_PAIR_COUNT_PROP, 0)
 
 
 def _rdkit_atom_coordinates(conformer: Chem.Conformer, atom_idx: int) -> Point3D:
@@ -216,6 +216,8 @@ def make_dative_bond(
                     Chem.BondType.TRIPLE,
                 )
                 non_metal_atom.SetNumRadicalElectrons(0)
+                if non_metal_atom.HasProp(UNPAIRED_ELECTRON_COUNT_PROP):
+                    non_metal_atom.SetIntProp(UNPAIRED_ELECTRON_COUNT_PROP, 0)
             elif _is_explicit_singlet_two_electron_center(non_metal_atom):
                 rwmol.AddBond(
                     close_non_metal_atom_id,

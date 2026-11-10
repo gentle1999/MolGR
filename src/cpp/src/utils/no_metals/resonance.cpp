@@ -11,6 +11,7 @@
 #include "molgr/utils/no_metals/selection.h"
 #include "molgr/utils/resonance.h"
 #include "molgr/compat/openbabel_iter.h"
+#include "molgr/vendor/openbabel_copy.h"
 
 #include <openbabel/bond.h>
 
@@ -193,7 +194,7 @@ namespace
                 auto machine = molgr::state::OmolStateMachine::FromReconstructionState(state);
                 machine = machine.Branch(
                     "branch_boron_neighbor_radical_seed",
-                    std::make_shared<OpenBabel::OBMol>(molgr::utils::CloneMolTopologyOnly(state.Mol())));
+                    molgr::utils::CloneMolTopologyShared(state.Mol()));
                 if (!machine.RunOmolChargeStage(
                         "reduce_boron_neighbor_bond_for_radical", ReduceBoronNeighborBond,
                         state.total_radical_electrons, boron_idx, neighbor_idx))
@@ -225,8 +226,7 @@ namespace
         for (const auto &state : pool)
         {
             auto machine = molgr::state::OmolStateMachine::FromReconstructionState(state);
-            auto next_mol = std::make_shared<OpenBabel::OBMol>(
-                molgr::utils::CloneMolTopologyOnly(state.Mol()));
+            auto next_mol = molgr::utils::CloneMolTopologyShared(state.Mol());
             machine = machine.Branch(std::nullopt, std::move(next_mol));
             if (machine.RunOmolStage(phase, stage))
             {

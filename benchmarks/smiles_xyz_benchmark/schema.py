@@ -24,6 +24,14 @@ class BenchmarkResult:
     comparison_skipped: bool = False
     comparison_skip_reason: str | None = None
     evaluator_decision: str | None = None
+    reference_status: str = "valid"
+    reference_reason: str | None = None
+    smiles_roundtrip_status: str | None = None
+    smiles_roundtrip_parse_success: bool | None = None
+    smiles_roundtrip_equivalent: bool | None = None
+    smiles_roundtrip_equivalence_method: str | None = None
+    smiles_roundtrip_reason: str | None = None
+    smiles_roundtrip_diagnostics: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

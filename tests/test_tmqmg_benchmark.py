@@ -10,7 +10,11 @@ from pathlib import Path
 import pytest
 from rdkit import Chem
 
+from benchmarks._timeout import CaseTimeoutError
+from benchmarks.molfile_xyz_benchmark.run import _run_case_method as _run_molfile_case_method
+from benchmarks.smiles_xyz_benchmark.methods.base import MethodRunOutput
 from benchmarks.smiles_xyz_benchmark.methods.postprocess import remove_hs_without_sanitize
+from benchmarks.smiles_xyz_benchmark.run import _run_case_method as _run_smiles_case_method
 from benchmarks.tmqmg_xyz_benchmark.comparison_annotations import (
     find_comparison_annotation,
     load_comparison_annotations,
@@ -20,6 +24,7 @@ from benchmarks.tmqmg_xyz_benchmark.run import (
     TmqmgBenchmarkInput,
     _build_case,
     _build_cpp_backend_config_payload,
+    _fallback_results_for_method,
     _resolve_total_radical_electrons,
     _run_case_method,
     _run_method_cases_worker,
@@ -30,6 +35,7 @@ from benchmarks.tmqmg_xyz_benchmark.run import (
     run,
 )
 from benchmarks.tmqmg_xyz_benchmark.schema import BenchmarkResult
+from molgr.utils.converter import LONE_PAIR_COUNT_PROP
 
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -38,6 +44,11 @@ _TMQMG_DATA_DIR = (
 )
 _TMQMG_CSV = _TMQMG_DATA_DIR / "tmQMg_properties_and_targets.csv"
 _TMQMG_XYZ_DIR = _TMQMG_DATA_DIR / "tmQMg_xyz" / "xyz"
+_SCORING_RUNNERS = [
+    pytest.param(_run_case_method, id="tmqmg"),
+    pytest.param(_run_smiles_case_method, id="smiles"),
+    pytest.param(_run_molfile_case_method, id="molfile"),
+]
 
 
 @pytest.mark.parametrize(
@@ -155,6 +166,9 @@ def test_tmqmg_run_writes_results_for_selected_subset(tmp_path: Path, monkeypatc
                     "error": None,
                     "predicted_smiles": "CC",
                     "equivalent": True,
+                    "evaluator_decision": "equivalent",
+                    "reference_status": "valid",
+                    "reference_reason": None,
                     "equivalence_method": "ideal",
                     "comparison_skipped": False,
                     "comparison_skip_reason": None,
@@ -222,6 +236,8 @@ def test_tmqmg_run_filters_selected_methods(tmp_path: Path, monkeypatch) -> None
                 predicted_smiles="C",
                 equivalent=True,
                 equivalence_method="ideal",
+                evaluator_decision="equivalent",
+                reference_status="valid",
                 timing_ms_total=1.0,
                 timing_ms_breakdown={"method_ms": 1.0},
                 case_id="A",
@@ -415,12 +431,14 @@ def test_tmqmg_cpp_method_uses_one_subprocess_with_native_workers(
         case_timeout_seconds=1.0,
         cpp_backend_config=_build_cpp_backend_config_payload(use_all_accelerations=True),
         process_workers=3,
+        roundtrip_diagnostics=False,
     )
 
     assert len(run_calls) == 1
     payload = payloads[0]
     assert payload["native_workers"] == 3
     assert payload["native_batch"] is True
+    assert payload["roundtrip_diagnostics"] is False
     assert len(payload["cases"]) == 5
     assert [result.case_idx for result in results] == [1, 2, 3, 4, 5]
     assert [result.case_id for result in results] == ["C1", "C2", "C3", "C4", "C5"]
@@ -435,6 +453,7 @@ def test_build_case_marks_provider_error_for_missing_xyz(tmp_path: Path) -> None
 
     assert case["provider_error"] is not None
     assert case["xyz_block"] is None
+    assert case["reference_status"] == "valid"
 
 
 def test_build_case_marks_reference_error_for_reference_xyz_element_mismatch(
@@ -457,67 +476,65 @@ def test_build_case_marks_reference_error_for_reference_xyz_element_mismatch(
     assert case["xyz_block"] is not None
     assert case["reference_error"] is not None
     assert "Reference SMILES element counts differ from XYZ" in case["reference_error"]
+    assert case["reference_status"] == "excluded"
+    assert case["reference_reason"] == case["reference_error"]
 
 
-def test_summary_count_excludes_uncomparable_reference_errors_but_keeps_timing() -> None:
+def test_summary_separates_raw_decisions_reference_quality_and_runtime_failures() -> None:
     summary = summarize_results(
         [
             BenchmarkResult(
-                case_idx=1,
-                method_id="fake",
-                input_smiles="C",
-                ground_truth_smiles=None,
-                status="ok",
-                error=None,
-                predicted_smiles="C",
-                equivalent=None,
-                equivalence_method=None,
-                timing_ms_total=4.0,
-                timing_ms_breakdown={"method_ms": 4.0},
-                case_id="A",
-                comparison_skipped=True,
-                comparison_skip_reason="reference error",
-            ),
-            BenchmarkResult(
-                case_idx=2,
+                case_idx=idx,
                 method_id="fake",
                 input_smiles="C",
                 ground_truth_smiles="C",
-                status="ok",
-                error=None,
-                predicted_smiles="C",
-                equivalent=True,
-                equivalence_method="ideal",
-                timing_ms_total=2.0,
-                timing_ms_breakdown={"method_ms": 2.0},
-                case_id="B",
-            ),
-            BenchmarkResult(
-                case_idx=3,
-                method_id="fake",
-                input_smiles="C",
-                ground_truth_smiles="C",
-                status="error",
-                error="method failed",
-                predicted_smiles=None,
-                equivalent=None,
+                status=status,
+                error="method failed" if status == "error" else None,
+                predicted_smiles="C" if status == "ok" else None,
+                equivalent=equivalent,
                 equivalence_method=None,
-                timing_ms_total=3.0,
-                timing_ms_breakdown={"method_ms": 3.0},
-                case_id="C",
-            ),
+                evaluator_decision=decision,
+                reference_status=reference_status,
+                reference_reason="reference evidence" if reference_status != "valid" else None,
+                comparison_skipped=comparison_skipped,
+                timing_ms_total=0.0 if status == "skipped" else 3.0,
+                timing_ms_breakdown={},
+            )
+            for idx, (
+                status,
+                decision,
+                equivalent,
+                reference_status,
+                comparison_skipped,
+            ) in enumerate(
+                [
+                    ("ok", "equivalent", True, "excluded", False),
+                    ("ok", "equivalent", True, "valid", False),
+                    ("error", "not_equivalent", False, "valid", False),
+                    ("ok", "not_equivalent", False, "valid", False),
+                    ("ok", "inconclusive", None, "valid", False),
+                    ("ok", "not_equivalent", False, "unresolved", False),
+                    ("skipped", None, None, "valid", True),
+                    ("ok", None, True, "valid", False),
+                ],
+                start=1,
+            )
         ]
-    )
+    )[0]
 
-    assert summary[0]["count"] == 2
-    assert summary[0]["success_count"] == 1
-    assert summary[0]["fail_count"] == 1
-    assert summary[0]["skip_count"] == 0
-    assert summary[0]["comparison_skip_count"] == 1
-    assert summary[0]["avg_ms_total"] == 3.0
+    assert summary["count"] == 6
+    assert summary["success_count"] == 1
+    assert summary["fail_count"] == 1
+    assert summary["inconclusive_count"] == 1
+    assert summary["runtime_failure_count"] == 3
+    assert summary["reference_excluded_count"] == 1
+    assert summary["reference_unresolved_count"] == 1
+    assert summary["skip_count"] == 1
+    assert summary["comparison_skip_count"] == 1
+    assert summary["avg_ms_total"] == 3.0
 
 
-def test_reference_element_mismatch_skips_only_comparison_not_method(
+def test_reference_element_mismatch_preserves_raw_comparison_and_method(
     tmp_path: Path,
 ) -> None:
     xyz_dir = tmp_path / "xyz"
@@ -537,7 +554,7 @@ def test_reference_element_mismatch_skips_only_comparison_not_method(
         status = "ok"
         error = None
         predicted_smiles = "C"
-        rdkit_mol = None
+        rdkit_mol = Chem.MolFromSmiles("C")
         equivalent = True
         equivalence_method = "method-native"
         timing_ms_breakdown = {"method_ms": 1.0}
@@ -558,10 +575,12 @@ def test_reference_element_mismatch_skips_only_comparison_not_method(
     assert result.error is None
     assert result.predicted_smiles == "C"
     assert result.case_id == "A"
-    assert result.equivalent is None
-    assert result.equivalence_method is None
-    assert result.comparison_skipped is True
-    assert "Reference SMILES element counts differ from XYZ" in str(result.comparison_skip_reason)
+    assert result.equivalent is True
+    assert result.evaluator_decision == "equivalent"
+    assert result.reference_status == "excluded"
+    assert "Reference SMILES element counts differ from XYZ" in str(result.reference_reason)
+    assert result.comparison_skipped is False
+    assert result.comparison_skip_reason is None
 
 
 def test_boron_cluster_annotation_records_1176_cases_and_yulboy_exception() -> None:
@@ -614,6 +633,8 @@ def test_boron_cluster_runs_reconstruction_but_skips_answer_comparison() -> None
     assert result.predicted_smiles == "B.B.B.B"
     assert result.equivalent is None
     assert result.equivalence_method is None
+    assert result.evaluator_decision is None
+    assert result.reference_status == "unresolved"
     assert result.comparison_skipped is True
     assert "neither answer is treated as assessable" in str(result.comparison_skip_reason)
 
@@ -627,7 +648,7 @@ def test_benchmark_hydrogen_removal_does_not_require_kekulization() -> None:
     assert Chem.MolToSmiles(mol_no_h) == "c1cccc1"
 
 
-def test_equivalence_reparses_recorded_smiles_instead_of_using_backend_object() -> None:
+def test_equivalence_uses_internal_candidate_not_recorded_smiles() -> None:
     ground_truth = Chem.MolFromSmiles("C")
     backend_object = Chem.MolFromSmiles("N")
     assert ground_truth is not None
@@ -658,20 +679,66 @@ def test_equivalence_reparses_recorded_smiles_instead_of_using_backend_object() 
     )
 
     assert result.status == "ok"
-    assert result.equivalent is True
+    assert result.equivalent is False
+    assert result.evaluator_decision == "not_equivalent"
+    assert result.comparison_skipped is False
+    assert result.smiles_roundtrip_status == "roundtrip_changed"
+    assert result.smiles_roundtrip_parse_success is True
+    assert result.smiles_roundtrip_equivalent is False
 
 
-def test_equivalence_reparse_failure_does_not_mark_reconstruction_failed() -> None:
-    unsanitized = Chem.MolFromSmiles("c1cccc1", sanitize=False)
+def test_skipping_roundtrip_keeps_reference_equivalence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     ground_truth = Chem.MolFromSmiles("C")
-    assert unsanitized is not None
+    backend_object = Chem.MolFromSmiles("C")
+    assert ground_truth is not None
+    assert backend_object is not None
+
+    class _Output:
+        status = "ok"
+        error = None
+        predicted_smiles = "C"
+        rdkit_mol = backend_object
+        timing_ms_breakdown = {"method_ms": 1.0}
+
+    def unexpected_roundtrip(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        raise AssertionError("roundtrip diagnostics should be disabled")
+
+    monkeypatch.setattr(
+        "benchmarks.tmqmg_xyz_benchmark.run._smiles_roundtrip_diagnostic",
+        unexpected_roundtrip,
+    )
+    result = _run_case_method(
+        {
+            "case_idx": 1,
+            "id": "A",
+            "input_smiles": "C",
+            "ground_truth_smiles": "C",
+            "ground_truth_rdmol": ground_truth,
+            "reference_error": None,
+            "provider_error": None,
+        },
+        "fake",
+        lambda case: _Output(),
+        case_timeout_seconds=1.0,
+        roundtrip_diagnostics=False,
+    )
+
+    assert result.evaluator_decision == "equivalent"
+    assert result.smiles_roundtrip_status is None
+    assert "roundtrip_ms" not in (result.timing_ms_breakdown or {})
+
+
+def test_smiles_reparse_failure_does_not_override_correct_internal_equivalence() -> None:
+    ground_truth = Chem.MolFromSmiles("C")
     assert ground_truth is not None
 
     class _Output:
         status = "ok"
         error = None
-        predicted_smiles = "c1cccc1"
-        rdkit_mol = unsanitized
+        predicted_smiles = "not valid smiles"
+        rdkit_mol = ground_truth
         equivalent = None
         equivalence_method = None
         timing_ms_breakdown = {"method_ms": 1.0}
@@ -693,12 +760,171 @@ def test_equivalence_reparse_failure_does_not_mark_reconstruction_failed() -> No
 
     assert result.status == "ok"
     assert result.error is None
-    assert result.predicted_smiles == "c1cccc1"
-    assert result.equivalent is None
-    assert result.comparison_skipped is True
-    assert result.comparison_skip_reason == (
-        "equivalence check failed: predicted_smiles could not be reparsed"
+    assert result.predicted_smiles == "not valid smiles"
+    assert result.equivalent is True
+    assert result.evaluator_decision == "equivalent"
+    assert result.equivalence_method == "ideal"
+    assert result.comparison_skipped is False
+    assert result.comparison_skip_reason is None
+    assert result.smiles_roundtrip_status == "reparse_failed"
+    assert result.smiles_roundtrip_parse_success is False
+    assert result.smiles_roundtrip_equivalent is None
+
+
+def test_low_valence_internal_candidate_can_match_reference_despite_lossy_smiles() -> None:
+    reference = Chem.MolFromSmiles("C[C]C")
+    assert reference is not None
+    internal = Chem.Mol(reference)
+    center = internal.GetAtomWithIdx(1)
+    center.SetNumRadicalElectrons(0)
+    center.SetIntProp(LONE_PAIR_COUNT_PROP, 1)
+    internal.UpdatePropertyCache(strict=False)
+
+    class _Output:
+        status = "ok"
+        error = None
+        predicted_smiles = Chem.MolToSmiles(internal)
+        rdkit_mol = internal
+        equivalent = None
+        equivalence_method = None
+        timing_ms_breakdown = {"method_ms": 1.0}
+
+    result = _run_case_method(
+        {
+            "case_idx": 1,
+            "id": "LOW_VALENCE",
+            "input_smiles": "C[C]C",
+            "ground_truth_smiles": "C[C]C",
+            "ground_truth_rdmol": reference,
+            "reference_error": None,
+            "provider_error": None,
+        },
+        "fake",
+        lambda case: _Output(),
+        case_timeout_seconds=1.0,
     )
+
+    assert result.equivalent is True
+    assert result.equivalence_method == "ideal"
+    assert result.smiles_roundtrip_status == "roundtrip_changed"
+    assert result.smiles_roundtrip_parse_success is True
+    assert result.smiles_roundtrip_equivalent is False
+    assert result.smiles_roundtrip_diagnostics is not None
+    assert result.smiles_roundtrip_diagnostics["delta"] == {
+        "total_h": 2,
+        "formal_charge": 0,
+        "radical_electrons": 0,
+        "active_lone_pairs": -1,
+        "formula_changed": True,
+    }
+
+
+def test_internal_mismatch_remains_failure_when_smiles_reparse_also_fails() -> None:
+    reference = Chem.MolFromSmiles("C")
+    internal = Chem.MolFromSmiles("N")
+    assert reference is not None
+    assert internal is not None
+
+    class _Output:
+        status = "ok"
+        error = None
+        predicted_smiles = "not valid smiles"
+        rdkit_mol = internal
+        equivalent = None
+        equivalence_method = None
+        timing_ms_breakdown = {"method_ms": 1.0}
+
+    result = _run_case_method(
+        {
+            "case_idx": 1,
+            "id": "INTERNAL_MISMATCH",
+            "input_smiles": "C",
+            "ground_truth_smiles": "C",
+            "ground_truth_rdmol": reference,
+            "reference_error": None,
+            "provider_error": None,
+        },
+        "fake",
+        lambda case: _Output(),
+        case_timeout_seconds=1.0,
+    )
+
+    assert result.equivalent is False
+    assert result.comparison_skipped is False
+    assert result.smiles_roundtrip_status == "reparse_failed"
+
+
+@pytest.mark.parametrize(
+    ("case_id", "candidate_smiles", "reference_smiles", "roundtrip_status", "expected_equivalent"),
+    [
+        (
+            "WEXMIW_PATTERN",
+            "CCOC(=O)[C@H]1CSC(=[Cr@OH27](<-[C-]#[O+])(<-[C-]#[O+])"
+            "(<-[C-]#[O+])(<-[C-]#[O+])<-[C-]#[O+])C=C(c2ccccc2)N1",
+            "CCOC(=O)C1CS#C(->[Cr](<-[C-]#[O+])(<-[C-]#[O+])"
+            "(<-[C-]#[O+])(<-[C-]#[O+])<-[C-]#[O+])C=C(c2ccccc2)N1",
+            "preserved",
+            None,  # Matching InChIKey without a bounded structural witness is inconclusive.
+        ),
+        (
+            "NON_KEKULIZABLE_PATTERN",
+            "O=C=C=Cc12->[Pt](<-P(c3ccccc3)(c3ccccc3)c3ccccc3)"
+            "(<-P(c3ccccc3)(c3ccccc3)c3ccccc3)<-c1c(=O)co2",
+            "[O-]C#C[CH-]c12->[Pt+4](<-c1c([O-])[c-]o2)"
+            "(<-P(c1ccccc1)(c1ccccc1)c1ccccc1)<-P(c1ccccc1)(c1ccccc1)c1ccccc1",
+            "reparse_failed",
+            None,  # Native input rejects a graph that cannot be Kekulized.
+        ),
+    ],
+)
+def test_internal_graph_decision_is_independent_of_roundtrip_status(
+    case_id: str,
+    candidate_smiles: str,
+    reference_smiles: str,
+    roundtrip_status: str,
+    expected_equivalent: bool | None,
+) -> None:
+    internal = Chem.MolFromSmiles(candidate_smiles, sanitize=False)
+    reference = Chem.MolFromSmiles(reference_smiles)
+    assert internal is not None
+    assert reference is not None
+    internal.UpdatePropertyCache(strict=False)
+
+    class _Output:
+        status = "ok"
+        error = None
+        predicted_smiles = Chem.MolToSmiles(internal)
+        rdkit_mol = internal
+        equivalent = None
+        equivalence_method = None
+        timing_ms_breakdown = {"method_ms": 1.0}
+
+    result = _run_case_method(
+        {
+            "case_idx": 1,
+            "id": case_id,
+            "input_smiles": reference_smiles,
+            "ground_truth_smiles": reference_smiles,
+            "ground_truth_rdmol": reference,
+            "reference_error": None,
+            "provider_error": None,
+        },
+        "fake",
+        lambda case: _Output(),
+        case_timeout_seconds=1.0,
+    )
+
+    assert result.equivalent is expected_equivalent
+    assert (
+        result.evaluator_decision
+        == {
+            True: "equivalent",
+            False: "not_equivalent",
+            None: "inconclusive",
+        }[expected_equivalent]
+    )
+    assert result.comparison_skipped is False
+    assert result.smiles_roundtrip_status == roundtrip_status
 
 
 def test_tmqmg_cpp_all_accelerations_worker_survives_target_bucket_parallelism(
@@ -758,3 +984,271 @@ def test_tmqmg_cpp_all_accelerations_worker_survives_target_bucket_parallelism(
     assert len(result_rows) == repeats
     assert {row["method_id"] for row in result_rows} == {"molgr_cpp"}
     assert {row["case_id"] for row in result_rows} == {"ABAJAP"}
+
+
+@pytest.mark.parametrize("scoring_runner", _SCORING_RUNNERS)
+@pytest.mark.parametrize(
+    ("reference_smiles", "candidate_smiles", "decision", "equivalent", "count_key"),
+    [
+        ("C", "C", "equivalent", True, "success_count"),
+        ("C", "N", "not_equivalent", False, "fail_count"),
+        (
+            "[O]N=O",
+            "[O-][N+]=O",  # No supported joint charge/radical migration witness.
+            "inconclusive",
+            None,
+            "inconclusive_count",
+        ),
+    ],
+)
+def test_benchmark_scoring_preserves_real_evaluator_decisions(
+    scoring_runner,
+    reference_smiles,
+    candidate_smiles,
+    decision,
+    equivalent,
+    count_key,
+) -> None:
+    result = scoring_runner(
+        {
+            "case_idx": 1,
+            "input_smiles": reference_smiles,
+            "ground_truth_smiles": reference_smiles,
+            "ground_truth_rdmol": Chem.MolFromSmiles(reference_smiles),
+        },
+        "scoring",
+        lambda case: MethodRunOutput(
+            status="ok",
+            predicted_smiles=reference_smiles,
+            rdkit_mol=Chem.MolFromSmiles(candidate_smiles),
+            equivalent=True,
+        ),
+        case_timeout_seconds=None,
+    )
+
+    assert result.status == "ok"
+    assert result.evaluator_decision == decision
+    assert result.equivalent is equivalent
+    summary = summarize_results([result])[0]
+    assert summary["count"] == 1
+    assert summary[count_key] == 1
+    assert summary["runtime_failure_count"] == 0
+
+
+@pytest.mark.parametrize("scoring_runner", _SCORING_RUNNERS)
+@pytest.mark.parametrize("reference_status", ["excluded", "unresolved"])
+def test_reference_quality_filters_statistics_not_raw_decision(
+    scoring_runner, reference_status
+) -> None:
+    result = scoring_runner(
+        {
+            "case_idx": 1,
+            "input_smiles": "C",
+            "ground_truth_smiles": "C",
+            "ground_truth_rdmol": Chem.MolFromSmiles("C"),
+            "reference_status": reference_status,
+            "reference_reason": "Independent reference review",
+        },
+        "scoring",
+        lambda case: MethodRunOutput(status="ok", rdkit_mol=Chem.MolFromSmiles("N")),
+        case_timeout_seconds=None,
+    )
+
+    assert result.status == "ok"
+    assert result.evaluator_decision == "not_equivalent"
+    assert result.equivalent is False
+    assert result.reference_status == reference_status
+    assert result.reference_reason == "Independent reference review"
+    assert result.comparison_skipped is False
+    summary = summarize_results([result])[0]
+    assert summary["count"] == 0
+    assert summary["fail_count"] == 0
+    assert summary[f"reference_{reference_status}_count"] == 1
+
+
+@pytest.mark.parametrize("scoring_runner", _SCORING_RUNNERS)
+@pytest.mark.parametrize("failure_type", [CaseTimeoutError, RuntimeError])
+def test_evaluator_failure_keeps_valid_reference_in_denominator(
+    scoring_runner, failure_type, monkeypatch
+) -> None:
+    def fail_evaluation(*args, **kwargs):
+        raise failure_type("scoring failed")
+
+    monkeypatch.setattr("molgr.utils.equivalence.evaluate_equivalence", fail_evaluation)
+    result = scoring_runner(
+        {
+            "case_idx": 1,
+            "input_smiles": "C",
+            "ground_truth_smiles": "C",
+            "ground_truth_rdmol": Chem.MolFromSmiles("C"),
+        },
+        "scoring",
+        lambda case: MethodRunOutput(status="ok", rdkit_mol=Chem.MolFromSmiles("C")),
+        case_timeout_seconds=None,
+    )
+
+    assert result.status == "error"
+    assert "scoring failed" in result.error
+    assert result.reference_status == "valid"
+    assert result.evaluator_decision is None
+    assert result.equivalent is None
+    assert result.comparison_skipped is False
+    assert result.comparison_skip_reason is None
+    summary = summarize_results([result])[0]
+    assert summary["count"] == 1
+    assert summary["fail_count"] == 0
+    assert summary["runtime_failure_count"] == 1
+
+
+@pytest.mark.parametrize("scoring_runner", _SCORING_RUNNERS)
+@pytest.mark.parametrize("reference_status", ["valid", "excluded", "unresolved"])
+@pytest.mark.parametrize("provider_failure", [False, True])
+def test_early_failures_preserve_reference_classification(
+    scoring_runner, reference_status, provider_failure
+) -> None:
+    def method_runner(case):
+        raise CaseTimeoutError("method timeout")
+
+    result = scoring_runner(
+        {
+            "case_idx": 1,
+            "input_smiles": "C",
+            "ground_truth_smiles": "C",
+            "ground_truth_rdmol": Chem.MolFromSmiles("C"),
+            "reference_status": reference_status,
+            "reference_reason": "Frozen reference review",
+            "provider_error": "missing input" if provider_failure else None,
+        },
+        "scoring",
+        method_runner,
+        case_timeout_seconds=None,
+    )
+
+    assert result.status == ("skipped" if provider_failure else "error")
+    assert result.reference_status == reference_status
+    assert result.reference_reason == "Frozen reference review"
+    assert result.evaluator_decision is None
+    summary = summarize_results([result])[0]
+    assert summary["count"] == int(reference_status == "valid")
+    assert summary["runtime_failure_count"] == int(reference_status == "valid")
+
+
+@pytest.mark.parametrize("scoring_runner", _SCORING_RUNNERS)
+def test_missing_reference_is_unresolved_without_trusting_method_equivalence(
+    scoring_runner,
+) -> None:
+    result = scoring_runner(
+        {"case_idx": 1, "input_smiles": "C"},
+        "scoring",
+        lambda case: MethodRunOutput(
+            status="ok", rdkit_mol=Chem.MolFromSmiles("C"), equivalent=True
+        ),
+        case_timeout_seconds=None,
+    )
+
+    assert result.reference_status == "unresolved"
+    assert result.evaluator_decision is None
+    assert result.equivalent is None
+    summary = summarize_results([result])[0]
+    assert summary["count"] == 0
+    assert summary["reference_unresolved_count"] == 1
+
+
+@pytest.mark.parametrize(
+    ("manual_entry", "expected_status"),
+    [
+        (
+            {
+                "status": "accepted_reference_issue",
+                "reference_answer_wrong": True,
+                "reason": "Independent reference error",
+            },
+            "excluded",
+        ),
+        ({"status": "accepted_reference_issue", "reason": "Needs confirmation"}, "unresolved"),
+        ({"status": "accepted_ambiguous", "reason": "Needs confirmation"}, "unresolved"),
+    ],
+)
+def test_build_case_uses_manual_reference_evidence_independently(
+    tmp_path, monkeypatch, manual_entry, expected_status
+) -> None:
+    (tmp_path / "REVIEW_CASE.xyz").write_text("1\nreview\nHe 0 0 0\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "benchmarks.tmqmg_xyz_benchmark.run.load_manual_reference_records",
+        lambda: {"REVIEW_CASE": manual_entry},
+    )
+    case = _build_case(
+        1,
+        {"id": "REVIEW_CASE", "smiles": "[He]", "charge": "0", "review_note": "retained"},
+        xyz_dir=tmp_path,
+    )
+
+    assert case["review_note"] == "retained"
+    assert case["reference_status"] == expected_status
+    assert case["reference_reason"] == manual_entry["reason"]
+    result = _run_case_method(
+        case,
+        "scoring",
+        lambda case: MethodRunOutput(status="ok", rdkit_mol=Chem.MolFromSmiles("[He]")),
+        case_timeout_seconds=None,
+    )
+    assert result.evaluator_decision == "equivalent"
+    assert result.equivalent is True
+    assert result.reference_status == expected_status
+
+
+def test_fallback_classifies_references_using_actual_xyz_directory(tmp_path) -> None:
+    (tmp_path / "VALID_CASE.xyz").write_text("1\nvalid\nHe 0 0 0\n", encoding="utf-8")
+    (tmp_path / "WRONG_CASE.xyz").write_text("1\nwrong\nNe 0 0 0\n", encoding="utf-8")
+    results = _fallback_results_for_method(
+        "scoring",
+        [
+            TmqmgBenchmarkInput(idx, {"id": case_id, "smiles": "[He]", "charge": "0"})
+            for idx, case_id in enumerate(["VALID_CASE", "WRONG_CASE"], start=1)
+        ],
+        "subprocess failed",
+        xyz_dir=tmp_path,
+    )
+
+    assert [result.reference_status for result in results] == ["valid", "excluded"]
+    assert results[1].reference_reason.startswith(
+        "ValueError: Reference SMILES element counts differ from XYZ:"
+    )
+    summary = summarize_results(results)[0]
+    assert summary["count"] == 1
+    assert summary["runtime_failure_count"] == 1
+    assert summary["reference_excluded_count"] == 1
+
+
+@pytest.mark.parametrize(
+    ("flags", "expected_status"),
+    [
+        (
+            {
+                "reference_answer_wrong": "true",
+                "reference_answer_reason": "Independent reference error",
+            },
+            "excluded",
+        ),
+        ({"reference_status": "excluded"}, "unresolved"),
+        (
+            {
+                "reference_status": "unresolved",
+                "reference_reason": "Review still pending",
+            },
+            "unresolved",
+        ),
+    ],
+)
+def test_build_case_preserves_csv_reference_review_flags(tmp_path, flags, expected_status) -> None:
+    (tmp_path / "CSV_REVIEW.xyz").write_text("1\nreview\nHe 0 0 0\n", encoding="utf-8")
+    case = _build_case(
+        1,
+        {"id": "CSV_REVIEW", "smiles": "[He]", "charge": "0", **flags},
+        xyz_dir=tmp_path,
+    )
+
+    assert case["reference_status"] == expected_status
+    for key in ("reference_answer_wrong", "reference_answer_reason"):
+        if key in flags:
+            assert case[key] == flags[key]

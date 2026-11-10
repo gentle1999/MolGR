@@ -222,7 +222,8 @@ def test_consumed_lone_pair_stays_consumed_after_sdf_round_trip(
     )
     assert restored is not None
     assert get_atom_lone_pair_count(restored.GetAtomWithIdx(center_idx)) == 0
-    assert bool(result.HasProp(f"atom.iprop.{LONE_PAIR_COUNT_PROP}")) == keep_other_lone_pair
+    # Known consumption is zero, not an absent/unknown annotation.
+    assert restored.GetAtomWithIdx(center_idx).HasProp(LONE_PAIR_COUNT_PROP)
     if other_idx is not None:
         assert get_atom_lone_pair_count(restored.GetAtomWithIdx(other_idx)) == 1
     # Post-processing returns a copy and must not change the source annotation.

@@ -19,6 +19,7 @@
 #include "molgr/utils/utils.h"
 #include "molgr/vendor/forcefielduff.h"
 #include "molgr/vendor/openbabel_conversion.h"
+#include "molgr/vendor/openbabel_copy.h"
 #include "molgr/vendor/openbabel_threading.h"
 #include "molgr/utils/logger.h"
 
@@ -1115,7 +1116,8 @@ namespace molgr
                         out.reserve(resonances.size());
                         for (const auto &resonance : resonances)
                         {
-                            auto *res_ptr = new OpenBabel::OBMol(resonance);
+                            auto *res_ptr = new OpenBabel::OBMol(
+                                molgr::vendor::openbabel_threading::CopyMol(resonance));
                             out.push_back(reinterpret_cast<intptr_t>(res_ptr));
                         }
                         return out;
@@ -1131,16 +1133,17 @@ namespace molgr
                        int total_radical_electrons) -> py::tuple
                     {
                         auto *mol = require_obmol_ptr(mol_ptr);
-                        std::pair<OpenBabel::OBMol, int> processed;
+                        const auto processed = [&]()
                         {
                             py::gil_scoped_release release;
-                            processed = molgr::reconstruct::ProcessResonance(
+                            return molgr::reconstruct::ProcessResonance(
                                 *mol,
                                 charge,
                                 total_charge,
                                 total_radical_electrons);
-                        }
-                        auto *res_ptr = new OpenBabel::OBMol(processed.first);
+                        }();
+                        auto *res_ptr = new OpenBabel::OBMol(
+                            molgr::vendor::openbabel_threading::CopyMol(processed.first));
                         return py::make_tuple(reinterpret_cast<intptr_t>(res_ptr), processed.second);
                     },
                     "Process resonance on an OBMol pointer and return (new_ptr, updated_charge).",

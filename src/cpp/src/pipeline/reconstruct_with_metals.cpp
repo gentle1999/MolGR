@@ -12,6 +12,7 @@
 #include "molgr/utils/no_metals/preparation.h"
 #include "molgr/utils/parallel.h"
 #include "molgr/utils/utils.h"
+#include "molgr/vendor/openbabel_copy.h"
 
 #include <openbabel/mol.h>
 
@@ -224,7 +225,7 @@ namespace molgr
                         return nullptr;
                     }
                     return std::make_unique<molgr::utils::MoleculeData>(
-                        molgr::utils::MoleculeDataFromOBMol(no_metal_state->Mol()));
+                        molgr::utils::MoleculeDataFromOBMol(no_metal_state->Mol(), true));
                 }
 
                 const auto metal_enum_started = std::chrono::steady_clock::now();
@@ -520,8 +521,7 @@ namespace molgr
                         [](const OpenBabel::OBMol &no_metal_omol,
                            const std::vector<molgr::metal::MetalAtomPosition> &metal_states)
                         {
-                            auto combined_omol = std::make_shared<OpenBabel::OBMol>(
-                                molgr::utils::CloneMolTopologyOnly(no_metal_omol));
+                            auto combined_omol = molgr::utils::CloneMolTopologyShared(no_metal_omol);
                             molgr::metal::preparation::CombineMetalWithOmol(
                                 *combined_omol,
                                 metal_states);
@@ -547,7 +547,7 @@ namespace molgr
                     return nullptr;
                 }
                 return std::make_unique<molgr::utils::MoleculeData>(
-                    molgr::utils::MoleculeDataFromOBMol(*best_candidate.combined_omol));
+                    molgr::utils::MoleculeDataFromOBMol(*best_candidate.combined_omol, true));
             }
         }
     }

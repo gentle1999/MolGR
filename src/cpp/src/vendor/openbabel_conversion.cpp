@@ -1,5 +1,6 @@
 #include "molgr/vendor/openbabel_conversion.h"
 #include "molgr/process_guard.h"
+#include "molgr/vendor/openbabel_copy.h"
 
 #include <openbabel/obconversion.h>
 
@@ -10,12 +11,6 @@
 
 namespace
 {
-    std::mutex &ConversionMutex()
-    {
-        static std::mutex mutex;
-        return mutex;
-    }
-
     OpenBabel::OBConversion &SmilesInputConversion()
     {
         static OpenBabel::OBConversion *conversion = []()
@@ -58,7 +53,8 @@ namespace molgr
                 {
                     return false;
                 }
-                std::lock_guard<std::mutex> guard(ConversionMutex());
+                std::lock_guard<std::recursive_mutex> guard(
+                    molgr::vendor::openbabel_threading::NativeOpenBabelMutex());
                 mol->Clear();
                 return SmilesInputConversion().ReadString(mol, smiles);
             }
@@ -66,8 +62,9 @@ namespace molgr
             std::string WriteSmilesFirstToken(const OpenBabel::OBMol &mol)
             {
                 molgr::EnsureCurrentProcess("molgr.native.smiles_writer");
-                std::lock_guard<std::mutex> guard(ConversionMutex());
-                OpenBabel::OBMol copy(mol);
+                std::lock_guard<std::recursive_mutex> guard(
+                    molgr::vendor::openbabel_threading::NativeOpenBabelMutex());
+                OpenBabel::OBMol copy = molgr::vendor::openbabel_threading::CopyMol(mol);
                 const std::string smiles = SmilesOutputConversion().WriteString(&copy, true);
                 std::istringstream input(smiles);
                 std::string token;

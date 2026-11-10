@@ -126,44 +126,6 @@ def test_cpp_default_config_enables_target_bucket_thread_parallelism() -> None:
     assert config.cpp_backend.target_bucket_parallel_max_threads is None
 
 
-def test_cpp_openbabel_threading_helpers_do_not_expose_a_cross_subsystem_global_lock() -> None:
-    threading_header = Path("src/cpp/include/molgr/vendor/openbabel_threading.h").read_text(
-        encoding="utf-8"
-    )
-    threading_source = Path("src/cpp/src/vendor/openbabel_threading.cpp").read_text(
-        encoding="utf-8"
-    )
-    conversion_header = Path("src/cpp/include/molgr/vendor/openbabel_conversion.h").read_text(
-        encoding="utf-8"
-    )
-    conversion_source = Path("src/cpp/src/vendor/openbabel_conversion.cpp").read_text(
-        encoding="utf-8"
-    )
-    target_bucket_pipeline = Path("src/cpp/src/pipeline/reconstruct_with_metals.cpp").read_text(
-        encoding="utf-8"
-    )
-
-    assert "PerceptionMutex" not in threading_header
-    assert "PerceptionMutex" not in threading_source
-    assert "ConversionMutex" not in threading_header
-    assert "ConversionMutex" not in threading_source
-    assert "ReadSmiles" in conversion_header
-    assert "WriteSmilesFirstToken" in conversion_header
-    assert "OpenBabel::OBConversion" in conversion_source
-    assert "std::mutex" in conversion_source
-    assert "std::lock_guard" in conversion_source
-    assert ".ConnectTheDots(" not in threading_source
-    assert ".PerceiveBondOrders(" not in threading_source
-    assert "OBMol::ConnectTheDots" not in threading_source
-    assert "OBMol::PerceiveBondOrders" not in threading_source
-    assert "openbabel/bondtyper.h" not in threading_source
-    assert "openbabel/typer.h" not in threading_source
-    assert "OBBondTyper" not in threading_source
-    assert "OBAromaticTyper" not in threading_source
-    assert "openbabel_threading" not in target_bucket_pipeline
-    assert "lock_guard" not in target_bucket_pipeline
-
-
 def test_cpp_xyz_seed_perception_uses_only_the_vendor_helper() -> None:
     source_roots = [Path("src/cpp"), Path("src/bindings")]
     source_files = [
@@ -254,6 +216,13 @@ def _cpp_xyz_seed_signature(
     )
     hybridizations = tuple(int(atom.hybridization) for atom in molecule_data.atoms)
     return bond_signature, hybridizations
+
+
+def test_cpp_xyz_seed_does_not_invent_electron_property_presence() -> None:
+    data = _core.dev.utils.debug_xyz_seed_molecule_data("1\nH\nH 0 0 0\n")
+
+    assert len(data.atoms) == 1
+    assert data.atoms[0].electron_property_presence == 0
 
 
 @pytest.mark.parametrize(

@@ -1,9 +1,10 @@
 #include "molgr/vendor/openbabel_threading.h"
+#include "molgr/vendor/openbabel_copy.h"
 
 // Narrow thread-safe vendor implementations of the OpenBabel XYZ seed
-// perception routines used by MolGR. Keep this file free of OpenBabel's
-// process/global perception entry points; C++ target-bucket workers call this
-// code directly so they are not serialized behind a cross-subsystem lock.
+// perception routines used by MolGR. Local perception remains concurrent;
+// only native lazy perception calls that can write the process-global logger
+// share the narrow lock used by native molecule copies.
 
 #include <openbabel/elements.h>
 #include <openbabel/generic.h>
@@ -16,6 +17,7 @@
 #include <cmath>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -23,6 +25,13 @@
 
 namespace
 {
+    int NativeTotalCharge(OpenBabel::OBMol &mol)
+    {
+        std::lock_guard<std::recursive_mutex> lock(
+            molgr::vendor::openbabel_threading::NativeOpenBabelMutex());
+        return mol.GetTotalCharge();
+    }
+
     struct AtomDistanceEntry
     {
         OpenBabel::OBAtom *atom = nullptr;
@@ -1673,7 +1682,7 @@ namespace
 
                 if (atom->IsInRing() && atom->GetAtomicNum() == OpenBabel::OBElements::Sulfur)
                 {
-                    if (mol.GetTotalCharge() > 1 && atom->GetFormalCharge() == 0)
+                    if (NativeTotalCharge(mol) > 1 && atom->GetFormalCharge() == 0)
                     {
                         atom->SetFormalCharge(+1);
                     }
@@ -1715,7 +1724,7 @@ namespace
                         if (neighbor->IsInRing() &&
                             neighbor->GetAtomicNum() == OpenBabel::OBElements::Sulfur)
                         {
-                            if (mol.GetTotalCharge() > 1 && neighbor->GetFormalCharge() == 0)
+                            if (NativeTotalCharge(mol) > 1 && neighbor->GetFormalCharge() == 0)
                             {
                                 neighbor->SetFormalCharge(+1);
                             }
@@ -1909,6 +1918,8 @@ namespace molgr
                     return;
                 }
 
+                // GetHyb may invoke OpenBabel's native typer and global logger.
+                std::lock_guard<std::recursive_mutex> lock(NativeOpenBabelMutex());
                 FOR_ATOMS_OF_MOL(atom_iter, mol)
                 {
                     static_cast<void>(atom_iter->GetHyb());

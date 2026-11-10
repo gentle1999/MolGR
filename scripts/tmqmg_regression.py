@@ -35,17 +35,22 @@ from typing_extensions import Literal, TypeAlias
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from openbabel import openbabel as ob
 from openbabel import pybel
 from rdkit import Chem, RDLogger
 
+from benchmarks.tmqmg_xyz_benchmark.comparison_annotations import (
+    load_manual_reference_records,
+    reference_validity,
+)
 from molgr.batch import ReconstructionBatchRequest, iter_xyz_to_rdmol_batch
 from molgr.fallback.utils.consts import NON_METAL_DICT
 from molgr.fallback.utils.electrons import set_unpaired_electron_count
 from molgr.fallback.utils.force_field import force_field_evaluation
 from molgr.interface import xyz_to_rdmol
-from molgr.utils.equivalence import evaluate_equivalence
+from molgr.utils.equivalence import EquivalenceDecision, evaluate_equivalence
 
 
 RDLogger.DisableLog("rdApp.*")  # type: ignore[arg-type]
@@ -66,13 +71,15 @@ RESULT_FIELDNAMES = (
     "molgr_smiles_canonical",
     "equivalent",
     "strict_equivalent",
-    "evaluator_decision",
+    "equivalence_decision",
     "equivalence_method",
     "equivalence_reason",
     "spin_source",
     "total_radical_electrons_used",
     "spin_multiplicity_used",
     "reference_parse_status",
+    "reference_status",
+    "reference_reason",
     "reference_formula_check_status",
     "reference_formula_match",
     "xyz_atom_count",
@@ -176,7 +183,7 @@ def _parse_args() -> argparse.Namespace:
         type=Path,
         default=Path(__file__).with_name("tmqmg_manual_whitelist.json"),
         help=(
-            "Optional JSON file mapping tmQMg ids to manually reviewed accepted divergences. "
+            "Historical reference-quality records; never override evaluator decisions. "
             "Default: scripts/tmqmg_manual_whitelist.json"
         ),
     )
@@ -231,6 +238,8 @@ def _empty_result(row_index: int, row: dict[str, str], xyz_path: Path) -> dict[s
         "total_radical_electrons_used": "",
         "spin_multiplicity_used": "",
         "reference_parse_status": "",
+        "reference_status": row.get("reference_status") or None,
+        "reference_reason": row.get("reference_reason") or None,
         "reference_formula_check_status": "",
         "reference_formula_match": "",
         "xyz_atom_count": "",
@@ -239,17 +248,17 @@ def _empty_result(row_index: int, row: dict[str, str], xyz_path: Path) -> dict[s
         "reference_formula_with_h": "",
         "reference_formula_mismatch_detail": "",
         "molgr_status": "",
-        "equivalent": "",
-        "strict_equivalent": "",
-        "evaluator_decision": "",
+        "equivalent": None,
+        "strict_equivalent": None,
+        "equivalence_decision": "",
         "equivalence_method": "",
         "equivalence_reason": "",
-        "reference_answer_wrong": "",
-        "reference_answer_status": "",
-        "reference_answer_reason": "",
+        "reference_answer_wrong": row.get("reference_answer_wrong", ""),
+        "reference_answer_status": row.get("reference_answer_status", ""),
+        "reference_answer_reason": row.get("reference_answer_reason", ""),
         "manual_whitelist_status": "",
         "manual_whitelist_reason": "",
-        "effective_equivalent": "",
+        "effective_equivalent": None,
         "molgr_organic_smiles": "",
         "reference_organic_smiles": "",
         "molgr_organic_atom_count": "",
@@ -267,26 +276,51 @@ def _empty_result(row_index: int, row: dict[str, str], xyz_path: Path) -> dict[s
     }
 
 
-def _load_manual_whitelist(path: Path) -> dict[str, dict[str, str]]:
-    if not path.exists():
-        return {}
-    raw = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(raw, dict):
-        raise ValueError(f"Manual whitelist must be a JSON object keyed by case id: {path}")
+def _update_reference_validity(result: dict[str, Any], manual_entry: dict[str, Any] | None) -> None:
+    status, reason = reference_validity(result, manual_entry)
+    result["reference_status"] = status
+    result["reference_reason"] = reason
+    result["reference_answer_wrong"] = (
+        True if status == "excluded" else None if status == "unresolved" else False
+    )
+    if result["reference_formula_match"] is False:
+        result["reference_answer_status"] = "formula_mismatch"
+    elif status == "excluded":
+        result["reference_answer_status"] = "manual_confirmed_wrong"
+    else:
+        result["reference_answer_status"] = (
+            f"manual_{manual_entry.get('status') or 'unconfirmed'}"
+            if manual_entry is not None
+            else "unresolved"
+            if status == "unresolved"
+            else "not_flagged"
+        )
+    result["reference_answer_reason"] = reason or ""
 
-    whitelist: dict[str, dict[str, str]] = {}
-    for case_id, entry in raw.items():
-        if not isinstance(case_id, str):
-            raise ValueError(f"Manual whitelist case id must be a string: {case_id!r}")
-        if not isinstance(entry, dict):
-            raise ValueError(f"Manual whitelist entry for {case_id} must be an object.")
-        status = str(entry.get("status", "accepted_reference_issue"))
-        reason = str(entry.get("reason", "")).strip()
-        whitelist[case_id] = {
-            "status": status,
-            "reason": reason,
-        }
-    return whitelist
+
+def _prepare_reference(
+    result: dict[str, Any], manual_entry: dict[str, Any] | None
+) -> Chem.Mol | None:
+    if manual_entry is not None:
+        result["manual_whitelist_status"] = manual_entry.get("status") or ""
+        result["manual_whitelist_reason"] = manual_entry.get("reason") or ""
+    reference_mol = None
+    if not result["reference_smiles_input"]:
+        result["reference_parse_status"] = "missing_reference_smiles"
+    else:
+        try:
+            reference_mol = Chem.MolFromSmiles(result["reference_smiles_input"])
+            if reference_mol is not None:
+                reference_mol = Chem.AddHs(reference_mol)
+        except Exception:
+            reference_mol = None
+        result["reference_parse_status"] = (
+            "ok" if reference_mol is not None else "reference_parse_failed"
+        )
+        if reference_mol is not None:
+            result["reference_smiles_canonical"] = _safe_canonical_smiles(reference_mol)
+    _update_reference_validity(result, manual_entry)
+    return reference_mol
 
 
 def _safe_canonical_smiles(mol: Chem.Mol) -> str:
@@ -670,25 +704,17 @@ def _process_row(
     xyz_dir: Path,
     backend: BackendName,
     spin_source: str,
-    manual_whitelist: dict[str, dict[str, str]],
+    manual_whitelist: dict[str, dict[str, Any]],
     precomputed_reconstruction: PrecomputedReconstruction | None = None,
+    result: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     started_at = time.perf_counter()
     xyz_path = xyz_dir / f"{row['id']}.xyz"
-    result = _empty_result(row_index, row, xyz_path)
+    if result is None:
+        result = _empty_result(row_index, row, xyz_path)
     result["spin_source"] = spin_source
-
-    reference_mol: Chem.Mol | None = None
-    if not row.get("smiles"):
-        result["reference_parse_status"] = "missing_reference_smiles"
-    else:
-        reference_mol = Chem.MolFromSmiles(row["smiles"])
-        if reference_mol is None:
-            result["reference_parse_status"] = "reference_parse_failed"
-        else:
-            reference_mol = Chem.AddHs(reference_mol)
-            result["reference_parse_status"] = "ok"
-            result["reference_smiles_canonical"] = _safe_canonical_smiles(reference_mol)
+    manual_entry = manual_whitelist.get(result["id"])
+    reference_mol = _prepare_reference(result, manual_entry)
 
     if spin_source == "reference_smiles":
         if reference_mol is None:
@@ -728,6 +754,10 @@ def _process_row(
         result["xyz_formula"] = _formula_string(xyz_counts)
     except Exception as exc:  # noqa: BLE001
         result["reference_formula_check_status"] = f"xyz_failed:{type(exc).__name__}"
+        _update_reference_validity(result, manual_entry)
+        if result["reference_status"] == "valid":
+            result["reference_status"] = "unresolved"
+            result["reference_reason"] = result["reference_formula_check_status"]
         result["molgr_status"] = f"failed:{type(exc).__name__}"
         result["molgr_organic_uff_status"] = "skipped_missing_molgr_result"
         result["reference_organic_mapping_status"] = "skipped_missing_molgr_result"
@@ -736,8 +766,6 @@ def _process_row(
         result["elapsed_seconds"] = round(time.perf_counter() - started_at, 6)
         return result
 
-    formula_proves_reference_wrong = False
-    formula_wrong_reason = ""
     if reference_mol is None:
         if result["reference_parse_status"] == "missing_reference_smiles":
             result["reference_formula_check_status"] = "missing_reference_smiles"
@@ -757,11 +785,8 @@ def _process_row(
                 xyz_counts,
                 reference_counts,
             )
-            formula_proves_reference_wrong = True
-            formula_wrong_reason = "Reference formula does not conserve XYZ atom counts: " + str(
-                result["reference_formula_mismatch_detail"]
-            )
 
+    _update_reference_validity(result, manual_entry)
     if precomputed_reconstruction is None:
         try:
             molgr_mol = xyz_to_rdmol(
@@ -795,58 +820,23 @@ def _process_row(
     if reference_mol is not None:
         try:
             info = evaluate_equivalence(molgr_mol, reference_mol, use_chirality=False)
-            decision = info.decision.value
-            result["evaluator_decision"] = decision
-            result["strict_equivalent"] = (
-                True if decision == "equivalent" else False if decision == "not_equivalent" else ""
-            )
-            result["equivalent"] = (
-                True
-                if decision == "equivalent"
-                else False
-                if decision == "not_equivalent"
-                else "inconclusive"
-            )
+            equivalent = {
+                EquivalenceDecision.EQUIVALENT: True,
+                EquivalenceDecision.NOT_EQUIVALENT: False,
+                EquivalenceDecision.INCONCLUSIVE: None,
+            }[info.decision]
+            result["strict_equivalent"] = equivalent
+            result["equivalent"] = equivalent
+            result["effective_equivalent"] = equivalent
+            result["equivalence_decision"] = info.decision.value
             result["equivalence_method"] = info.method.value if info.method is not None else ""
             result["equivalence_reason"] = info.reason
         except Exception as exc:  # noqa: BLE001
-            result["equivalent"] = ""
-            result["strict_equivalent"] = ""
-            result["evaluator_decision"] = ""
+            result["equivalent"] = None
+            result["strict_equivalent"] = None
+            result["equivalence_decision"] = ""
             result["equivalence_method"] = ""
             result["equivalence_reason"] = f"equivalence_failed: {type(exc).__name__}: {exc}"
-
-    whitelist_entry = manual_whitelist.get(result["id"])
-    whitelist_applied = False
-    if formula_proves_reference_wrong:
-        result["reference_answer_wrong"] = True
-        result["reference_answer_status"] = "formula_mismatch"
-        result["reference_answer_reason"] = formula_wrong_reason
-        result["equivalent"] = "formula_mismatch"
-    elif whitelist_entry is not None and result["evaluator_decision"] == "not_equivalent":
-        whitelist_applied = True
-        whitelist_status = whitelist_entry["status"]
-        result["equivalent"] = whitelist_status
-        result["reference_answer_reason"] = whitelist_entry["reason"]
-        if whitelist_status == "accepted_reference_issue":
-            result["reference_answer_wrong"] = True
-            result["reference_answer_status"] = "manual_confirmed_wrong"
-        elif whitelist_status == "accepted_ambiguous":
-            result["reference_answer_wrong"] = False
-            result["reference_answer_status"] = "manual_accepted_ambiguous"
-        else:
-            result["reference_answer_wrong"] = False
-            result["reference_answer_status"] = f"manual_{whitelist_status}"
-    else:
-        result["reference_answer_wrong"] = False
-        result["reference_answer_status"] = "not_flagged"
-    if whitelist_applied and whitelist_entry is not None:
-        result["manual_whitelist_status"] = whitelist_entry["status"]
-        result["manual_whitelist_reason"] = whitelist_entry["reason"]
-    result["effective_equivalent"] = bool(
-        result["equivalent"] is True or whitelist_applied or formula_proves_reference_wrong
-    )
-
     try:
         molgr_organic = _copy_without_metals(molgr_mol)
         result["molgr_organic_smiles"] = _safe_canonical_smiles(molgr_organic)
@@ -946,9 +936,13 @@ def _unexpected_row_error_result(
     spin_source: str,
     started_at: float,
     exc: Exception,
+    manual_whitelist: dict[str, dict[str, Any]],
+    result: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     xyz_path = xyz_dir / f"{row.get('id', '')}.xyz"
-    result = _empty_result(row_index, row, xyz_path)
+    if result is None:
+        result = _empty_result(row_index, row, xyz_path)
+        _prepare_reference(result, manual_whitelist.get(result["id"]))
     result["spin_source"] = spin_source
     result["molgr_status"] = f"failed:{type(exc).__name__}"
     result["molgr_organic_uff_status"] = "skipped_unexpected_error"
@@ -965,10 +959,11 @@ def _process_row_safe(
     xyz_dir: Path,
     backend: BackendName,
     spin_source: str,
-    manual_whitelist: dict[str, dict[str, str]],
+    manual_whitelist: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
     row_index, row = task
     started_at = time.perf_counter()
+    result = _empty_result(row_index, row, xyz_dir / f"{row.get('id', '')}.xyz")
     try:
         return _process_row(
             row_index,
@@ -977,6 +972,7 @@ def _process_row_safe(
             backend=backend,
             spin_source=spin_source,
             manual_whitelist=manual_whitelist,
+            result=result,
         )
     except Exception as exc:
         return _unexpected_row_error_result(
@@ -986,6 +982,8 @@ def _process_row_safe(
             spin_source=spin_source,
             started_at=started_at,
             exc=exc,
+            manual_whitelist=manual_whitelist,
+            result=result,
         )
 
 
@@ -1058,7 +1056,7 @@ def _iter_processed_rows(
     xyz_dir: Path,
     backend: BackendName,
     spin_source: str,
-    manual_whitelist: dict[str, dict[str, str]],
+    manual_whitelist: dict[str, dict[str, Any]],
 ) -> Iterator[dict[str, Any]]:
     if backend == "cpp":
         precomputed = _native_batch_reconstructions(
@@ -1069,6 +1067,7 @@ def _iter_processed_rows(
         )
         for task in row_tasks:
             row_index, row = task
+            result = _empty_result(row_index, row, xyz_dir / f"{row.get('id', '')}.xyz")
             if row_index not in precomputed:
                 yield _unexpected_row_error_result(
                     row_index,
@@ -1077,6 +1076,7 @@ def _iter_processed_rows(
                     spin_source=spin_source,
                     started_at=time.perf_counter(),
                     exc=RuntimeError("native batch returned no result for row"),
+                    manual_whitelist=manual_whitelist,
                 )
                 continue
             try:
@@ -1088,6 +1088,7 @@ def _iter_processed_rows(
                     spin_source=spin_source,
                     manual_whitelist=manual_whitelist,
                     precomputed_reconstruction=precomputed[row_index],
+                    result=result,
                 )
             except Exception as exc:
                 yield _unexpected_row_error_result(
@@ -1097,6 +1098,8 @@ def _iter_processed_rows(
                     spin_source=spin_source,
                     started_at=time.perf_counter(),
                     exc=exc,
+                    manual_whitelist=manual_whitelist,
+                    result=result,
                 )
         return
 
@@ -1123,6 +1126,20 @@ def _counter_to_dict(counter: Counter[str]) -> dict[str, int]:
     return dict(sorted(counter.items()))
 
 
+def _update_official_counts(counts: Counter[str], result: dict[str, Any]) -> None:
+    counts["total_count"] += 1
+    status = result["reference_status"]
+    counts[f"reference_{status}_count"] += 1
+    if status != "valid":
+        return
+    outcome = {
+        "equivalent": "success_count",
+        "not_equivalent": "fail_count",
+        "inconclusive": "inconclusive_count",
+    }.get(result["equivalence_decision"])
+    counts[outcome if result["molgr_status"] == "ok" and outcome else "runtime_failure_count"] += 1
+
+
 def main() -> int:
     args = _parse_args()
     backend = _normalize_backend(args.backend)
@@ -1130,11 +1147,12 @@ def main() -> int:
     summary_out = args.summary_out or _summary_path_from_output(args.out)
     summary_out.parent.mkdir(parents=True, exist_ok=True)
 
-    manual_whitelist = _load_manual_whitelist(args.manual_whitelist)
+    manual_whitelist = load_manual_reference_records(args.manual_whitelist)
     reference_parse_counter: Counter[str] = Counter()
     reference_formula_check_counter: Counter[str] = Counter()
     molgr_status_counter: Counter[str] = Counter()
     equivalence_method_counter: Counter[str] = Counter()
+    equivalence_decision_counter: Counter[str] = Counter()
     equivalence_display_counter: Counter[str] = Counter()
     manual_whitelist_counter: Counter[str] = Counter()
     reference_answer_status_counter: Counter[str] = Counter()
@@ -1144,8 +1162,21 @@ def main() -> int:
     error_counter: Counter[str] = Counter()
 
     processed = 0
-    equivalent_count = 0
-    effective_equivalent_count = 0
+    official_counts: Counter[str] = Counter(
+        dict.fromkeys(
+            (
+                "total_count",
+                "reference_valid_count",
+                "reference_excluded_count",
+                "reference_unresolved_count",
+                "success_count",
+                "fail_count",
+                "inconclusive_count",
+                "runtime_failure_count",
+            ),
+            0,
+        )
+    )
     uff_pair_count = 0
     organic_uff_delta_sum = 0.0
     organic_uff_abs_delta_sum = 0.0
@@ -1187,14 +1218,13 @@ def main() -> int:
             reference_uff_status_counter.update(
                 [result["reference_organic_uff_status"] or "missing"]
             )
-            if result["strict_equivalent"] is True:
-                equivalent_count += 1
-            if result["effective_equivalent"] is True:
-                effective_equivalent_count += 1
+            _update_official_counts(official_counts, result)
             if result["equivalent"] != "":
                 equivalence_display_counter.update([str(result["equivalent"])])
             if result["equivalence_method"]:
                 equivalence_method_counter.update([str(result["equivalence_method"])])
+            if result["equivalence_decision"]:
+                equivalence_decision_counter.update([str(result["equivalence_decision"])])
             if result["manual_whitelist_status"]:
                 manual_whitelist_counter.update([str(result["manual_whitelist_status"])])
             if result["reference_answer_status"]:
@@ -1228,11 +1258,12 @@ def main() -> int:
         "end_row": args.end_row,
         "selected_row_count": len(row_tasks),
         "processed": processed,
-        "equivalent_count": equivalent_count,
-        "equivalent_fraction": (equivalent_count / processed) if processed else 0.0,
-        "effective_equivalent_count": effective_equivalent_count,
-        "effective_equivalent_fraction": (
-            effective_equivalent_count / processed if processed else 0.0
+        **official_counts,
+        "equivalent_count": official_counts["success_count"],
+        "equivalent_fraction": (
+            official_counts["success_count"] / official_counts["reference_valid_count"]
+            if official_counts["reference_valid_count"]
+            else 0.0
         ),
         "equivalence_display_counts": _counter_to_dict(equivalence_display_counter),
         "manual_whitelist_path": str(args.manual_whitelist),
@@ -1250,6 +1281,7 @@ def main() -> int:
         "reference_formula_check_status_counts": _counter_to_dict(reference_formula_check_counter),
         "molgr_status_counts": _counter_to_dict(molgr_status_counter),
         "equivalence_method_counts": _counter_to_dict(equivalence_method_counter),
+        "equivalence_decision_counts": _counter_to_dict(equivalence_decision_counter),
         "molgr_organic_uff_status_counts": _counter_to_dict(molgr_uff_status_counter),
         "reference_organic_mapping_status_counts": _counter_to_dict(reference_mapping_counter),
         "reference_organic_uff_status_counts": _counter_to_dict(reference_uff_status_counter),

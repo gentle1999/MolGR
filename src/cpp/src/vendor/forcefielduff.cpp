@@ -25,6 +25,7 @@ GNU General Public License for more details.
 #include <openbabel/generic.h>
 #include <openbabel/bond.h>
 
+#include "molgr/vendor/openbabel_copy.h"
 #include "molgr/vendor/openbabel_threading.h"
 
 #include <cctype>
@@ -1418,7 +1419,7 @@ namespace OpenBabel {
 
   MolgrForceFieldUFF &MolgrForceFieldUFF::operator=(MolgrForceFieldUFF &src)
   {
-    _mol = src._mol;
+    molgr::vendor::openbabel_threading::AssignMol(_mol, src._mol);
 
     _ffparams    = src._ffparams;
     _ffparam_index = src._ffparam_index;
@@ -1546,7 +1547,7 @@ namespace OpenBabel {
     }
 
     if (IsSetupNeeded(mol)) {
-      _mol = mol;
+      molgr::vendor::openbabel_threading::AssignMol(_mol, mol);
       _ncoords = _mol.NumAtoms() * 3;
 
       delete [] _velocityPtr;
@@ -1600,7 +1601,7 @@ namespace OpenBabel {
     }
 
     if (IsSetupNeeded(mol)) {
-      _mol = mol;
+      molgr::vendor::openbabel_threading::AssignMol(_mol, mol);
       _ncoords = _mol.NumAtoms() * 3;
 
       delete [] _velocityPtr;

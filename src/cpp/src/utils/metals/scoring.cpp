@@ -8,6 +8,7 @@
 #include "molgr/utils/organic_topology.h"
 #include "molgr/utils/scoring.h"
 #include "molgr/stages/fresh.h"
+#include "molgr/vendor/openbabel_copy.h"
 #include "molgr/vendor/openbabel_threading.h"
 
 #include <openbabel/atom.h>
@@ -788,8 +789,7 @@ namespace
         auto clone = std::make_shared<molgr::state::ReconstructionState>(*state);
         if (state->omol)
         {
-            clone->omol = std::make_shared<OpenBabel::OBMol>(
-                molgr::utils::CloneMolTopologyOnly(*state->omol));
+            clone->omol = molgr::utils::CloneMolTopologyShared(*state->omol);
         }
         return clone;
     }

@@ -1,6 +1,7 @@
 #include "molgr/utils/organic_topology.h"
 
 #include "molgr/utils/consts.h"
+#include "molgr/utils/conversions.h"
 #include "molgr/utils/electrons.h"
 #include "molgr/utils/utils.h"
 #include "molgr/vendor/openbabel_threading.h"
@@ -890,7 +891,7 @@ namespace molgr
             {
                 return false;
             }
-            OpenBabel::OBMol working(*parent);
+            OpenBabel::OBMol working = molgr::utils::CloneMolTopologyForScoring(*parent);
             PrepareTopologyWorkingMolecule(working);
             const ValidatedConjugationTopology conjugated_topology =
                 ValidatedConjugatedTopology(
@@ -903,7 +904,7 @@ namespace molgr
             const OpenBabel::OBMol &mol,
             const molgr::config::OrganicTopologyConfig &config)
         {
-            OpenBabel::OBMol working(mol);
+            OpenBabel::OBMol working = molgr::utils::CloneMolTopologyForScoring(mol);
             PrepareTopologyWorkingMolecule(working);
 
             OrganicTopologyMetrics metrics;

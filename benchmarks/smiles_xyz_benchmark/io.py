@@ -13,9 +13,14 @@ SUMMARY_COLUMNS: tuple[str, ...] = (
     "count",
     "success_count",
     "fail_count",
+    "inconclusive_count",
+    "runtime_failure_count",
+    "total_count",
+    "reference_valid_count",
+    "reference_excluded_count",
+    "reference_unresolved_count",
     "skip_count",
     "comparison_skip_count",
-    "inconclusive_count",
     "avg_ms_total",
     "p50_ms_total",
     "p95_ms_total",
@@ -32,9 +37,17 @@ RESULT_COLUMNS: tuple[str, ...] = (
     "predicted_smiles",
     "equivalent",
     "evaluator_decision",
+    "reference_status",
+    "reference_reason",
     "equivalence_method",
     "comparison_skipped",
     "comparison_skip_reason",
+    "smiles_roundtrip_status",
+    "smiles_roundtrip_parse_success",
+    "smiles_roundtrip_equivalent",
+    "smiles_roundtrip_equivalence_method",
+    "smiles_roundtrip_reason",
+    "smiles_roundtrip_diagnostics_json",
     "timing_ms_total",
 )
 
@@ -58,7 +71,7 @@ def _percentile(values: list[float], percentile: float) -> float:
 
 
 def _is_accuracy_denominator_row(row: BenchmarkResult) -> bool:
-    return row.status != "skipped" and not row.comparison_skipped
+    return row.reference_status == "valid"
 
 
 def summarize_results(results: list[BenchmarkResult]) -> list[dict[str, str | int | float]]:
@@ -73,13 +86,17 @@ def summarize_results(results: list[BenchmarkResult]) -> list[dict[str, str | in
         timed_rows = [row for row in rows if row.status != "skipped"]
         timings = [row.timing_ms_total for row in timed_rows]
         count = len(denominator_rows)
-        success_count = sum(1 for row in denominator_rows if row.equivalent is True)
-        inconclusive_count = sum(
-            1
+        evaluated_rows = [
+            row
             for row in denominator_rows
-            if getattr(row, "evaluator_decision", None) == "inconclusive"
-        )
-        fail_count = count - success_count - inconclusive_count
+            if row.status == "ok"
+            and row.evaluator_decision in {"equivalent", "not_equivalent", "inconclusive"}
+        ]
+        success_count = sum(row.evaluator_decision == "equivalent" for row in evaluated_rows)
+        fail_count = sum(row.evaluator_decision == "not_equivalent" for row in evaluated_rows)
+        inconclusive_count = sum(row.evaluator_decision == "inconclusive" for row in evaluated_rows)
+        runtime_failure_count = count - len(evaluated_rows)
+        excluded_count = sum(row.reference_status == "excluded" for row in rows)
         skip_count = sum(1 for row in rows if row.status == "skipped")
         comparison_skip_count = sum(1 for row in rows if row.comparison_skipped)
 
@@ -90,9 +107,14 @@ def summarize_results(results: list[BenchmarkResult]) -> list[dict[str, str | in
                 "count": count,
                 "success_count": success_count,
                 "fail_count": fail_count,
+                "inconclusive_count": inconclusive_count,
+                "runtime_failure_count": runtime_failure_count,
+                "total_count": len(rows),
+                "reference_valid_count": count,
+                "reference_excluded_count": excluded_count,
+                "reference_unresolved_count": len(rows) - count - excluded_count,
                 "skip_count": skip_count,
                 "comparison_skip_count": comparison_skip_count,
-                "inconclusive_count": inconclusive_count,
                 "avg_ms_total": avg_ms,
                 "p50_ms_total": _percentile(timings, 0.50),
                 "p95_ms_total": _percentile(timings, 0.95),
@@ -126,10 +148,28 @@ def write_results_csv(path: Path, results: list[BenchmarkResult]) -> None:
                 "error": result.error,
                 "predicted_smiles": result.predicted_smiles,
                 "equivalent": result.equivalent,
-                "evaluator_decision": getattr(result, "evaluator_decision", None),
+                "evaluator_decision": result.evaluator_decision,
+                "reference_status": result.reference_status,
+                "reference_reason": result.reference_reason,
                 "equivalence_method": result.equivalence_method,
                 "comparison_skipped": getattr(result, "comparison_skipped", False),
                 "comparison_skip_reason": getattr(result, "comparison_skip_reason", None),
+                "smiles_roundtrip_status": getattr(result, "smiles_roundtrip_status", None),
+                "smiles_roundtrip_parse_success": getattr(
+                    result, "smiles_roundtrip_parse_success", None
+                ),
+                "smiles_roundtrip_equivalent": getattr(result, "smiles_roundtrip_equivalent", None),
+                "smiles_roundtrip_equivalence_method": (
+                    getattr(result, "smiles_roundtrip_equivalence_method", None)
+                ),
+                "smiles_roundtrip_reason": getattr(result, "smiles_roundtrip_reason", None),
+                "smiles_roundtrip_diagnostics_json": json.dumps(
+                    getattr(result, "smiles_roundtrip_diagnostics", None),
+                    ensure_ascii=True,
+                    sort_keys=True,
+                )
+                if getattr(result, "smiles_roundtrip_diagnostics", None) is not None
+                else None,
                 "timing_ms_total": result.timing_ms_total,
                 "timing_ms_breakdown_json": json.dumps(breakdown, ensure_ascii=True),
             }

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import typing
 
-from . import dev, pipeline, utils
+from . import dev, equivalence, pipeline, utils
 
 __all__: list[str] = [
     "DEBUG",
@@ -20,6 +20,7 @@ __all__: list[str] = [
     "OFF",
     "WARN",
     "dev",
+    "equivalence",
     "free_obmol_ptr",
     "pipeline",
     "set_log_level",

@@ -308,7 +308,7 @@ namespace molgr
                     return nullptr;
                 }
                 return std::make_unique<molgr::utils::MoleculeData>(
-                    molgr::utils::MoleculeDataFromOBMol(state->Mol()));
+                    molgr::utils::MoleculeDataFromOBMol(state->Mol(), true));
             }
 
             std::vector<DebugNoMetalCandidateSummary> DebugNoMetalResonanceCandidateSummaries(

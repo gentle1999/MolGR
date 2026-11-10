@@ -78,11 +78,15 @@ add_library(molgr STATIC
     src/cpp/src/utils/consts.cpp
     src/cpp/src/utils/utils.cpp
     src/cpp/src/utils/conversions.cpp
+    src/cpp/src/utils/stereo.cpp
+    src/cpp/src/utils/equivalence.cpp
+    src/cpp/src/utils/equivalence_stereo.cpp
     src/cpp/src/utils/xyz.cpp
     src/cpp/src/utils/force_field.cpp
     src/cpp/src/utils/metal_radical_inference.cpp
     src/cpp/src/vendor/forcefielduff.cpp
     src/cpp/src/vendor/openbabel_conversion.cpp
+    src/cpp/src/vendor/openbabel_copy.cpp
     src/cpp/src/vendor/openbabel_threading.cpp
     src/cpp/src/utils/metals/preparation.cpp
     src/cpp/src/utils/metals/scoring.cpp
@@ -134,6 +138,7 @@ target_link_libraries(molgr PUBLIC ${OB_LIBRARY})
 pybind11_add_module(_core 
     src/bindings/module.cpp 
     src/bindings/bind_utils.cpp
+    src/bindings/bind_equivalence.cpp
     src/bindings/bind_pipeline.cpp
     src/bindings/bind_stages.cpp
     src/cpp/src/config.cpp
@@ -155,3 +160,4 @@ endif()
 
 install(TARGETS _core DESTINATION molgr)
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/src/molgr/data/UFF.prm" DESTINATION molgr/data)
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/src/molgr/data/RDKIT_STEREO_LICENSE.txt" DESTINATION molgr/data)

@@ -25,12 +25,15 @@ from benchmarks.tmqmg_xyz_benchmark.io import (
 )
 from benchmarks.tmqmg_xyz_benchmark.comparison_annotations import (
     find_comparison_annotation,
+    load_manual_reference_records,
+    reference_validity,
 )
 from benchmarks.tmqmg_xyz_benchmark.methods import METHOD_IDS, get_method_registry
 from benchmarks.tmqmg_xyz_benchmark.schema import BenchmarkResult
 from benchmarks.smiles_xyz_benchmark.methods.base import MethodRunOutput
 
 from rdkit import Chem
+from rdkit.Chem import rdMolDescriptors
 
 
 try:
@@ -49,6 +52,129 @@ def _tqdm(*args, **kwargs):
 class TmqmgBenchmarkInput:
     row_index: int
     row: dict[str, str]
+
+
+def _roundtrip_molecule_snapshot(mol: Chem.Mol) -> dict[str, Any]:
+    """Return cheap electronic/formula diagnostics without modifying ``mol``."""
+
+    from molgr.utils.converter import get_atom_lone_pair_count
+
+    def safe_value(callback) -> Any:
+        try:
+            return callback()
+        except Exception as exc:  # noqa: BLE001
+            return f"unavailable: {type(exc).__name__}: {exc}"
+
+    return {
+        "formula": safe_value(lambda: rdMolDescriptors.CalcMolFormula(mol)),
+        "total_h": safe_value(
+            lambda: sum(
+                int(atom.GetTotalNumHs(includeNeighbors=True))
+                for atom in mol.GetAtoms()
+                if atom.GetAtomicNum() != 1
+            )
+        ),
+        "formal_charge": safe_value(
+            lambda: sum(int(atom.GetFormalCharge()) for atom in mol.GetAtoms())
+        ),
+        "radical_electrons": safe_value(
+            lambda: sum(int(atom.GetNumRadicalElectrons()) for atom in mol.GetAtoms())
+        ),
+        "active_lone_pairs": safe_value(
+            lambda: sum(get_atom_lone_pair_count(atom) for atom in mol.GetAtoms())
+        ),
+    }
+
+
+def _roundtrip_deltas(
+    internal: dict[str, Any],
+    reparsed: dict[str, Any],
+) -> dict[str, Any]:
+    deltas: dict[str, Any] = {}
+    for key in ("total_h", "formal_charge", "radical_electrons", "active_lone_pairs"):
+        left = internal.get(key)
+        right = reparsed.get(key)
+        if isinstance(left, int) and isinstance(right, int):
+            deltas[key] = right - left
+    deltas["formula_changed"] = internal.get("formula") != reparsed.get("formula")
+    return deltas
+
+
+def _smiles_roundtrip_diagnostic(
+    internal_mol: Chem.Mol,
+    predicted_smiles: str,
+    *,
+    timeout_seconds: float | None,
+    method_id: str,
+    case_idx: int,
+) -> dict[str, Any]:
+    """Diagnose I -> SMILES -> S independently of reference accuracy."""
+
+    from molgr.utils.equivalence import EquivalenceDecision, evaluate_equivalence
+
+    internal_snapshot = _roundtrip_molecule_snapshot(internal_mol)
+    try:
+        reparsed = Chem.MolFromSmiles(predicted_smiles)
+    except Exception as exc:  # noqa: BLE001
+        reparsed = None
+        parse_reason = f"{type(exc).__name__}: {exc}"
+    else:
+        parse_reason = ""
+    if reparsed is None:
+        return {
+            "status": "reparse_failed",
+            "parse_success": False,
+            "equivalent": None,
+            "equivalence_method": None,
+            "reason": parse_reason or "predicted_smiles could not be reparsed",
+            "diagnostics": {"internal": internal_snapshot, "reparsed": None},
+        }
+
+    reparsed_snapshot = _roundtrip_molecule_snapshot(reparsed)
+    diagnostics = {
+        "internal": internal_snapshot,
+        "reparsed": reparsed_snapshot,
+        "delta": _roundtrip_deltas(internal_snapshot, reparsed_snapshot),
+    }
+    try:
+        with case_timeout(
+            timeout_seconds,
+            f"{method_id} SMILES roundtrip {case_idx}",
+        ):
+            info = evaluate_equivalence(
+                internal_mol,
+                reparsed,
+                use_chirality=False,
+                max_resonance=100,
+            )
+            equivalent = (
+                None
+                if info.decision == EquivalenceDecision.INCONCLUSIVE
+                else info.decision == EquivalenceDecision.EQUIVALENT
+            )
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "status": "check_failed",
+            "parse_success": True,
+            "equivalent": None,
+            "equivalence_method": None,
+            "reason": f"roundtrip equivalence check failed: {type(exc).__name__}: {exc}",
+            "diagnostics": diagnostics,
+        }
+    return {
+        "status": (
+            "inconclusive"
+            if equivalent is None
+            else "preserved"
+            if equivalent
+            else "roundtrip_changed"
+        ),
+        "parse_success": True,
+        "equivalent": equivalent,
+        "equivalence_method": info.method.value if info.method is not None else None,
+        "reason": info.reason,
+        "diagnostics": diagnostics,
+    }
 
 
 def _build_cpp_backend_config_payload(
@@ -117,6 +243,11 @@ def _parse_args() -> argparse.Namespace:
         type=float,
         default=1.0,
         help="Per-method per-case wall-time limit. Use 0 to disable.",
+    )
+    parser.add_argument(
+        "--skip-smiles-roundtrip",
+        action="store_true",
+        help="Skip the independent internal-molecule to SMILES roundtrip diagnostic.",
     )
     parser.add_argument(
         "--cpp-accelerations",
@@ -266,6 +397,7 @@ def _build_case(
     xyz_dir: Path,
 ) -> dict[str, Any]:
     case: dict[str, Any] = {
+        **row,
         "case_idx": row_index,
         "input_smiles": row.get("smiles", "").strip(),
         "ground_truth_rdmol": None,
@@ -274,11 +406,22 @@ def _build_case(
         "total_charge": None,
         "total_radical_electrons": None,
         "provider_error": None,
-        "reference_error": None,
+        "reference_error": row.get("reference_error") or None,
         "comparison_annotation": None,
         "xyz_path": None,
         "id": row.get("id", "").strip(),
     }
+
+    reference_smiles = case["input_smiles"]
+    case["ground_truth_smiles"] = reference_smiles or None
+    try:
+        case["ground_truth_rdmol"] = (
+            Chem.MolFromSmiles(reference_smiles) if reference_smiles else None
+        )
+    except Exception as exc:  # noqa: BLE001
+        case["reference_error"] = f"{type(exc).__name__}: {exc}"
+    if case["ground_truth_rdmol"] is None and not case["reference_error"]:
+        case["reference_error"] = "Missing or unparseable reference SMILES"
 
     try:
         xyz_block, xyz_path = _load_case_xyz(xyz_dir, row)
@@ -286,29 +429,36 @@ def _build_case(
             case["id"],
             _xyz_element_counts(xyz_block),
         )
+        if case["ground_truth_rdmol"] is not None:
+            try:
+                _validate_reference_matches_xyz(reference_smiles, xyz_block)
+            except ValueError as exc:
+                case["reference_error"] = f"{type(exc).__name__}: {exc}"
         total_charge = int(row.get("charge", "0").strip() or 0)
         total_radical_electrons = _resolve_total_radical_electrons(row)
-        reference_smiles = row.get("smiles", "").strip()
-        reference_error = None
-        try:
-            _validate_reference_matches_xyz(reference_smiles, xyz_block)
-        except ValueError as exc:
-            reference_error = f"{type(exc).__name__}: {exc}"
-        ground_truth_rdmol = Chem.MolFromSmiles(reference_smiles) if reference_smiles else None
 
         case.update(
             {
-                "ground_truth_rdmol": ground_truth_rdmol,
-                "ground_truth_smiles": reference_smiles or None,
                 "xyz_block": xyz_block,
                 "total_charge": total_charge,
                 "total_radical_electrons": total_radical_electrons,
-                "reference_error": reference_error,
                 "xyz_path": xyz_path,
             }
         )
     except Exception as exc:  # noqa: BLE001
         case["provider_error"] = f"{type(exc).__name__}: {exc}"
+
+    case["reference_status"], case["reference_reason"] = reference_validity(
+        case, load_manual_reference_records().get(case["id"])
+    )
+    annotation = case["comparison_annotation"]
+    if (
+        annotation is not None
+        and annotation.skip_comparison
+        and case["reference_status"] == "valid"
+    ):
+        case["reference_status"] = "unresolved"
+        case["reference_reason"] = annotation.comparison_skip_reason
 
     return case
 
@@ -320,8 +470,9 @@ def _run_case_method(
     *,
     case_timeout_seconds: float | None,
     precomputed_output: MethodRunOutput | None = None,
+    roundtrip_diagnostics: bool = True,
 ) -> BenchmarkResult:
-    from molgr.utils.equivalence import evaluate_equivalence
+    from molgr.utils.equivalence import EquivalenceDecision, evaluate_equivalence
 
     comparison_annotation = case.get("comparison_annotation")
     comparison_skipped = bool(
@@ -332,6 +483,16 @@ def _run_case_method(
         if comparison_annotation is not None and comparison_skipped
         else None
     )
+    reference_status = case.get("reference_status")
+    reference_reason = case.get("reference_reason")
+    if reference_status is None:
+        reference_status, reference_reason = reference_validity(
+            case, load_manual_reference_records().get(case.get("id", ""))
+        )
+    if case.get("ground_truth_rdmol") is None and reference_status == "valid":
+        reference_status, reference_reason = "unresolved", "Missing or unparseable reference SMILES"
+    if comparison_skipped and reference_status == "valid":
+        reference_status, reference_reason = "unresolved", comparison_skip_reason
     if case.get("provider_error"):
         breakdown = {"method_ms": 0.0, "equivalence_ms": 0.0}
         return BenchmarkResult(
@@ -346,6 +507,8 @@ def _run_case_method(
             equivalence_method=None,
             timing_ms_total=0.0,
             timing_ms_breakdown=breakdown,
+            reference_status=reference_status,
+            reference_reason=reference_reason,
             case_id=case.get("id"),
             comparison_skipped=comparison_skipped,
             comparison_skip_reason=comparison_skip_reason,
@@ -371,6 +534,8 @@ def _run_case_method(
                 equivalence_method=None,
                 timing_ms_total=method_elapsed_ms,
                 timing_ms_breakdown=breakdown,
+                reference_status=reference_status,
+                reference_reason=reference_reason,
                 case_id=case.get("id"),
                 comparison_skipped=comparison_skipped,
                 comparison_skip_reason=comparison_skip_reason,
@@ -386,58 +551,49 @@ def _run_case_method(
 
     status = output.status
     error = output.error
-    equivalent = output.equivalent
-    equivalence_method = output.equivalence_method
+    equivalent = None
+    equivalence_method = None
     evaluator_decision = None
+    roundtrip: dict[str, Any] | None = None
+    if roundtrip_diagnostics and output.rdkit_mol is not None and output.predicted_smiles:
+        roundtrip_started = time.perf_counter()
+        roundtrip = _smiles_roundtrip_diagnostic(
+            output.rdkit_mol,
+            output.predicted_smiles,
+            timeout_seconds=case_timeout_seconds,
+            method_id=method_id,
+            case_idx=int(case["case_idx"]),
+        )
+        breakdown["roundtrip_ms"] = (time.perf_counter() - roundtrip_started) * 1000.0
     ground_truth_rdmol = case.get("ground_truth_rdmol")
-    reference_error = case.get("reference_error")
     if comparison_skipped:
         equivalent = None
         equivalence_method = None
-        evaluator_decision = None
-    elif reference_error is not None:
-        equivalent = None
-        equivalence_method = None
-        evaluator_decision = None
-        comparison_skipped = True
-        comparison_skip_reason = str(reference_error)
     elif ground_truth_rdmol is not None and output.rdkit_mol is not None:
         eq_started = time.perf_counter()
         try:
             with case_timeout(case_timeout_seconds, f"{method_id} equivalence {case['case_idx']}"):
-                comparison_mol = output.rdkit_mol
-                if output.predicted_smiles:
-                    comparison_mol = Chem.MolFromSmiles(output.predicted_smiles)
-                    if comparison_mol is None:
-                        raise ValueError("predicted_smiles could not be reparsed")
                 info = evaluate_equivalence(
                     ground_truth_rdmol,
-                    comparison_mol,
+                    output.rdkit_mol,
                     # tmQMg reference SMILES do not consistently encode stereochemistry.
                     use_chirality=False,
                     max_resonance=100,
                 )
             evaluator_decision = info.decision.value
             equivalent = (
-                True
-                if evaluator_decision == "equivalent"
-                else False
-                if evaluator_decision == "not_equivalent"
-                else None
+                None
+                if info.decision == EquivalenceDecision.INCONCLUSIVE
+                else info.decision == EquivalenceDecision.EQUIVALENT
             )
             equivalence_method = info.method.value if info.method is not None else None
         except CaseTimeoutError as exc:
-            equivalent = None
-            equivalence_method = None
-            evaluator_decision = None
-            comparison_skipped = True
-            comparison_skip_reason = str(exc)
+            status = "error"
+            error = f"{error}; {exc}" if error else str(exc)
         except Exception as exc:  # noqa: BLE001
-            equivalent = None
-            equivalence_method = None
-            evaluator_decision = None
-            comparison_skipped = True
-            comparison_skip_reason = f"equivalence check failed: {exc}"
+            status = "error"
+            equivalence_error = f"equivalence check failed: {exc}"
+            error = f"{error}; {equivalence_error}" if error else equivalence_error
         finally:
             breakdown["equivalence_ms"] = (time.perf_counter() - eq_started) * 1000.0
 
@@ -452,11 +608,21 @@ def _run_case_method(
         equivalent=equivalent,
         equivalence_method=equivalence_method,
         evaluator_decision=evaluator_decision,
+        reference_status=reference_status,
+        reference_reason=reference_reason,
         timing_ms_total=method_elapsed_ms,
         timing_ms_breakdown=breakdown,
         case_id=case.get("id"),
         comparison_skipped=comparison_skipped,
         comparison_skip_reason=comparison_skip_reason,
+        smiles_roundtrip_status=roundtrip["status"] if roundtrip else None,
+        smiles_roundtrip_parse_success=roundtrip["parse_success"] if roundtrip else None,
+        smiles_roundtrip_equivalent=roundtrip["equivalent"] if roundtrip else None,
+        smiles_roundtrip_equivalence_method=(
+            roundtrip["equivalence_method"] if roundtrip else None
+        ),
+        smiles_roundtrip_reason=roundtrip["reason"] if roundtrip else None,
+        smiles_roundtrip_diagnostics=roundtrip["diagnostics"] if roundtrip else None,
     )
 
 
@@ -465,6 +631,7 @@ def _run_method_cases_worker(payload: dict[str, Any]) -> list[BenchmarkResult]:
     cases = payload["cases"]
     xyz_dir = Path(payload["xyz_dir"])
     case_timeout_seconds = payload["case_timeout_seconds"]
+    roundtrip_diagnostics = payload.get("roundtrip_diagnostics", True)
     cpp_backend_config_payload = payload.get("cpp_backend_config") or {}
     from molgr.config import CONFIG, CppBackendConfig, MolGRConfig
 
@@ -504,6 +671,7 @@ def _run_method_cases_worker(payload: dict[str, Any]) -> list[BenchmarkResult]:
                     method.run,
                     case_timeout_seconds=case_timeout_seconds,
                     precomputed_output=output,
+                    roundtrip_diagnostics=roundtrip_diagnostics,
                 )
             )
         return results
@@ -514,6 +682,7 @@ def _run_method_cases_worker(payload: dict[str, Any]) -> list[BenchmarkResult]:
                 method_id,
                 method.run,
                 case_timeout_seconds=case_timeout_seconds,
+                roundtrip_diagnostics=roundtrip_diagnostics,
             )
         )
     return results
@@ -546,6 +715,7 @@ def _run_method_subprocess(
     cpp_backend_config: dict[str, Any],
     native_workers: int | None = None,
     native_batch: bool = False,
+    roundtrip_diagnostics: bool = True,
 ) -> list[BenchmarkResult]:
     payload = {
         "method_id": method_id,
@@ -555,6 +725,7 @@ def _run_method_subprocess(
         "cpp_backend_config": cpp_backend_config,
         "native_workers": native_workers,
         "native_batch": native_batch,
+        "roundtrip_diagnostics": roundtrip_diagnostics,
     }
     with tempfile.NamedTemporaryFile("w", delete=False, suffix=".json") as tmp_payload:
         payload_path = Path(tmp_payload.name)
@@ -598,6 +769,7 @@ def _run_method_subprocesses(
     case_timeout_seconds: float | None,
     cpp_backend_config: dict[str, Any],
     process_workers: int,
+    roundtrip_diagnostics: bool = True,
 ) -> list[BenchmarkResult]:
     if method_id == "molgr_cpp" and process_workers > 1:
         # One process owns one native batch executor. Splitting this method
@@ -611,6 +783,7 @@ def _run_method_subprocesses(
             cpp_backend_config=cpp_backend_config,
             native_workers=process_workers,
             native_batch=True,
+            roundtrip_diagnostics=roundtrip_diagnostics,
         )
     if process_workers <= 1 or len(cases) <= 1:
         return _run_method_subprocess(
@@ -619,6 +792,7 @@ def _run_method_subprocesses(
             xyz_dir=xyz_dir,
             case_timeout_seconds=case_timeout_seconds,
             cpp_backend_config=cpp_backend_config,
+            roundtrip_diagnostics=roundtrip_diagnostics,
         )
 
     worker_count = min(process_workers, len(cases))
@@ -634,6 +808,7 @@ def _run_method_subprocesses(
                 "xyz_dir": str(xyz_dir),
                 "case_timeout_seconds": case_timeout_seconds,
                 "cpp_backend_config": cpp_backend_config,
+                "roundtrip_diagnostics": roundtrip_diagnostics,
             }
             with tempfile.NamedTemporaryFile("w", delete=False, suffix=".json") as tmp_payload:
                 payload_path = Path(tmp_payload.name)
@@ -701,10 +876,12 @@ def _fallback_results_for_method(
     method_id: str,
     cases: list[TmqmgBenchmarkInput],
     error_message: str,
+    *,
+    xyz_dir: Path,
 ) -> list[BenchmarkResult]:
     results: list[BenchmarkResult] = []
     for item in cases:
-        case = _build_case(item.row_index, item.row, xyz_dir=Path("."))
+        case = _build_case(item.row_index, item.row, xyz_dir=xyz_dir)
         results.append(
             BenchmarkResult(
                 case_idx=item.row_index,
@@ -719,6 +896,8 @@ def _fallback_results_for_method(
                 timing_ms_total=0.0,
                 timing_ms_breakdown={"method_ms": 0.0, "equivalence_ms": 0.0},
                 case_id=item.row.get("id", "").strip() or None,
+                reference_status=case["reference_status"],
+                reference_reason=case["reference_reason"],
             )
         )
     return results
@@ -738,6 +917,7 @@ def run(
     case_timeout_seconds: float | None = 1.0,
     cpp_backend_config: dict[str, Any] | None = None,
     method_ids: Sequence[str] | None = None,
+    roundtrip_diagnostics: bool = True,
 ) -> list[BenchmarkResult]:
     rows = _load_rows(csv_path)
     selected = _selected_rows(
@@ -762,6 +942,7 @@ def run(
             case_timeout_seconds=case_timeout_seconds,
             cpp_backend_config=runtime_cpp_backend_config,
             process_workers=process_workers,
+            roundtrip_diagnostics=roundtrip_diagnostics,
         )
         if len(method_results) != len(selected):
             results.extend(
@@ -769,6 +950,7 @@ def run(
                     method.method_id,
                     selected,
                     "subprocess terminated before producing complete results",
+                    xyz_dir=xyz_dir,
                 )
             )
             continue
@@ -803,6 +985,7 @@ def main() -> int:
         case_timeout_seconds=args.case_timeout_seconds or None,
         cpp_backend_config=cpp_backend_config,
         method_ids=method_ids,
+        roundtrip_diagnostics=not args.skip_smiles_roundtrip,
     )
     return 0
 

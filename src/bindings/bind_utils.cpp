@@ -11,6 +11,7 @@
 #include "molgr/utils/force_field.h"
 #include "molgr/utils/scoring.h"
 #include "molgr/utils/conversions.h"
+#include "molgr/utils/stereo.h"
 #include "molgr/utils/organic_topology.h"
 #include "molgr/utils/utils.h"
 #include "molgr/utils/xyz.h"
@@ -22,7 +23,10 @@
 #include <openbabel/mol.h>
 #include <openbabel/atom.h>
 #include <pybind11/stl.h> // 必须包含
+#include <pybind11/numpy.h>
 
+#include <array>
+#include <limits>
 #include <memory>
 
 static std::unique_ptr<OpenBabel::OBMol> mol_from_smiles(const std::string &smiles)
@@ -95,11 +99,14 @@ void molgr::bind::bind_utils(py::module_ &m)
           py::arg("p1"), py::arg("p2"), py::arg("p3"), py::arg("p4"));
 
     py::class_<molgr::utils::AtomData>(m, "AtomData")
+        .def(py::init<>())
         .def_readwrite("atomic_num", &molgr::utils::AtomData::atomic_num)
+        .def_readwrite("isotope", &molgr::utils::AtomData::isotope)
         .def_readwrite("formal_charge", &molgr::utils::AtomData::formal_charge)
         .def_readwrite("radical_num", &molgr::utils::AtomData::radical_num)
         .def_readwrite("lone_pair_count", &molgr::utils::AtomData::lone_pair_count)
         .def_readwrite("unresolved_two_electron_center", &molgr::utils::AtomData::unresolved_two_electron_center)
+        .def_readwrite("electron_property_presence", &molgr::utils::AtomData::electron_property_presence)
         .def_readwrite("hybridization", &molgr::utils::AtomData::hybridization)
         .def_readwrite("x", &molgr::utils::AtomData::x)
         .def_readwrite("y", &molgr::utils::AtomData::y)
@@ -116,22 +123,118 @@ void molgr::bind::bind_utils(py::module_ &m)
                       std::to_string(a.y) + "," + std::to_string(a.z) + ")>"; },
              "Return a concise debug representation of AtomData.");
 
+    py::enum_<molgr::utils::BondKind>(m, "BondKind")
+        .value("Covalent", molgr::utils::BondKind::Covalent)
+        .value("Dative", molgr::utils::BondKind::Dative)
+        .value("CoordinationUnspecified", molgr::utils::BondKind::CoordinationUnspecified);
+
     py::class_<molgr::utils::BondData>(m, "BondData")
+        .def(py::init<>())
         .def_readwrite("begin_atom_idx", &molgr::utils::BondData::begin_atom_idx)
         .def_readwrite("end_atom_idx", &molgr::utils::BondData::end_atom_idx)
         .def_readwrite("order", &molgr::utils::BondData::order)
         .def_readwrite("aromatic", &molgr::utils::BondData::aromatic)
+        .def_readwrite("kind", &molgr::utils::BondData::kind)
         .def("__repr__", [](const molgr::utils::BondData &b)
              { return "<BondData " + std::to_string(b.begin_atom_idx) + "-" +
                       std::to_string(b.end_atom_idx) + " order=" + std::to_string(b.order) +
                       " aromatic=" + (b.aromatic ? "true" : "false") + ">"; },
              "Return a concise debug representation of BondData.");
 
+    py::enum_<molgr::utils::StereoKind>(m, "StereoKind")
+        .value("Tetrahedral", molgr::utils::StereoKind::Tetrahedral)
+        .value("DoubleBond", molgr::utils::StereoKind::DoubleBond)
+        .value("SquarePlanar", molgr::utils::StereoKind::SquarePlanar)
+        .value("TrigonalBipyramidal", molgr::utils::StereoKind::TrigonalBipyramidal)
+        .value("Octahedral", molgr::utils::StereoKind::Octahedral);
+    py::class_<molgr::utils::StereoData>(m, "StereoData")
+        .def(py::init<>())
+        .def_readwrite("kind", &molgr::utils::StereoData::kind)
+        .def_readwrite("center", &molgr::utils::StereoData::center)
+        .def_readwrite("end", &molgr::utils::StereoData::end)
+        .def_readwrite("refs", &molgr::utils::StereoData::refs)
+        .def_readwrite("configuration", &molgr::utils::StereoData::configuration);
+    py::enum_<molgr::utils::StereoGroupKind>(m, "StereoGroupKind")
+        .value("Absolute", molgr::utils::StereoGroupKind::Absolute)
+        .value("And", molgr::utils::StereoGroupKind::And)
+        .value("Or", molgr::utils::StereoGroupKind::Or);
+    py::class_<molgr::utils::StereoGroupData>(m, "StereoGroupData")
+        .def(py::init<>())
+        .def_readwrite("kind", &molgr::utils::StereoGroupData::kind)
+        .def_readwrite("atoms", &molgr::utils::StereoGroupData::atoms)
+        .def_readwrite("read_id", &molgr::utils::StereoGroupData::read_id);
+
     py::class_<molgr::utils::MoleculeData>(m, "MoleculeData")
+        .def(py::init<>())
         .def_readwrite("atoms", &molgr::utils::MoleculeData::atoms)
         .def_readwrite("bonds", &molgr::utils::MoleculeData::bonds)
         .def_readwrite("total_charge", &molgr::utils::MoleculeData::total_charge)
-        .def_readwrite("total_radical_num", &molgr::utils::MoleculeData::total_radical_num);
+        .def_readwrite("total_radical_num", &molgr::utils::MoleculeData::total_radical_num)
+        .def_readwrite("stereo", &molgr::utils::MoleculeData::stereo)
+        .def_readwrite("stereo_groups", &molgr::utils::MoleculeData::stereo_groups);
+
+    // Transfer primitive rows once instead of allocating Python AtomData /
+    // BondData wrappers and crossing the binding for every field assignment.
+    m.def("_molecule_data_from_rows", [](const std::vector<std::array<int, 7>> &atoms,
+                                         const std::vector<std::array<int, 5>> &bonds,
+                                         py::object coordinates)
+    {
+        molgr::utils::MoleculeData data;
+        data.atoms.reserve(atoms.size());
+        data.bonds.reserve(bonds.size());
+        std::int64_t charge = 0, radicals = 0;
+        for (const auto &row : atoms)
+        {
+            if (row[6] < 0 || row[6] > 7 || (row[5] != 0 && row[5] != 1))
+                throw py::value_error("Invalid electron presence/boolean field");
+            molgr::utils::AtomData atom{};
+            atom.atomic_num = row[0]; atom.isotope = row[1];
+            atom.formal_charge = row[2]; atom.radical_num = row[3];
+            atom.lone_pair_count = row[4]; atom.unresolved_two_electron_center = row[5];
+            atom.electron_property_presence = static_cast<std::uint8_t>(row[6]);
+            charge += atom.formal_charge; radicals += atom.radical_num;
+            data.atoms.push_back(atom);
+        }
+        if (charge < std::numeric_limits<int>::min() || charge > std::numeric_limits<int>::max() ||
+            radicals < std::numeric_limits<int>::min() || radicals > std::numeric_limits<int>::max())
+            throw py::value_error("Electron totals exceed the native integer range");
+        data.total_charge = static_cast<int>(charge);
+        data.total_radical_num = static_cast<int>(radicals);
+        for (const auto &row : bonds)
+        {
+            if (row[4] < 0 || row[4] > 2 || (row[3] != 0 && row[3] != 1))
+                throw py::value_error("Invalid bond kind/aromatic field");
+            molgr::utils::BondData bond{};
+            bond.begin_atom_idx = row[0]; bond.end_atom_idx = row[1];
+            bond.order = row[2]; bond.aromatic = row[3];
+            bond.kind = static_cast<molgr::utils::BondKind>(row[4]);
+            data.bonds.push_back(bond);
+        }
+        if (!coordinates.is_none())
+        {
+            auto positions = py::array_t<double, py::array::c_style | py::array::forcecast>::ensure(coordinates);
+            if (!positions || positions.ndim() != 2 || positions.shape(0) != static_cast<py::ssize_t>(atoms.size()) || positions.shape(1) != 3)
+                throw py::value_error("Coordinates must have shape (atom_count, 3)");
+            auto values = positions.unchecked<2>();
+            for (std::size_t i = 0; i < atoms.size(); ++i)
+            {
+                data.atoms[i].x = values(i, 0);
+                data.atoms[i].y = values(i, 1);
+                data.atoms[i].z = values(i, 2);
+            }
+        }
+        return data;
+    }, py::arg("atoms"), py::arg("bonds"), py::arg("coordinates") = py::none());
+
+    m.def("apply_molecule_data_stereo_to_obmol",
+          [](const molgr::utils::MoleculeData &data, intptr_t mol_ptr)
+          {
+              if (!mol_ptr)
+                  throw std::invalid_argument("OBMol pointer must not be null");
+              molgr::utils::ApplyStereoDataToOBMol(data, *reinterpret_cast<OpenBabel::OBMol *>(mol_ptr));
+          },
+          "Replace stereo annotations on an existing covalent OBMol projection. The caller owns the pointer and must keep it confined to one thread.",
+          py::arg("molecule_data"), py::arg("mol_ptr"));
 
     // 绑定提取函数
     m.def("extract_molecule_data",
@@ -154,7 +257,7 @@ void molgr::bind::bind_utils(py::module_ &m)
               OpenBabel::OBMol *mol = new OpenBabel::OBMol(molgr::utils::MolFromMoleculeData(molecule_data));
               return reinterpret_cast<intptr_t>(mol);
           },
-          "Converts MoleculeData to a newly allocated OBMol pointer. This raw pointer is not thread-safe; free it exactly once with _core.free_obmol_ptr.",
+          "Converts MoleculeData to a covalent OBMol projection, omitting coordination edges. Hydrogens must be explicit. This raw pointer is not thread-safe; free it exactly once with _core.free_obmol_ptr.",
           py::arg("molecule_data"));
 }
 
