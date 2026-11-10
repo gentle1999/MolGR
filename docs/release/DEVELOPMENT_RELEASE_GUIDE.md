@@ -76,9 +76,9 @@ File: [`.github/workflows/ci.yaml`](../../.github/workflows/ci.yaml)
     `delvewheel 1.10.0`; newer Python versions use `delvewheel 1.13.0` because
     `delvewheel 1.11+` requires Python 3.9 or newer. CMake links the matching
     `openbabel/bin/openbabel-3.lib` import library supplied by both package families.
-  - macOS: native `x86_64` on `macos-13` and native `arm64` on `macos-14`.
+  - macOS: native `x86_64` on `macos-15-intel` and explicit `arm64` on `macos-latest`. Both retain `MACOSX_DEPLOYMENT_TARGET=14.0`.
 - Runtime dependency metadata keeps `rdkit>=2023.9.6` unpinned so modern systems can install newer RDKit wheels, while older glibc systems can fall back to the newest compatible RDKit wheel available for their Python and platform. The root [`uv.lock`](../../uv.lock) is only the local development resolution and may choose older RDKit for some Python splits; it is not the published wheel's version cap.
-- Deploy publishes to PyPI only when all are true:
+- Automatic release deployment publishes to PyPI only when all are true:
   - `release.published`
   - `prerelease == false`
   - `target_commitish == main`
@@ -133,6 +133,20 @@ Recommended operation:
    `build_release_wheels=true` and verify every wheel artifact.
 6. For formal release, tag `main` with stable `vX.Y.Z` and publish a non-prerelease GitHub Release.
 7. Verify PyPI artifacts and GitHub Release assets after deploy.
+
+### Recovering an interrupted stable release
+
+After fixing CI on `main`, dispatch the workflow on `main` with `release_tag`
+set to an existing stable tag (for example `v0.1.10`). This explicitly enables
+publishing. The workflow verifies that the tag is reachable from `main` and has
+a published, non-prerelease GitHub Release targeting `main`, then pins all
+build, test and deployment checkouts to that tag's commit. The release tag is
+not moved. Leaving `release_tag` empty preserves the existing build-only
+behavior of `build_release_wheels=true`.
+
+```sh
+gh workflow run ci.yaml --ref main -f release_tag=v0.1.10
+```
 
 ## Guardrails
 
