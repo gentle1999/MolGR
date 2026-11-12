@@ -93,6 +93,33 @@ def test_338_s_reconstruction_matches_reference(backend: str, threads: int) -> N
         ("Fe", 2),
     ]
     assert [a.GetDegree() for a in metals] == [10, 4, 10]
+    # XYZ atom IDs are one-based. Freeze the independently checked Pd trans
+    # pairs, rather than relying solely on a SMILES reader's permutation tag.
+    pd = metals[1]
+    neighbors = [a.GetIdx() + 1 for a in pd.GetNeighbors()]
+    trans_positions = {
+        1: ((0, 2), (1, 3)),
+        2: ((0, 1), (2, 3)),
+        3: ((0, 3), (1, 2)),
+    }[pd.GetIntProp("_chiralPermutation")]
+    expected_trans = {frozenset((28, 30)), frozenset((19, 21))}
+    assert {frozenset((neighbors[i], neighbors[j])) for i, j in trans_positions} == expected_trans
+    positions = result.GetConformer().GetPositions()
+    for first, second in expected_trans:
+        u = positions[first - 1] - positions[pd.GetIdx()]
+        v = positions[second - 1] - positions[pd.GetIdx()]
+        assert np.dot(u, v) / (np.linalg.norm(u) * np.linalg.norm(v)) < -0.94
+    # Other square-planar isomers must still fail strict comparison.
+    for permutation in (1, 2, 3):
+        if permutation == pd.GetIntProp("_chiralPermutation"):
+            continue
+        wrong = Chem.Mol(result)
+        wrong.GetAtomWithIdx(pd.GetIdx()).SetIntProp("_chiralPermutation", permutation)
+        equivalent, info = check_equivalence(
+            reference, wrong, use_chirality=True, ignore_metal_coordination_bonds=False
+        )
+        assert not equivalent
+        assert "stereochemistry differs" in info.reason
     # Remove coordination edges before identifying the four carbon-only Cp rings.
     organic = Chem.RWMol(result)
     for atom in reversed(metals):

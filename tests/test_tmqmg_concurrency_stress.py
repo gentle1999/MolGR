@@ -100,7 +100,7 @@ def test_repository_xyz_manifest_identifies_reference_sources() -> None:
         else:
             source, anchor = row["reference_source"].split("#", 1)
             assert (_PROJECT_ROOT / source).is_file(), row["case_id"]
-            assert anchor in (_PROJECT_ROOT / source).read_text(), row["case_id"]
+            assert anchor in (_PROJECT_ROOT / source).read_text(encoding="utf-8"), row["case_id"]
         if row["reference_file"]:
             assert (fixture_root / row["reference_file"]).is_file(), row["case_id"]
 

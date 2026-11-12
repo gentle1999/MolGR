@@ -25,6 +25,10 @@ Fe(II)–Pd(II)–Fe(II) graph and its verified `SOURCE_SMILES`: three Cp⁻ rin
 one Cp²⁻ ring, and one O⁻. Its SDF regression checks ligand charges,
 coordination, and stereochemistry for both backends. Documentation reads this
 same fixture; there is no separate documentation copy of the answer.
+The SMILES starts at Pd to avoid version-dependent interpretation of a
+square-planar center reached through a ring closure. Independently checked XYZ
+trans pairs N28/O30 and C19/O21 are asserted alongside rejection of the other
+square-planar isomers; their angles are approximately 169.74 and 174.61 degrees.
 
 The ten accepted cases from the reconstruction review are frozen under
 `reviewed/reconstruction/`, with their original XYZ checksums and electron-state

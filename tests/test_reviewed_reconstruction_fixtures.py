@@ -17,7 +17,7 @@ from molgr.utils.equivalence import check_equivalence
 
 DATA = Path(__file__).parent / "data"
 FIXTURES = DATA / "reviewed/reconstruction"
-CASES = json.loads((FIXTURES / "manifest.json").read_text())["fixtures"]
+CASES = json.loads((FIXTURES / "manifest.json").read_text(encoding="utf-8"))["fixtures"]
 
 
 def _approved_graph(case):
@@ -54,7 +54,10 @@ def _approved_graph(case):
 
 @pytest.mark.parametrize("case", CASES, ids=lambda case: case["case_id"])
 def test_reviewed_graph_is_bound_to_its_input_and_electronic_state(case):
-    assert hashlib.sha256((DATA / case["xyz_file"]).read_bytes()).hexdigest() == case["xyz_sha256"]
+    # Git may check text fixtures out with CRLF on Windows. The manifest hashes
+    # the LF representation; all other input bytes must remain unchanged.
+    xyz_bytes = (DATA / case["xyz_file"]).read_bytes().replace(b"\r\n", b"\n")
+    assert hashlib.sha256(xyz_bytes).hexdigest() == case["xyz_sha256"]
     reference = _approved_graph(case)
     assert reference.GetProp("CASE_ID") == case["case_id"]
     assert reference.GetProp("REVIEW_STATUS") == "accept_candidate"
@@ -78,7 +81,7 @@ def test_reconstruction_matches_user_approved_graph(case, backend):
     config = MolGRConfig()
     config.cpp_backend.max_threads = 1
     result = xyz_to_rdmol(
-        (DATA / case["xyz_file"]).read_text(),
+        (DATA / case["xyz_file"]).read_text(encoding="utf-8"),
         case["total_charge"],
         case["spin_multiplicity"],
         backend=backend,

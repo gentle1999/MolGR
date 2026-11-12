@@ -167,10 +167,10 @@ M  V30 END BOND
 M  V30 END CTAB
 M  END
 >  <SOURCE_SMILES>  (1)
-O=C1[O-]->[Pd@SP3+2]2(<-O=C(O)c34->[Fe+2]56789%10%11(<-c%12c->5c->6[cH-]->7c->8%12)<-c3[cH-]->9c->%10[c-]->2->%114)<-N(=C(\O)c23->[Fe+2]456789%10(<-c%11c->4c->5[cH-]->6c->7%11)<-c(c->8[cH-]->92)c->%103)/[C@H]1Cc1ccccc1
+[Pd@SP3+2]12(<-[O]=C(O)[c]34->[Fe+2]56789%10%11(<-[cH]%12[cH]->5[cH]->6[cH-]->7[cH]->8%12)<-[cH]3[cH-]->9[cH]->%10[c-]->1->%114)<-[O-]C(=O)[C@H](Cc1ccccc1)/[N]->2=C(/O)[c]12->[Fe+2]3456789(<-[cH]%10[cH]->3[cH]->4[cH-]->5[cH]->6%10)<-[cH]([cH]->7[cH-]->81)[cH]->92
 
 >  <REFERENCE_SOURCE>  (1)
-User-supplied XYZ and corrected ligand charges: three Cp(-), one Cp(2-), one O(-); Fe(II)-Pd(II)-Fe(II).
+User-supplied XYZ and corrected ligand charges: three Cp(-), one Cp(2-), one O(-); Fe(II)-Pd(II)-Fe(II). Pd-first SMILES avoids version-dependent square-planar ring-closure parsing; XYZ atom pairs N28/O30 and C19/O21 are trans.
 
 >  <TOTAL_CHARGE>  (1)
 0
