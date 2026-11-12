@@ -56,8 +56,13 @@ def test_tmqmg_reconstruction_fixture_matches_reference(
 
     expected_reconstruction = _EXPECTED_RECONSTRUCTION_SMILES.get(case["case_id"])
     if expected_reconstruction is not None:
+        heavy = Chem.RemoveHs(rebuilt)
+        # Compare the folded reference independently of explicit-H brackets.
+        for atom in heavy.GetAtoms():
+            if atom.HasProp("smilesSymbol"):
+                atom.ClearProp("smilesSymbol")
         observed_reconstruction = Chem.MolToSmiles(
-            Chem.RemoveHs(rebuilt),
+            heavy,
             canonical=True,
             isomericSmiles=True,
         )

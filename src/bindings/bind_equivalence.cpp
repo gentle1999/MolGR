@@ -18,6 +18,9 @@ namespace
 
 void molgr::bind::bind_equivalence(py::module_ &m)
 {
+    m.def("compare_mapped_stereo", &equivalence::CompareMappedStereo,
+          py::arg("left"), py::arg("right"), py::arg("mapping"),
+          "Compare stereo under a fixed zero-based bijection: 1 equal, 0 conflicting, -1 incomplete.");
     m.def("evaluate", [](const utils::MoleculeData &left, const utils::MoleculeData &right,
                          bool use_chirality, int max_resonance, bool ignore_coordination,
                          int max_mappings, int max_mapping_nodes, int max_steps)

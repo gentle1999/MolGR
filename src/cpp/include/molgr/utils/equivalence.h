@@ -56,4 +56,9 @@ namespace molgr::equivalence
     // Pure native graph/electron kernel. No toolkit objects or callbacks inside BFS.
     Result Evaluate(const utils::MoleculeData &left, const utils::MoleculeData &right,
                     const Options &options = {});
+
+    // Compare stereo under a caller-supplied zero-based bijection, without
+    // resonance search or a different symmetry mapping hiding information loss.
+    int CompareMappedStereo(const utils::MoleculeData &left, const utils::MoleculeData &right,
+                            const std::vector<int> &mapping);
 }

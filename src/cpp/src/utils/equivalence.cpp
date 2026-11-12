@@ -1151,4 +1151,21 @@ namespace molgr::equivalence
         }
         return result;
     }
+
+    int CompareMappedStereo(const MoleculeData &left, const MoleculeData &right,
+                            const std::vector<int> &mapping)
+    {
+        Validate(left);
+        Validate(right);
+        if (left.atoms.size() != right.atoms.size() || mapping.size() != left.atoms.size())
+            throw std::invalid_argument("Stereo mapping must cover both molecules");
+        std::vector<bool> seen(mapping.size(), false);
+        for (int index : mapping)
+        {
+            if (index < 0 || index >= static_cast<int>(mapping.size()) || seen[index])
+                throw std::invalid_argument("Stereo mapping must be a bijection");
+            seen[index] = true;
+        }
+        return CompareStereo(left, right, mapping, false);
+    }
 }

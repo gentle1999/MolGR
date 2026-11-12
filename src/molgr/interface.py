@@ -24,9 +24,14 @@ from molgr.diagnostics import (
 )
 from molgr.fallback import xyz2omol
 from molgr.process_guard import ensure_current_process
-from molgr.utils.converter import mol_data_to_rdkit, pybel_to_rdmol
+from molgr.utils.converter import mol_data_to_rdkit, pybel_to_rdmol, refresh_rdkit_aromaticity
 from molgr.utils.post_process import make_dative_bond
 from molgr.utils.post_process import make_stereochemistry as restore_stereochemistry
+from molgr.utils.smiles import (
+    SmilesRoundtripError,
+    normalize_smiles_hydrogens,
+    validate_smiles_roundtrip,
+)
 
 from . import _core as core
 
@@ -149,12 +154,29 @@ def _finalize_rdmol(
             rd_atom.SetNoImplicit(True)
         if make_stereochemistry:
             rdmol = restore_stereochemistry(rdmol)
+        else:
+            refresh_rdkit_aromaticity(rdmol)
+        normalize_smiles_hydrogens(rdmol)
+        if config.interface.require_smiles_roundtrip:
+            # Stereo belongs to the input coordinates. Toolkit SMILES stereo
+            # limitations must not reject or rewrite those assignments.
+            validate_smiles_roundtrip(rdmol)
     except Exception as exc:
+        roundtrip_failed = isinstance(exc, SmilesRoundtripError)
         diagnostics = ReconstructionDiagnostics(
-            code=ReconstructionFailureCode.RDKIT_POSTPROCESS_FAILED,
-            stage="rdkit.postprocess",
+            code=(
+                ReconstructionFailureCode.SMILES_ROUNDTRIP_FAILED
+                if roundtrip_failed
+                else ReconstructionFailureCode.RDKIT_POSTPROCESS_FAILED
+            ),
+            stage="rdkit.smiles_roundtrip" if roundtrip_failed else "rdkit.postprocess",
             backend=backend,
-            message="RDKit post-processing failed after graph reconstruction.",
+            message=(
+                "The reconstructed molecule cannot round trip through RDKit SMILES with explicit hydrogens retained."
+                if roundtrip_failed
+                else "RDKit post-processing failed after graph reconstruction."
+            ),
+            details=exc.details if roundtrip_failed else {},
             cause_type=type(exc).__name__,
             cause_message=str(exc),
         )

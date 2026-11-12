@@ -56,6 +56,11 @@ from .diagnostics import (  # noqa: E402
     ReconstructionFailureCode,
 )
 from .utils.post_process import make_dative_bond  # noqa: E402
+from .utils.smiles import (  # noqa: E402
+    SmilesRoundtripError,
+    mol_from_smiles,
+    validate_smiles_roundtrip,
+)
 
 
 try:
@@ -99,7 +104,10 @@ __all__ = [
     "config",
     "iter_xyz_to_rdmol_batch",
     "make_dative_bond",
+    "mol_from_smiles",
     "set_log_level",
+    "SmilesRoundtripError",
+    "validate_smiles_roundtrip",
     "pipeline",
 ]
 
