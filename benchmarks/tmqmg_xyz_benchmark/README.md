@@ -52,6 +52,13 @@ bash scripts/benchmark_env.sh run python benchmarks/tmqmg_xyz_benchmark/run.py \
   --methods molgr_cpp,molgr_fallback
 ```
 
+## Equivalence search
+
+Reference and SMILES round-trip comparisons use the evaluator's default resonance
+search budget of 5,000 (up to 10,000 visited states across both search directions,
+regions, and mappings). Search exhaustion remains inconclusive. Atom-mapping
+limits and the maximum resonance-path length are unchanged.
+
 ## Outputs
 
 The benchmark writes `results.csv` and `summary.csv` to `--out`.

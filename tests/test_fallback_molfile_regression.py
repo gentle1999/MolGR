@@ -5,13 +5,15 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import numpy as np
 import pytest
+from rdkit import Chem
 
 
 pytest.importorskip("openbabel")
 
-from molgr.fallback import xyz2omol
-from molgr.utils.converter import pybel_to_rdmol
+from molgr.config import MolGRConfig
+from molgr.interface import xyz_to_rdmol
 from molgr.utils.equivalence import check_equivalence
 
 
@@ -25,23 +27,121 @@ _MOLFILE_CASES_SPEC.loader.exec_module(_MOLFILE_CASES_MODULE)
 load_molfile_cases = _MOLFILE_CASES_MODULE.load_molfile_cases
 
 
-def test_fallback_monnmo_molfile_regression() -> None:
+@pytest.mark.parametrize("backend", ["cpp", "python"])
+def test_monnmo_molfile_regression(backend: str) -> None:
     case = load_molfile_cases(Path("tests/data/sdf/MoNNMo.sdf"), limit=1)[0]
-
-    result = xyz2omol(
+    config = MolGRConfig()
+    config.cpp_backend.max_threads = 1
+    result = xyz_to_rdmol(
         case["xyz_block"],
         total_charge=case["total_charge"],
-        total_radical_electrons=case["total_radical_electrons"],
+        spin_multiplicity=case["total_radical_electrons"] + 1,
+        backend=backend,
+        config=config,
     )
 
-    assert result is not None
-    equivalent, info = check_equivalence(case["ground_truth_rdmol"], pybel_to_rdmol(result))
-    if not equivalent and "total radical electron counts differ" in info.reason:
-        pytest.xfail(
-            "Organic force-field ranking can still leave a non-equivalent Mo valence/radical assignment unresolved."
-        )
-    if not equivalent:
-        pytest.xfail(
-            "The fallback combined omol can still differ from the SDF because explicit coordination bonds are omitted before RDKit post-processing."
-        )
+    equivalent, info = check_equivalence(
+        case["ground_truth_rdmol"], result, ignore_metal_coordination_bonds=False
+    )
     assert equivalent, info.reason
+    assert Chem.GetFormalCharge(result) == 0
+    metals = [atom for atom in result.GetAtoms() if atom.GetSymbol() == "Mo"]
+    assert len(metals) == 2
+    assert all(atom.GetFormalCharge() == 3 for atom in metals)
+    assert all(atom.GetIntProp("MOLGR_METAL_UNPAIRED_ELECTRONS") == 1 for atom in metals)
+    assert all(
+        atom.GetNumRadicalElectrons() == 0 for atom in result.GetAtoms() if atom.GetSymbol() != "Mo"
+    )
+    assert sum(bond.GetBondType() == Chem.BondType.DATIVE for bond in result.GetBonds()) == 10
+    assert np.allclose(
+        result.GetConformer().GetPositions(),
+        case["ground_truth_rdmol"].GetConformer().GetPositions(),
+        atol=1e-5,  # The Python backend's Open Babel conversion rounds coordinates.
+        rtol=0,
+    )
+
+
+@pytest.mark.parametrize("backend,threads", [("python", 1), ("cpp", 1), ("cpp", 2)])
+def test_338_s_reconstruction_matches_reference(backend: str, threads: int) -> None:
+    xyz = (Path(__file__).parent / "data" / "xyz/338-S.xyz").read_text()
+    fixture = next(
+        iter(
+            Chem.SDMolSupplier(
+                str(Path(__file__).parent / "data" / "sdf/338-S.sdf"),
+                removeHs=False,
+                sanitize=False,
+            )
+        )
+    )
+    assert fixture is not None
+    reference = Chem.AddHs(Chem.MolFromSmiles(fixture.GetProp("SOURCE_SMILES")))
+    config = MolGRConfig()
+    config.cpp_backend.max_threads = threads
+    result = xyz_to_rdmol(xyz, 0, 1, backend=backend, config=config)
+    equivalent, info = check_equivalence(
+        reference, result, use_chirality=True, ignore_metal_coordination_bonds=False
+    )
+    assert equivalent, info.reason
+    assert result.GetNumAtoms() == 67
+    assert result.GetNumBonds() == 89
+    assert Chem.GetFormalCharge(result) == 0
+    assert sum(b.GetBondType() == Chem.BondType.DATIVE for b in result.GetBonds()) == 24
+    metals = [a for a in result.GetAtoms() if a.GetSymbol() in ("Fe", "Pd")]
+    assert [(a.GetSymbol(), a.GetFormalCharge()) for a in metals] == [
+        ("Fe", 2),
+        ("Pd", 2),
+        ("Fe", 2),
+    ]
+    assert [a.GetDegree() for a in metals] == [10, 4, 10]
+    # XYZ atom IDs are one-based. Freeze the independently checked Pd trans
+    # pairs, rather than relying solely on a SMILES reader's permutation tag.
+    pd = metals[1]
+    neighbors = [a.GetIdx() + 1 for a in pd.GetNeighbors()]
+    trans_positions = {
+        1: ((0, 2), (1, 3)),
+        2: ((0, 1), (2, 3)),
+        3: ((0, 3), (1, 2)),
+    }[pd.GetIntProp("_chiralPermutation")]
+    expected_trans = {frozenset((28, 30)), frozenset((19, 21))}
+    assert {frozenset((neighbors[i], neighbors[j])) for i, j in trans_positions} == expected_trans
+    positions = result.GetConformer().GetPositions()
+    for first, second in expected_trans:
+        u = positions[first - 1] - positions[pd.GetIdx()]
+        v = positions[second - 1] - positions[pd.GetIdx()]
+        assert np.dot(u, v) / (np.linalg.norm(u) * np.linalg.norm(v)) < -0.94
+    # Other square-planar isomers must still fail strict comparison.
+    for permutation in (1, 2, 3):
+        if permutation == pd.GetIntProp("_chiralPermutation"):
+            continue
+        wrong = Chem.Mol(result)
+        wrong.GetAtomWithIdx(pd.GetIdx()).SetIntProp("_chiralPermutation", permutation)
+        equivalent, info = check_equivalence(
+            reference, wrong, use_chirality=True, ignore_metal_coordination_bonds=False
+        )
+        assert not equivalent
+        assert "stereochemistry differs" in info.reason
+    # Remove coordination edges before identifying the four carbon-only Cp rings.
+    organic = Chem.RWMol(result)
+    for atom in reversed(metals):
+        organic.RemoveAtom(atom.GetIdx())
+    cp_rings = [
+        ring
+        for ring in Chem.GetSymmSSSR(organic)
+        if len(ring) == 5 and all(organic.GetAtomWithIdx(i).GetAtomicNum() == 6 for i in ring)
+    ]
+    assert len(cp_rings) == 4
+    assert sorted(
+        sum(organic.GetAtomWithIdx(i).GetFormalCharge() for i in ring) for ring in cp_rings
+    ) == [-2, -1, -1, -1]
+    assert [a.GetFormalCharge() for a in organic.GetAtoms() if a.GetSymbol() == "O"].count(-1) == 1
+    cp_atoms = {i for ring in cp_rings for i in ring}
+    assert (
+        sum(
+            a.GetFormalCharge()
+            for a in organic.GetAtoms()
+            if a.GetIdx() not in cp_atoms and a.GetSymbol() != "O"
+        )
+        == 0
+    )
+    assert all(a.GetIntProp("MOLGR_METAL_UNPAIRED_ELECTRONS") == 0 for a in metals)
+    assert all(a.GetNumRadicalElectrons() == 0 for a in result.GetAtoms())

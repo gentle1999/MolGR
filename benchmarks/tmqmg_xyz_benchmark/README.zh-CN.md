@@ -47,6 +47,12 @@ bash scripts/benchmark_env.sh run python benchmarks/tmqmg_xyz_benchmark/run.py \
   --methods molgr_cpp,molgr_fallback
 ```
 
+## 等价搜索
+
+参考图比较和 SMILES 往返检查使用判定器默认的 5,000 共振搜索预算，
+双向搜索、所有区域及映射合计最多访问 10,000 个状态。搜索耗尽仍归为
+“无法判定”，原子映射上限和共振路径长度上限保持不变。
+
 ## 输出
 
 benchmark 会在 `--out` 下写出 `results.csv` 和 `summary.csv`。

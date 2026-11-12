@@ -16,3 +16,12 @@ exports are also excluded from this directory.
 
 The tmQMg corpus is stored under `tmqmg/`. Its manifest records the pinned
 dataset revision and source-file checksums required to reproduce the inputs.
+
+The `reconstruction/` corpus contains ten user-approved graphs from the
+repository XYZ review. SDF `APPROVED_STEREO` records freeze the accepted reference
+frames (atom IDs are one-based), independently of subsequent coordinate perception.
+XYZ checksums use LF line endings; Windows checkout CRLF is normalized before
+hashing, with every other input byte preserved.
+`APPROVED_SMILES` is included only when a strict stereo round trip was verified.
+The `test` and `ABEGOD` cases use their SDF graphs and frozen stereo frames because
+the reviewed RDKit version does not preserve their stereo through SMILES export.

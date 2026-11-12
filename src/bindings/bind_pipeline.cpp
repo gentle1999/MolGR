@@ -732,6 +732,10 @@ namespace molgr
                                 molgr::metal::scoring::MetadataInt(
                                     candidate,
                                     "organic_charge_localization_metal_valence_jump_exceeded") != 0;
+                            item["organic_singlet_two_electron_center_count"] =
+                                molgr::metal::scoring::MetadataInt(candidate, "organic_singlet_two_electron_center_count");
+                            item["organic_visible_singlet_carbene_count"] =
+                                molgr::metal::scoring::MetadataInt(candidate, "organic_visible_singlet_carbene_count");
                             item["organic_radical_localization_penalty"] =
                                 molgr::metal::scoring::MetadataDouble(candidate, "organic_radical_localization_penalty");
                             item["metal_discordance_structural_count"] =

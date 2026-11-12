@@ -54,6 +54,7 @@ class _OrganicElectronicStateMetrics:
     max_conjugated_component_size: int
     hyperconjugative_donor_count: int
     hyperconjugation_score: int
+    singlet_two_electron_center_count: int
     radical_localization_penalty: float
     charge_localization_penalty: float
     charge_localization_component_cancellation: float
@@ -890,6 +891,7 @@ def _compute_organic_electronic_state_metrics(
         obmol = cast(ob.OBMol, omol.OBMol)
         conjugated_atom_indices = set(topology_metrics.conjugated_atom_indices)
         radical_localization_penalty = 0.0
+        singlet_two_electron_center_count = 0
         unsigned_charge_localization_penalty = 0.0
         signed_charge_penalties_by_atom_idx: dict[int, float] = {}
         neighbor_indices_by_atom_idx: DefaultDict[int, list[int]] = defaultdict(list)
@@ -898,6 +900,7 @@ def _compute_organic_electronic_state_metrics(
             atom = cast(ob.OBAtom, atom_iter)
             atom_idx = atom.GetIdx() - 1
             atoms_by_idx[atom_idx] = atom
+            singlet_two_electron_center_count += _is_explicit_singlet_two_electron_center(atom)
             radical_localization_penalty += _radical_localization_penalty_for_atom(
                 atom,
                 is_conjugated=(atom_idx in conjugated_atom_indices),
@@ -996,6 +999,7 @@ def _compute_organic_electronic_state_metrics(
             max_conjugated_component_size=topology_metrics.max_conjugated_component_size,
             hyperconjugative_donor_count=topology_metrics.hyperconjugative_donor_count,
             hyperconjugation_score=topology_metrics.hyperconjugation_score,
+            singlet_two_electron_center_count=singlet_two_electron_center_count,
             radical_localization_penalty=radical_localization_penalty,
             charge_localization_penalty=charge_localization_penalty,
             charge_localization_component_cancellation=component_cancellation,
@@ -1011,6 +1015,7 @@ def _compute_organic_electronic_state_metrics(
             max_conjugated_component_size=0,
             hyperconjugative_donor_count=0,
             hyperconjugation_score=0,
+            singlet_two_electron_center_count=0,
             radical_localization_penalty=float("inf"),
             charge_localization_penalty=float("inf"),
             charge_localization_component_cancellation=0.0,
@@ -1070,6 +1075,12 @@ def _annotate_candidate_discordance_features(
     visible_singlet_two_electron_center_count = sum(
         _is_explicit_singlet_two_electron_center(cast(ob.OBAtom, obmol.GetAtom(atom_idx)))
         for atom_idx in visible_inner_atom_indices
+    )
+    visible_singlet_carbene_count = sum(
+        int(atom.GetAtomicNum()) == 6 and _is_explicit_singlet_two_electron_center(atom)
+        for atom in (
+            cast(ob.OBAtom, obmol.GetAtom(atom_idx)) for atom_idx in visible_inner_atom_indices
+        )
     )
     excess_visible_singlet_two_electron_center_count = max(
         0,
@@ -1193,6 +1204,7 @@ def _annotate_candidate_discordance_features(
     candidate.metadata["metal_discordance_excess_visible_singlet_two_electron_center_count"] = (
         excess_visible_singlet_two_electron_center_count
     )
+    candidate.metadata["organic_visible_singlet_carbene_count"] = visible_singlet_carbene_count
     candidate.metadata["metal_discordance_bent_cumulated_ring_allene_count"] = (
         bent_cumulated_ring_allene_count
     )
@@ -1279,6 +1291,9 @@ def _annotate_organic_electronic_state_consistency(
         cached_metrics.hyperconjugative_donor_count
     )
     candidate.metadata["organic_hyperconjugation_score"] = cached_metrics.hyperconjugation_score
+    candidate.metadata["organic_singlet_two_electron_center_count"] = (
+        cached_metrics.singlet_two_electron_center_count
+    )
     candidate.metadata["organic_radical_localization_penalty"] = (
         cached_metrics.radical_localization_penalty
     )
@@ -1472,22 +1487,46 @@ def select_best_candidate(
     for scored_candidate in discordance_filtered_candidates:
         _annotate_selected_candidate_metrics(scored_candidate, config=config)
 
-    charge_localization_reference_candidate = min(
-        discordance_filtered_candidates,
-        key=lambda candidate: (
+    # Keep distinct ligand radical budgets separate. Compare singlet-center
+    # occupations of metal-visible carbon centers when aromatic counts are unchanged, so a
+    # neutral carbene can veto unnecessary ligand charge separation. Otherwise,
+    # retain occupation-specific references so aromatic anions remain competitive.
+    def charge_reference_key(candidate: MetalCandidateState) -> tuple[float, int]:
+        return (
             float(candidate.metadata.get("organic_charge_localization_penalty", 0.0)),
             int(candidate.metadata.get("combination_index", 0)),
-        ),
-    )
-    minimum_charge_localization_penalty = float(
-        charge_localization_reference_candidate.metadata.get(
-            "organic_charge_localization_penalty", 0.0
         )
-    )
-    reference_valences = {
-        int(state.idx): int(state.valence)
-        for state in charge_localization_reference_candidate.metal_states
-    }
+
+    def aromatic_reference_key(candidate: MetalCandidateState) -> tuple[int, int, int, int]:
+        return (
+            candidate.no_metal_radical_target,
+            int(candidate.metadata.get("organic_singlet_two_electron_center_count", 0))
+            - int(candidate.metadata.get("organic_visible_singlet_carbene_count", 0)),
+            int(candidate.metadata.get("organic_aromatic_atom_count", 0)),
+            int(candidate.metadata.get("organic_aromatic_ring_count", 0)),
+        )
+
+    charge_reference_by_occupation: dict[tuple[int, int], MetalCandidateState] = {}
+    charge_reference_by_aromaticity: dict[tuple[int, int, int, int], MetalCandidateState] = {}
+    for candidate in discordance_filtered_candidates:
+        target = (
+            candidate.no_metal_radical_target,
+            int(candidate.metadata.get("organic_singlet_two_electron_center_count", 0)),
+        )
+        reference = charge_reference_by_occupation.get(target)
+        key = (
+            float(candidate.metadata.get("organic_charge_localization_penalty", 0.0)),
+            int(candidate.metadata.get("combination_index", 0)),
+        )
+        if reference is None or key < (
+            float(reference.metadata.get("organic_charge_localization_penalty", 0.0)),
+            int(reference.metadata.get("combination_index", 0)),
+        ):
+            charge_reference_by_occupation[target] = candidate
+        aromatic_target = aromatic_reference_key(candidate)
+        aromatic_reference = charge_reference_by_aromaticity.get(aromatic_target)
+        if aromatic_reference is None or key < charge_reference_key(aromatic_reference):
+            charge_reference_by_aromaticity[aromatic_target] = candidate
 
     resolved_config = CONFIG if config is None else config
     charge_localization_margin = max(
@@ -1499,6 +1538,26 @@ def select_best_candidate(
         Tuple[float, int, int, int, int, int, float, float, int, float, int]
     ] = None
     for scored_candidate in discordance_filtered_candidates:
+        charge_localization_reference_candidate = charge_reference_by_occupation[
+            (
+                scored_candidate.no_metal_radical_target,
+                int(scored_candidate.metadata.get("organic_singlet_two_electron_center_count", 0)),
+            )
+        ]
+        charge_localization_reference_candidate = min(
+            charge_localization_reference_candidate,
+            charge_reference_by_aromaticity[aromatic_reference_key(scored_candidate)],
+            key=charge_reference_key,
+        )
+        minimum_charge_localization_penalty = float(
+            charge_localization_reference_candidate.metadata.get(
+                "organic_charge_localization_penalty", 0.0
+            )
+        )
+        reference_valences = {
+            int(state.idx): int(state.valence)
+            for state in charge_localization_reference_candidate.metal_states
+        }
         score_value = (
             cast(float, scored_candidate.score)
             if scored_candidate.score is not None

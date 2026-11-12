@@ -132,7 +132,7 @@ def test_bounded_search_never_claims_inequivalence(options):
     assert result.decision == eq.EquivalenceDecision.INCONCLUSIVE
     assert not result.resonance_witness
     assert result.bounded_search.limit_reached
-    assert result.bounded_search.regional_state_count <= 2 * options.get("max_resonance", 1000)
+    assert result.bounded_search.regional_state_count <= 2 * options.get("max_resonance", 5000)
 
 
 @pytest.mark.parametrize(
@@ -500,8 +500,8 @@ def test_expanded_defaults_agree_across_public_wrapper_and_native_entry():
     assert limited.decision == eq.EquivalenceDecision.INCONCLUSIVE
     result = eq.evaluate_equivalence(left, right, use_chirality=False)
     assert result.equivalent, result
-    assert result.bounded_search.limit == 1000
-    assert result.bounded_search.regional_state_count <= 2000
+    assert result.bounded_search.limit == 5000
+    assert result.bounded_search.regional_state_count <= 10000
     a, b = [eq._prepare_input(m, False)[0] for m in (left, right)]
     native = _core.equivalence.evaluate(a, b, use_chirality=False)
     assert native["decision"] == "equivalent", native
@@ -642,5 +642,5 @@ def test_native_resonance_diagnostics_do_not_claim_supplier_flags():
     assert result.equivalent and result.resonance is not None
     detail = asdict(result.resonance)
     assert "resonance_flags" not in detail
-    assert detail["max_resonance"] == 1000
+    assert detail["max_resonance"] == 5000
     assert detail["mol1_resonance_count"] + detail["mol2_resonance_count"] > 0

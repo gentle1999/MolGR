@@ -80,6 +80,31 @@ def test_repository_xyz_stress_manifest_covers_every_xyz_fixture() -> None:
     assert listed == discovered
 
 
+def test_repository_xyz_manifest_identifies_reference_sources() -> None:
+    fixture_root = _PROJECT_ROOT / "tests" / "data"
+    with (fixture_root / "xyz_stress_manifest.csv").open(newline="", encoding="utf-8") as stream:
+        rows = list(csv.DictReader(stream))
+    assert len({row["case_id"] for row in rows}) == len(rows)
+    for row in rows:
+        assert row["reference_status"] in {
+            "reviewed",
+            "dataset",
+            "test_reference",
+            "representation_issue",
+            "source_issue",
+            "missing",
+            "rejected",
+        }
+        if row["reference_status"] == "missing":
+            assert not row["reference_file"] and not row["reference_source"]
+        else:
+            source, anchor = row["reference_source"].split("#", 1)
+            assert (_PROJECT_ROOT / source).is_file(), row["case_id"]
+            assert anchor in (_PROJECT_ROOT / source).read_text(encoding="utf-8"), row["case_id"]
+        if row["reference_file"]:
+            assert (fixture_root / row["reference_file"]).is_file(), row["case_id"]
+
+
 @pytest.mark.stress
 @pytest.mark.parametrize("mode", ["native_batch", "spawn_xyz_to_rdmol"])
 @pytest.mark.parametrize("worker_count", _STRESS_WORKER_COUNTS)

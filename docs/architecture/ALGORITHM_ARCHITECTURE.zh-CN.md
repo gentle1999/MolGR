@@ -392,22 +392,37 @@ DP 合并后的 target bucket key 是：
 - `metal_discordance_structural_count` 是结构失谐之和，包括负价金属的分数型惩罚。
 - `metal_discordance_count` 与结构失谐总数相同；芳香性损失和金属价态列表归属均不包含在内。
 - 先比较 `metal_discordance_count`，只保留失谐分最低的候选。
-- 如果多个候选并列，先依次比较最大共轭分量、共轭原子数和共轭键数的缺口。
-- 然后选择芳香原子覆盖缺口更小、再到芳香环缺口更小的候选。
-   - 如果覆盖指标也并列，再比较芳香稳定性缺口。
-   - 如果芳香性指标也并列，先选择有机自由基局域化罚分更小的候选。
-   - 对此前所有字段均相同的候选，以组内最低有机电荷局域化罚分为基准；只有差值大于等于
-     `metal_scoring.charge_localization_selection_margin` 时，电荷局域化才参与判定。margin
-     内视为并列，继续比较 force-field score；默认 margin 为 `0.3`。
-   - 只有上述结构和电子态评分全部并列时，才比较有机骨架 force-field score；配置中的金属价态列表顺序不是化学评分。
-   - 所有化学评分都并列时，再按 `combination_index` 做稳定的确定性打破平局。
+- 按 `(no_metal_radical_target, organic_singlet_two_electron_center_count)` 对这些候选分组。
+  在有机自由基预算和单重态双电子中心数均相同的候选中，选择电荷局域化
+  罚分最低的候选为基准，并以 `combination_index` 打破平局。跨自由基预算直接比较电荷罚分，
+  会提前惩罚“中性配体自由基还原为闭壳层阴离子”的候选，使金属上的自旋分配无法参与后续比较。
+  即使自由基预算相同，中性单重态双电子中心也可能通过改变配体电子占据和芳香性来降低电荷罚分。
+  计数仅包含电荷为零、一个孤对电子、零未成对电子、价态缺口为 2 的已解析 C/N/P 中心，不包含未解析中心。
+- 同时在有机自由基预算、芳香原子数、芳香环数和其他单重态中心数均相同的候选中寻找最低电荷罚分基准。
+  其他中心数为全部单重态双电子中心数减去内层可见碳卡宾数，避免将 N/P 中心及不参与配位的碳中心混入卡宾偏好。
+  与电子占据分组基准取较低者。芳香性不变时，可与金属配位的中性碳卡宾可以阻止不必要的电荷分离；
+  芳香性改变时，仍保留芳香阴离子的竞争机会。
+- 相对最终基准的电荷罚分差值大于等于
+  `metal_scoring.charge_localization_selection_margin`（默认 `0.3`）时，标记为超出 margin。
+  若差值为正，且任一金属价态相对该基准变化超过 2，也标记为超出 margin。优先选择未超出者。
+- 之后依次比较共轭原子数、共轭键数、芳香原子数、芳香环数及芳香稳定性的缺口。
+- 再比较有机自由基局域化罚分和超共轭缺口。配体上的自旋仍可凭借此前的拓扑指标胜出；
+  分组并不意味着一律优先选择金属上的自旋。
+- 最后比较有机骨架 force-field score，再按 `combination_index` 做确定性打破平局。
 - 金属候选记录的 `selection_key` 顺序为：
-  `(metal_discordance_count, max_conjugated_component_deficit,
+  `(metal_discordance_count, charge_localization_margin_exceeded,
   conjugated_atom_deficit, conjugated_bond_deficit, aromatic_atom_deficit,
   aromatic_ring_deficit, aromatic_stability_deficit,
-  radical_localization_penalty, charge_localization_margin_exceeded,
+  radical_localization_penalty, hyperconjugation_deficit,
   force_field_score, combination_index)`。
 - 入选候选仍会记录用于派生失谐度的有机电子态指标；已移除的金属环境评分指标不再存在于运行时 metadata。
+
+### 配位恢复
+
+两个后端共享同一个 RDKit 后处理步骤。自由基原子和未解析双电子中心均不进入原子给电子
+或 π 配位补全过程；已解析的单重态 C/N/P 中心保留成对电子给体路径，已解析 carbyne
+中心保留消耗未成对电子、生成共价三键的独立路径。给体筛选在 Al 等受限价态金属的电荷
+分离表示转换之前进行，避免无效的“自由基—金属”连接被转换后的单键表示掩盖。
 
 ## 实现与验证
 
