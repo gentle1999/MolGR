@@ -67,7 +67,7 @@ void molgr::bind::bind_equivalence(py::module_ &m)
         out["mapping_ms"] = result.mapping_ms; out["resonance_ms"] = result.resonance_ms;
         return out;
     }, py::arg("left"), py::arg("right"), py::arg("use_chirality") = false,
-       py::arg("max_resonance") = 1000, py::arg("ignore_metal_coordination_bonds") = true,
+       py::arg("max_resonance") = 5000, py::arg("ignore_metal_coordination_bonds") = true,
        py::arg("max_mappings") = 10000, py::arg("max_mapping_nodes") = 100000,
        py::arg("max_resonance_steps") = 24,
        "Compare explicit-H MoleculeData in C++; returns a decision and a joint mapping/witness. The GIL is released during comparison.");

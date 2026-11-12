@@ -547,33 +547,53 @@ Final selection keeps the feature layers explicit:
   metal-state list membership are not included
 - compare `metal_discordance_count` first and keep only candidates with the
   lowest discordance score
-- if multiple candidates tie, first prefer the smaller maximum-conjugated-component,
-  conjugated-atom, and conjugated-bond deficits, in that order
-- then prefer the candidate with the smaller aromatic-atom coverage deficit,
-  followed by the smaller aromatic-ring deficit
-- if those coverage metrics tie, prefer the smaller aromatic-stability deficit
-- if those diagnostics also tie, prefer the smaller organic radical-localization
-  penalty
-- within candidates tied on every preceding field, compare each organic
-  charge-localization penalty with the group minimum: only a difference greater
-  than or equal to
-  `metal_scoring.charge_localization_selection_margin` participates in
-  selection; smaller differences are treated as tied and defer to the
-  force-field score. The default margin is `0.3`
-- only after the structural and electronic-state scores tie, compare the
-  organic-core force-field score; the order of configured metal-state lists is
-  not a chemical score
-- if all chemical scores tie, use `combination_index` as a stable deterministic
-  tie-breaker
+- group those candidates by `(no_metal_radical_target,
+  organic_singlet_two_electron_center_count)`. Within each group, choose the lowest organic charge-localization penalty as the
+  reference (breaking ties by `combination_index`). Comparing charge costs across
+  different radical budgets would penalize reduction of a neutral ligand radical
+  to a closed-shell anion before metal-centered spin can be considered. Neutral
+  singlet two-electron centers can similarly lower the apparent charge cost while
+  changing ligand occupation and aromaticity, even at the same radical budget.
+  Their count includes resolved neutral C/N/P centers with one lone pair, zero
+  unpaired electrons, and a valence deficit of two; unresolved centers are excluded
+- also find the lowest charge-localization penalty among candidates with the same
+  ligand radical budget, aromatic atom count, aromatic ring count, and number of
+  other singlet centers (total singlet centers minus metal-visible carbon carbenes). Use the
+  cheaper of this reference and the occupation reference. This lets neutral
+  metal-visible carbon carbenes prevent unnecessary charge separation when aromaticity is unchanged.
+  Nitrogen/phosphorus centers and ligand-internal carbon centers remain separate,
+  while keeping aromatic anions competitive when aromaticity changes
+- mark a candidate as exceeding the charge-localization margin when its penalty
+  exceeds the selected reference by at least
+  `metal_scoring.charge_localization_selection_margin` (default `0.3`). A positive
+  penalty difference also exceeds the margin if any metal oxidation state differs
+  from that reference by more than two. Prefer candidates that stay within the margin
+- then compare conjugated-atom and conjugated-bond deficits, aromatic-atom and
+  aromatic-ring deficits, and aromatic-stability deficit, in that order
+- next compare organic radical-localization penalty and hyperconjugation deficit.
+  Ligand-centered spin remains eligible and can win through the preceding topology
+  criteria; grouping does not impose a universal preference for metal-centered spin
+- finally compare organic-core force-field score and use `combination_index` as a
+  deterministic tie-breaker
 - The recorded metal-candidate `selection_key` is ordered as:
-  `(metal_discordance_count, max_conjugated_component_deficit,
+  `(metal_discordance_count, charge_localization_margin_exceeded,
   conjugated_atom_deficit, conjugated_bond_deficit, aromatic_atom_deficit,
   aromatic_ring_deficit, aromatic_stability_deficit,
-  radical_localization_penalty, charge_localization_margin_exceeded,
+  radical_localization_penalty, hyperconjugation_deficit,
   force_field_score, combination_index)`.
 - selected candidates still record organic electronic-state metrics used to
   derive discordance, but the removed metal-environment scoring metrics no
   longer exist in the runtime metadata
+
+### Coordination restoration
+
+Both backends use the same RDKit post-processing step. Radical atoms and
+unresolved two-electron centers are excluded from both atom donation and
+pi-contact completion. Resolved singlet C/N/P centers retain their paired-electron
+donation path; resolved carbynes retain the separate covalent triple-bond path
+that consumes their unpaired electrons. This donor filter runs before the
+charge-separated representation of valence-limited acceptors such as Al, so
+that conversion cannot disguise an invalid radical-to-metal contact.
 
 ## Implementation and Validation
 

@@ -987,6 +987,52 @@ def test_tmqmg_cpp_all_accelerations_worker_survives_target_bucket_parallelism(
 
 
 @pytest.mark.parametrize("scoring_runner", _SCORING_RUNNERS)
+def test_benchmark_default_budget_proves_native_abelok_resonance(scoring_runner) -> None:
+    from molgr import MolGRConfig
+    from molgr.interface import xyz_to_rdmol
+    from molgr.utils.equivalence import EquivalenceDecision, evaluate_equivalence
+
+    fixtures = _PROJECT_ROOT / "tests" / "data" / "tmqmg" / "reconstruction"
+    with (fixtures / "manifest.csv").open() as handle:
+        fixture = next(row for row in csv.DictReader(handle) if row["case_id"] == "ABELOK")
+    config = MolGRConfig()
+    config.cpp_backend.max_threads = 1
+    candidate = Chem.RemoveHs(
+        xyz_to_rdmol(
+            (fixtures / fixture["xyz_file"]).read_text(),
+            int(fixture["charge"]),
+            1,
+            backend="cpp",
+            config=config,
+        )
+    )
+    reference = Chem.MolFromSmiles(fixture["reference_smiles"])
+    limited = evaluate_equivalence(reference, candidate, max_resonance=100)
+    assert limited.decision == EquivalenceDecision.INCONCLUSIVE
+    assert limited.bounded_search.limit_reached
+
+    result = scoring_runner(
+        {
+            "case_idx": int(fixture["row_index"]),
+            "input_smiles": fixture["reference_smiles"],
+            "ground_truth_smiles": fixture["reference_smiles"],
+            "ground_truth_rdmol": reference,
+        },
+        "scoring",
+        lambda case: MethodRunOutput(
+            status="ok",
+            predicted_smiles=Chem.MolToSmiles(candidate),
+            rdkit_mol=candidate,
+        ),
+        case_timeout_seconds=None,
+    )
+
+    assert result.status == "ok"
+    assert result.evaluator_decision == "equivalent"
+    assert result.equivalence_method == "resonance"
+
+
+@pytest.mark.parametrize("scoring_runner", _SCORING_RUNNERS)
 @pytest.mark.parametrize(
     ("reference_smiles", "candidate_smiles", "decision", "equivalent", "count_key"),
     [

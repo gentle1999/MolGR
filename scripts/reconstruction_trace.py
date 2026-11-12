@@ -5347,7 +5347,6 @@ def _oxidative_addition_reference_match(
                 reference,
                 candidate_mol,
                 use_chirality=False,
-                max_resonance=100,
             )
         except Exception as exc:  # noqa: BLE001
             comparison_reasons.append(f"C{candidate_identity[1]}:{type(exc).__name__}:{exc}")

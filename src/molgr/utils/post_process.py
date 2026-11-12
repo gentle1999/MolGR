@@ -266,6 +266,14 @@ def make_dative_bond(
             ):
                 # BR4- type, skip
                 continue
+            # A radical is not a paired-electron donor. Exclude it from both
+            # atom donation and the pi-contact pass. Resolved carbynes follow
+            # the separate covalent triple-bond path below, consuming their spin.
+            if has_atom_unresolved_two_electron_center(non_metal_atom) or (
+                get_atom_unpaired_electrons(non_metal_atom) > 0
+                and not _is_explicit_carbyne_center(non_metal_atom)
+            ):
+                continue
             close_non_metal_atom_ids_set.add(close_non_metal_atom_id)
             if _has_limited_coordination_valence(
                 metal_atom.GetAtomicNum()
@@ -317,16 +325,33 @@ def make_dative_bond(
                 or rd_bond.GetEndAtomIdx() not in close_non_metal_atom_ids_set
             ):
                 continue
-            if rwmol.GetBondBetweenAtoms(
+            begin_coordination = rwmol.GetBondBetweenAtoms(
                 rd_bond.GetBeginAtomIdx(), int(metal_atom_id)
-            ) or rwmol.GetBondBetweenAtoms(rd_bond.GetEndAtomIdx(), int(metal_atom_id)):
+            )
+            end_coordination = rwmol.GetBondBetweenAtoms(
+                rd_bond.GetEndAtomIdx(), int(metal_atom_id)
+            )
+            if begin_coordination is not None and end_coordination is not None:
+                continue
+            # An anionic aromatic donor may already have a dative contact. Its
+            # neighboring ring atom still participates in the same haptic bond.
+            # Keep the existing behavior for covalent contacts and nonaromatic pi bonds.
+            if (begin_coordination is not None or end_coordination is not None) and (
+                not rd_bond.GetIsAromatic()
+                or any(
+                    bond is not None and bond.GetBondType() != Chem.BondType.DATIVE
+                    for bond in (begin_coordination, end_coordination)
+                )
+            ):
                 continue
             distance_1 = distance_matrix[rd_bond.GetBeginAtomIdx()][int(metal_atom_id)]
             distance_2 = distance_matrix[rd_bond.GetEndAtomIdx()][int(metal_atom_id)]
             if abs(distance_1 - distance_2) > pi_dative_distance_difference_tolerance:
                 continue
-            rwmol.AddBond(rd_bond.GetBeginAtomIdx(), int(metal_atom_id), Chem.BondType.DATIVE)
-            rwmol.AddBond(rd_bond.GetEndAtomIdx(), int(metal_atom_id), Chem.BondType.DATIVE)
+            if begin_coordination is None:
+                rwmol.AddBond(rd_bond.GetBeginAtomIdx(), int(metal_atom_id), Chem.BondType.DATIVE)
+            if end_coordination is None:
+                rwmol.AddBond(rd_bond.GetEndAtomIdx(), int(metal_atom_id), Chem.BondType.DATIVE)
 
     _normalize_limited_valence_coordination(rwmol)
     result = rwmol.GetMol()

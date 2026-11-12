@@ -61,6 +61,7 @@ namespace
         int max_conjugated_component_size = 0;
         int hyperconjugative_donor_count = 0;
         int hyperconjugation_score = 0;
+        int singlet_two_electron_center_count = 0;
         double radical_localization_penalty = 0.0;
         double charge_localization_penalty = 0.0;
         double charge_localization_component_cancellation = 0.0;
@@ -830,6 +831,8 @@ namespace
                     static_cast<int>(atom.GetAtomicNum());
                 const bool is_conjugated =
                     conjugated_atom_indices.find(atom_idx) != conjugated_atom_indices.end();
+                metrics.singlet_two_electron_center_count +=
+                    IsExplicitSingletTwoElectronCenter(atom) ? 1 : 0;
                 metrics.radical_localization_penalty +=
                     RadicalLocalizationPenaltyForAtom(atom, is_conjugated);
                 const double atom_charge_penalty =
@@ -1529,12 +1532,14 @@ namespace
         }
 
         int visible_singlet_two_electron_center_count = 0;
+        int visible_singlet_carbene_count = 0;
         for (const int atom_idx : visible_inner_atom_indices)
         {
             OpenBabel::OBAtom *atom = mol.GetAtom(atom_idx);
             if (atom != nullptr && IsExplicitSingletTwoElectronCenter(*atom))
             {
                 ++visible_singlet_two_electron_center_count;
+                visible_singlet_carbene_count += atom->GetAtomicNum() == 6 ? 1 : 0;
             }
         }
         const int excess_visible_singlet_two_electron_center_count = std::max(
@@ -1662,6 +1667,7 @@ namespace
         candidate->metadata[
             "metal_discordance_excess_visible_singlet_two_electron_center_count"] =
             excess_visible_singlet_two_electron_center_count;
+        candidate->metadata["organic_visible_singlet_carbene_count"] = visible_singlet_carbene_count;
         candidate->metadata["metal_discordance_bent_cumulated_ring_allene_count"] =
             bent_cumulated_ring_allene_count;
         candidate->metadata["metal_discordance_outer_or_invisible_adjacent_double_charge_count"] =
@@ -1713,6 +1719,8 @@ namespace
             candidate->no_metal_state->Mol(),
             config);
         candidate->metadata["organic_aromatic_atom_count"] = metrics.aromatic_atom_count;
+        candidate->metadata["organic_singlet_two_electron_center_count"] =
+            metrics.singlet_two_electron_center_count;
         candidate->metadata["organic_aromatic_ring_count"] = metrics.aromatic_ring_count;
         candidate->metadata["organic_aromatic_stability_score"] =
             metrics.aromatic_stability_score;
@@ -1984,40 +1992,51 @@ namespace molgr
                     AnnotateSelectedCandidateMetrics(&scored_candidates[candidate_index], config);
                 }
 
-                std::size_t charge_localization_reference_candidate_index =
-                    discordance_filtered_candidate_indices.front();
-                double minimum_charge_localization_penalty =
-                    std::numeric_limits<double>::infinity();
+                // Share charge references across metal-visible carbon singlet occupations when
+                // aromatic atom/ring counts agree, preserving neutral carbenes
+                // over unnecessary ligand charge separation. Keep occupation
+                // references too, so aromatic anions remain competitive.
+                const auto charge_reference_key = [&](std::size_t index) {
+                    return std::make_pair(
+                        MetadataDouble(scored_candidates[index],
+                            "organic_charge_localization_penalty", 0.0),
+                        CandidateCombinationIndex(scored_candidates[index]));
+                };
+                const auto aromatic_reference_key = [&](const auto &candidate) {
+                    return std::make_tuple(
+                        candidate.no_metal_radical_target,
+                        MetadataInt(candidate, "organic_singlet_two_electron_center_count", 0) -
+                            MetadataInt(candidate, "organic_visible_singlet_carbene_count", 0),
+                        MetadataInt(candidate, "organic_aromatic_atom_count", 0),
+                        MetadataInt(candidate, "organic_aromatic_ring_count", 0));
+                };
+                std::map<std::pair<int, int>, std::size_t> charge_reference_by_occupation;
+                std::map<std::tuple<int, int, int, int>, std::size_t> charge_reference_by_aromaticity;
                 for (const std::size_t candidate_index : discordance_filtered_candidate_indices)
                 {
                     const auto &candidate = scored_candidates[candidate_index];
-                    const double penalty = MetadataDouble(
-                        candidate,
-                        "organic_charge_localization_penalty",
-                        0.0);
-                    const auto &reference_candidate =
-                        scored_candidates[charge_localization_reference_candidate_index];
-                    if (
-                        penalty < minimum_charge_localization_penalty ||
-                        (
-                            penalty == minimum_charge_localization_penalty &&
-                            CandidateCombinationIndex(candidate) <
-                                CandidateCombinationIndex(reference_candidate)))
+                    const auto target = std::make_pair(
+                        candidate.no_metal_radical_target,
+                        MetadataInt(candidate, "organic_singlet_two_electron_center_count", 0));
+                    const auto reference = charge_reference_by_occupation.find(target);
+                    const auto key = std::make_pair(
+                        MetadataDouble(candidate, "organic_charge_localization_penalty", 0.0),
+                        CandidateCombinationIndex(candidate));
+                    if (reference == charge_reference_by_occupation.end() ||
+                        key < std::make_pair(
+                            MetadataDouble(scored_candidates[reference->second],
+                                "organic_charge_localization_penalty", 0.0),
+                            CandidateCombinationIndex(scored_candidates[reference->second])))
                     {
-                        minimum_charge_localization_penalty = penalty;
-                        charge_localization_reference_candidate_index = candidate_index;
+                        charge_reference_by_occupation[target] = candidate_index;
                     }
-                }
-                const auto &charge_localization_reference_candidate =
-                    scored_candidates[charge_localization_reference_candidate_index];
-                minimum_charge_localization_penalty = MetadataDouble(
-                    charge_localization_reference_candidate,
-                    "organic_charge_localization_penalty",
-                    0.0);
-                std::map<int, int> reference_valences;
-                for (const auto &metal_state : charge_localization_reference_candidate.metal_states)
-                {
-                    reference_valences[metal_state.idx] = metal_state.valence;
+                    const auto aromatic_target = aromatic_reference_key(candidate);
+                    const auto aromatic_reference = charge_reference_by_aromaticity.find(aromatic_target);
+                    if (aromatic_reference == charge_reference_by_aromaticity.end() ||
+                        key < charge_reference_key(aromatic_reference->second))
+                    {
+                        charge_reference_by_aromaticity[aromatic_target] = candidate_index;
+                    }
                 }
                 const double charge_localization_margin = std::max(
                     0.0,
@@ -2029,6 +2048,24 @@ namespace molgr
                 for (const std::size_t candidate_index : discordance_filtered_candidate_indices)
                 {
                     auto &candidate = scored_candidates[candidate_index];
+                    auto reference_index = charge_reference_by_occupation.at(std::make_pair(
+                            candidate.no_metal_radical_target,
+                            MetadataInt(candidate, "organic_singlet_two_electron_center_count", 0)));
+                    const auto aromatic_reference_index =
+                        charge_reference_by_aromaticity.at(aromatic_reference_key(candidate));
+                    if (charge_reference_key(aromatic_reference_index) < charge_reference_key(reference_index))
+                    {
+                        reference_index = aromatic_reference_index;
+                    }
+                    const auto &charge_localization_reference_candidate = scored_candidates[reference_index];
+                    const double minimum_charge_localization_penalty = MetadataDouble(
+                        charge_localization_reference_candidate,
+                        "organic_charge_localization_penalty", 0.0);
+                    std::map<int, int> reference_valences;
+                    for (const auto &metal_state : charge_localization_reference_candidate.metal_states)
+                    {
+                        reference_valences[metal_state.idx] = metal_state.valence;
+                    }
                     const double score_value =
                         candidate.score.has_value() ? *candidate.score : candidate.CombinedScore(config);
                     const int aromatic_atom_deficit_count = static_cast<int>(MetadataInt(

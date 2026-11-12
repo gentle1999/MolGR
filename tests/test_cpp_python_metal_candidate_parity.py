@@ -38,12 +38,47 @@ _TMQMG_DATA_DIR = (
 )
 _TMQMG_CSV = _TMQMG_DATA_DIR / "tmQMg_properties_and_targets.csv"
 _TMQMG_XYZ_DIR = _TMQMG_DATA_DIR / "tmQMg_xyz" / "xyz"
+_XYZ_FIXTURES = _PROJECT_ROOT / "tests/data/xyz"
 
 
 requires_local_tmqmg = pytest.mark.skipif(
     not _TMQMG_CSV.exists() or not _TMQMG_XYZ_DIR.exists(),
     reason="tmQMg local benchmark data is not available",
 )
+
+
+def test_338_s_mixed_metal_candidate_order_parity() -> None:
+    """Equal scores must resolve to the same assignment in both backends."""
+    xyz = (_XYZ_FIXTURES / "338-S.xyz").read_text()
+    config = MolGRConfig()
+    cpp = _core.dev.pipeline.reconstruct_with_metals.debug_metal_search_summaries(
+        xyz, 0, 0, config=config
+    )
+    assert _cpp_metal_search_summary(cpp) == _python_metal_search_summary(xyz, 0, 0, config=config)
+
+    cpp_scored = _core.dev.pipeline.reconstruct_with_metals.debug_scored_candidate_summaries(
+        xyz, 0, 0, config=config
+    )
+    layer, candidates, best = _python_scored_candidates(xyz, 0, 0)
+    assert cpp_scored["layer_index"] == layer
+    assert len(cpp_scored["candidates"]) == len(candidates)
+    for native, fallback in zip(cpp_scored["candidates"], candidates):
+        assert native["combination_index"] == fallback.metadata["combination_index"]
+        assert [(s["valence"], s["radical_num"]) for s in native["metal_states"]] == [
+            (s.valence, s.radical_num) for s in fallback.metal_states
+        ]
+        assert (
+            native["organic_singlet_two_electron_center_count"]
+            == fallback.metadata["organic_singlet_two_electron_center_count"]
+        )
+        assert (
+            native["organic_visible_singlet_carbene_count"]
+            == fallback.metadata["organic_visible_singlet_carbene_count"]
+        )
+        assert native["score"] == pytest.approx(fallback.score)
+        assert native["selected"] == (fallback is best)
+    assert best is not None
+    assert [(s.symbol, s.valence) for s in best.metal_states] == [("Fe", 2), ("Pd", 2), ("Fe", 2)]
 
 
 def _load_tmqmg_row(case_idx: int) -> dict[str, str]:

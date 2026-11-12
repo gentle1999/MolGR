@@ -611,7 +611,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--limit", type=int, help="SMOKE ONLY: first N manifest cases, without validity filtering"
     )
-    parser.add_argument("--max-resonance", type=int, default=100)
+    parser.add_argument("--max-resonance", type=int, default=5000)
     parser.add_argument("--use-chirality", action="store_true", default=False)
     parser.add_argument(
         "--timeout",

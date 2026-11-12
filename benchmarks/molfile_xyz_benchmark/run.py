@@ -126,7 +126,6 @@ def _run_case_method(
                     ground_truth_rdmol,
                     output.rdkit_mol,
                     use_chirality=True,
-                    max_resonance=100,
                 )
             evaluator_decision = info.decision.value
             equivalent = (

@@ -318,7 +318,10 @@ def _enumerate_partial_assignment_frontier(
         next_partial_assignments: Dict[
             Tuple[int, int, _ValenceBoundsKey], List[_PartialMetalAssignment]
         ] = defaultdict(list)
-        for entries in partial_assignments.values():
+        # Match the native std::map traversal before assigning tie-break orders.
+        # Insertion order changes which equally ranked mixed-metal state wins.
+        for frontier_key in sorted(partial_assignments):
+            entries = partial_assignments[frontier_key]
             for entry in entries:
                 for metal_state_choice in metal_state_options:
                     next_total_metal_charge = entry.total_metal_charge
@@ -403,7 +406,8 @@ def _bucket_partial_assignments_by_charge_radicals(
         int,
         DefaultDict[int, List[Tuple[_ValenceBoundsKey, List[_PartialMetalAssignment]]]],
     ] = defaultdict(lambda: defaultdict(list))
-    for (charge, radicals, valence_bounds), entries in frontier.items():
+    for charge, radicals, valence_bounds in sorted(frontier):
+        entries = frontier[(charge, radicals, valence_bounds)]
         bucket_index[radicals][charge].append((valence_bounds, entries))
 
     return {

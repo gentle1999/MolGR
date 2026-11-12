@@ -510,7 +510,7 @@ def _results_equivalent(
         right_mol = Chem.MolFromSmiles(right.predicted_smiles)
         if left_mol is None or right_mol is None:
             return False, "predicted_smiles_parse_failed"
-        info = evaluate_equivalence(left_mol, right_mol, use_chirality=False, max_resonance=100)
+        info = evaluate_equivalence(left_mol, right_mol, use_chirality=False)
         reason = info.reason if info is not None else ""
         equivalent = (
             True

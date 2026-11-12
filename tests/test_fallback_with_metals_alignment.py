@@ -197,11 +197,11 @@ def test_xyz2omol_state_prunes_open_shell_multimetal_state_space_for_monnmo(
     assert result is not None
     assert [len(options) for options in raw_state.available_valence_radical_states] == [17, 17]
     assert captured["option_counts"] == [7, 7]
-    # The no-metal target (-4, 2) is now reachable because negative-charge
-    # elimination rechecks the radical target after its charge budget reaches 0.
+    # The closed-shell ligand target (-6, 0) must remain competitive with (-4, 2):
+    # removing ligand charges by creating radicals must not force Mo(II).
     assert [(state.symbol, state.valence, state.radical_num) for state in result.metal_states] == [
-        ("Mo", 2, 0),
-        ("Mo", 2, 0),
+        ("Mo", 3, 1),
+        ("Mo", 3, 1),
     ]
 
 
@@ -1729,6 +1729,110 @@ def test_select_best_candidate_uses_charge_localization_before_radical_localizat
     assert result is radical_localized
     assert radical_localized.metadata["selection_key"][1] == 0
     assert charge_localized.metadata["selection_key"][1] == 1
+
+
+@pytest.mark.parametrize("ligand_conjugated_atoms", [6, 8])
+@pytest.mark.parametrize("reverse_candidates", [False, True])
+def test_charge_reference_does_not_cross_ligand_radical_budgets(
+    ligand_conjugated_atoms: int,
+    reverse_candidates: bool,
+) -> None:
+    metal_spin = make_metal_candidate_state(
+        (),
+        tuple(MetalAtomPosition(i, "Mo", 42, 3, 1, 0.0, 0.0, 0.0) for i in (1, 2)),
+        -6,
+        0,
+        combination_index=0,
+    )
+    ligand_spin = make_metal_candidate_state(
+        (),
+        tuple(MetalAtomPosition(i, "Mo", 42, 2, 0, 0.0, 0.0, 0.0) for i in (1, 2)),
+        -4,
+        2,
+        combination_index=1,
+    )
+    for candidate, charge_penalty, radical_penalty, conjugated_atoms in (
+        (metal_spin, 2.1, 0.0, 6),
+        (ligand_spin, 1.4, 2.0, ligand_conjugated_atoms),
+    ):
+        candidate.score = 10.0
+        candidate.metadata.update(
+            {
+                "metal_discordance_count": 0.0,
+                "metal_discordance_structural_count": 0.0,
+                "organic_conjugated_atom_count": conjugated_atoms,
+                "organic_aromatic_atom_count": 6,
+                "organic_aromatic_ring_count": 1,
+                "organic_charge_localization_penalty": charge_penalty,
+                "organic_radical_localization_penalty": radical_penalty,
+            }
+        )
+    candidates = [metal_spin, ligand_spin]
+    if reverse_candidates:
+        candidates.reverse()
+    selected = metal_scoring_module.select_best_candidate(candidates)
+
+    # When topology ties, avoid creating ligand radicals just to reduce charge.
+    # Ligand-centered spin can still win when it preserves more conjugation.
+    assert selected is (metal_spin if ligand_conjugated_atoms == 6 else ligand_spin)
+    assert metal_spin.metadata["organic_charge_localization_reference_penalty"] == 2.1
+    assert ligand_spin.metadata["organic_charge_localization_reference_penalty"] == 1.4
+    assert metal_spin.metadata["organic_charge_localization_margin_exceeded"] is False
+    assert ligand_spin.metadata["organic_charge_localization_margin_exceeded"] is False
+
+
+@pytest.mark.parametrize("visible_carbene", [False, True])
+@pytest.mark.parametrize("singlet_aromatic_atoms", [5, 10, 15])
+@pytest.mark.parametrize("reverse_candidates", [False, True])
+def test_charge_reference_preserves_carbene_unless_aromaticity_changes(
+    singlet_aromatic_atoms: int, reverse_candidates: bool, visible_carbene: bool
+) -> None:
+    anionic = make_metal_candidate_state(
+        (),
+        (MetalAtomPosition(1, "Pd", 46, 2, 0, 0.0, 0.0, 0.0),),
+        -2,
+        0,
+        combination_index=0,
+    )
+    singlet = make_metal_candidate_state(
+        (),
+        (MetalAtomPosition(1, "Pd", 46, 0, 0, 0.0, 0.0, 0.0),),
+        0,
+        0,
+        combination_index=1,
+    )
+    for candidate, charge_penalty, singlet_count, aromatic_atoms in (
+        (anionic, 2.8, 0, 10),
+        (singlet, 1.8, 1, singlet_aromatic_atoms),
+    ):
+        candidate.score = 10.0
+        candidate.metadata.update(
+            {
+                "metal_discordance_count": 0.0,
+                "metal_discordance_structural_count": 0.0,
+                "organic_singlet_two_electron_center_count": singlet_count,
+                "organic_visible_singlet_carbene_count": singlet_count if visible_carbene else 0,
+                "organic_charge_localization_penalty": charge_penalty,
+                "organic_aromatic_atom_count": aromatic_atoms,
+                "organic_aromatic_ring_count": aromatic_atoms // 5,
+            }
+        )
+    candidates = [anionic, singlet]
+    if reverse_candidates:
+        candidates.reverse()
+
+    selected = metal_scoring_module.select_best_candidate(candidates)
+
+    # At equal aromaticity, preserve the neutral singlet center. With different
+    # aromaticity, occupation-specific references allow the aromatic anion to win.
+    shares_reference = singlet_aromatic_atoms == 10 and visible_carbene
+    expected_winner = singlet if singlet_aromatic_atoms == 15 or shares_reference else anionic
+    assert selected is expected_winner
+    expected_reference = 1.8 if shares_reference else 2.8
+    assert anionic.metadata["organic_charge_localization_reference_penalty"] == expected_reference
+    assert singlet.metadata["organic_charge_localization_reference_penalty"] == 1.8
+    assert anionic.metadata["organic_charge_localization_margin_exceeded"] is shares_reference
+    assert singlet.metadata["organic_charge_localization_margin_exceeded"] is False
 
 
 def test_select_best_candidate_uses_aromatic_stability_before_force_field() -> None:

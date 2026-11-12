@@ -11,7 +11,7 @@ namespace molgr::equivalence
     {
         bool use_chirality = false;
         bool ignore_metal_coordination_bonds = true;
-        int max_resonance = 1000;
+        int max_resonance = 5000;
         int max_mappings = 10000;
         int max_mapping_nodes = 100000;
         int max_resonance_steps = 24;

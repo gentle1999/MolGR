@@ -136,7 +136,7 @@ if __name__ == "__main__":
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--limit", type=int, default=500, help="Evenly sampled rows; 0 selects all")
     parser.add_argument("--repeat", type=int, default=2)
-    parser.add_argument("--max-resonance", type=int, default=100)
+    parser.add_argument("--max-resonance", type=int, default=5000)
     args = parser.parse_args()
     if args.repeat < 1 or args.limit < 0:
         parser.error("repeat must be positive and limit must be nonnegative")

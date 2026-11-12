@@ -29,6 +29,31 @@
       "id": "ACEKAU",
       "classification": "recovery_bond_break_with_neighbor",
       "reason": "Neighbor bond-order resolution followed by last-tier bond recovery."
+    },
+    {
+      "id": "ADASOR",
+      "classification": "neutral_carbene_charge_localization",
+      "reason": "Preserve the neutral carbene instead of increasing the metal charge by two at unchanged aromaticity."
+    },
+    {
+      "id": "AFOYAV",
+      "classification": "neutral_carbene_charge_localization",
+      "reason": "Preserve the neutral carbene instead of increasing the metal charge by two at unchanged aromaticity."
+    },
+    {
+      "id": "ALUBAL",
+      "classification": "neutral_carbene_charge_localization",
+      "reason": "Preserve the neutral carbene instead of increasing the metal charge by two at unchanged aromaticity."
+    },
+    {
+      "id": "ABATUT",
+      "classification": "neutral_carbene_scope",
+      "reason": "Preserve Co(III) imido assignment; neutral-carbene preference must not apply to a nitrogen two-electron center."
+    },
+    {
+      "id": "ADEQOS",
+      "classification": "neutral_carbene_scope",
+      "reason": "Do not prefer a ligand-internal two-electron carbon center that is not visible for metal coordination."
     }
   ],
   "source_issues": [

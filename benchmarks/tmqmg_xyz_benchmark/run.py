@@ -145,7 +145,6 @@ def _smiles_roundtrip_diagnostic(
                 internal_mol,
                 reparsed,
                 use_chirality=False,
-                max_resonance=100,
             )
             equivalent = (
                 None
@@ -578,7 +577,6 @@ def _run_case_method(
                     output.rdkit_mol,
                     # tmQMg reference SMILES do not consistently encode stereochemistry.
                     use_chirality=False,
-                    max_resonance=100,
                 )
             evaluator_decision = info.decision.value
             equivalent = (

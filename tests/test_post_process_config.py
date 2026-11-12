@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import math
 from dataclasses import replace
 
 import pytest
@@ -250,7 +251,7 @@ def test_non_carbyne_carbon_radical_does_not_form_metal_triple_bond() -> None:
 
 
 @pytest.mark.parametrize("state", ["unresolved", "triplet"])
-def test_non_singlet_two_electron_center_does_not_form_metal_double_bond(state: str) -> None:
+def test_non_singlet_two_electron_center_does_not_donate_to_metal(state: str) -> None:
     mol, metal_idx, center_idx = _metal_singlet_two_electron_center(7)
     center = mol.GetAtomWithIdx(center_idx)
     center.ClearProp(LONE_PAIR_COUNT_PROP)
@@ -261,9 +262,34 @@ def test_non_singlet_two_electron_center_does_not_form_metal_double_bond(state: 
 
     result = make_dative_bond(mol)
 
-    bond = result.GetBondBetweenAtoms(center_idx, metal_idx)
-    assert bond is not None
-    assert bond.GetBondType() == Chem.BondType.DATIVE
+    assert result.GetBondBetweenAtoms(center_idx, metal_idx) is None
+
+
+@pytest.mark.parametrize("atomic_num", [7, 8, 9])
+@pytest.mark.parametrize("charge", [-1, 0])
+def test_radical_atom_is_not_used_as_a_dative_donor(atomic_num: int, charge: int) -> None:
+    mol = _zinc_nitrogen_pair(1.8)
+    donor = mol.GetAtomWithIdx(1)
+    donor.SetAtomicNum(atomic_num)
+    donor.SetFormalCharge(charge)
+    donor.SetNumRadicalElectrons(1)
+    donor.SetIntProp(LONE_PAIR_COUNT_PROP, 1)
+
+    result = make_dative_bond(mol)
+
+    assert result.GetBondBetweenAtoms(0, 1) is None
+    assert result.GetAtomWithIdx(1).GetNumRadicalElectrons() == 1
+    assert result.GetAtomWithIdx(1).GetFormalCharge() == charge
+
+
+def test_pi_coordination_does_not_bypass_radical_donor_exclusion() -> None:
+    mol = _iron_alkene_pair(1.8, 1.8)
+    mol.GetAtomWithIdx(1).SetNumRadicalElectrons(1)
+
+    result = make_dative_bond(mol)
+
+    assert result.GetBondBetweenAtoms(0, 1) is None
+    assert result.GetBondBetweenAtoms(0, 2) is None
 
 
 def test_make_dative_bond_requires_visible_coordination_atom() -> None:
@@ -359,3 +385,38 @@ def test_make_pi_dative_bond_requires_both_atoms_visible_to_metal() -> None:
 
     assert mol.GetBondBetweenAtoms(0, 1) is None
     assert mol.GetBondBetweenAtoms(0, 2) is None
+
+
+def test_haptic_coordination_completes_carbon_between_two_anionic_donors() -> None:
+    ring = Chem.MolFromSmiles("[c-]1c[cH-]cc1")
+    mol = Chem.RWMol(ring)
+    iron = Chem.Atom(26)
+    iron.SetFormalCharge(2)
+    iron_idx = mol.AddAtom(iron)
+    conf = Chem.Conformer(mol.GetNumAtoms())
+    for i in range(5):
+        angle = 2 * math.pi * i / 5
+        conf.SetAtomPosition(i, (1.2 * math.cos(angle), 1.2 * math.sin(angle), 0))
+    conf.SetAtomPosition(iron_idx, (0, 0, 1.6))
+    mol.AddConformer(conf)
+
+    result = make_dative_bond(mol.GetMol())
+
+    # Atom 1 lies between anions 0 and 2; their early dative contacts must not
+    # prevent the aromatic pi pass from completing the fifth Fe-C contact.
+    assert result.GetAtomWithIdx(iron_idx).GetDegree() == 5
+    assert all(
+        result.GetBondBetweenAtoms(i, iron_idx).GetBondType() == Chem.BondType.DATIVE
+        for i in range(5)
+    )
+    assert [a.GetFormalCharge() for a in result.GetAtoms()] == [-1, 0, -1, 0, 0, 2]
+
+
+def test_nonaromatic_anionic_alkene_keeps_only_its_localized_donor_contact() -> None:
+    mol = _iron_alkene_pair(1.8, 1.8)
+    mol.GetAtomWithIdx(1).SetFormalCharge(-1)
+
+    result = make_dative_bond(mol)
+
+    assert result.GetBondBetweenAtoms(1, 0).GetBondType() == Chem.BondType.DATIVE
+    assert result.GetBondBetweenAtoms(2, 0) is None

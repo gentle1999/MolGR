@@ -316,9 +316,15 @@ def test_aluminum_covalent_representation_roundtrips_with_native_rdkit(backend):
         assert Chem.GetFormalCharge(parsed) == 1
         assert all(a.GetTotalNumHs() == 0 for a in parsed.GetAtoms())
         (aluminum,) = [a for a in parsed.GetAtoms() if a.GetAtomicNum() == 13]
-        assert aluminum.GetFormalCharge() == -1
-        assert aluminum.GetDegree() == 4
+        assert aluminum.GetFormalCharge() == 0
+        assert aluminum.GetDegree() == 3
         assert all(b.GetBondType() == Chem.BondType.SINGLE for b in aluminum.GetBonds())
+        radicals = [a for a in parsed.GetAtoms() if a.GetNumRadicalElectrons()]
+        assert len(radicals) == 1
+        assert radicals[0].GetSymbol() == "O"
+        assert radicals[0].GetFormalCharge() == 0
+        assert radicals[0].GetNumRadicalElectrons() == 1
+        assert parsed.GetBondBetweenAtoms(radicals[0].GetIdx(), aluminum.GetIdx()) is None
     assert mol.ToBinary(Chem.PropertyPickleOptions.AllProps) == before
 
 
