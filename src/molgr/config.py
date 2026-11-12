@@ -78,6 +78,7 @@ class MetalRadicalInferenceConfig:
 @dataclass
 class PythonInterfaceConfig:
     reconstruction_failure_policy: ReconstructionFailurePolicy = "raise"
+    require_smiles_roundtrip: bool = True
 
 
 @dataclass

@@ -21,6 +21,7 @@ from molgr.utils.converter import (
     get_atom_unpaired_electrons,
     has_atom_unresolved_two_electron_center,
     refresh_atom_electron_property_lists,
+    refresh_rdkit_aromaticity,
 )
 from molgr.utils.coordination import coordination_distance_cutoff
 from molgr.utils.coordination_visibility import (
@@ -33,6 +34,63 @@ from molgr.utils.rdkit_stereo import apply_3d_stereo_workarounds
 
 
 pt = Chem.GetPeriodicTable()
+
+
+def _has_limited_coordination_valence(atomic_num: int) -> bool:
+    """Select metal elements with a finite valence table in this RDKit version.
+
+    A -1 entry permits unrestricted valence (e.g. K, transition metals), so
+    those elements retain dative bonds. Scanning all MolGR metals confirms the
+    finite-table elements are exactly those exhibiting acceptor-valence failures.
+    """
+    if atomic_num == 0 or atomic_num in NON_METAL_DICT:
+        return False
+    valences = tuple(pt.GetValenceList(atomic_num))
+    return bool(valences) and -1 not in valences
+
+
+def _normalize_limited_valence_coordination(rwmol: Chem.RWMol) -> None:
+    """Express donation to valence-limited metals as covalent bonds and charges.
+
+    Each unit of bond order transfers one formal-charge unit from acceptor to
+    donor. Anionic donors use their negative charge to form up to triple bonds;
+    a bridging donor first allocates one bond to each acceptor. This is formal
+    charge bookkeeping, not reassignment of the metal oxidation state. It does
+    not change connectivity, ligand-internal bonds or radical annotations.
+    """
+    by_donor: dict[int, list[Chem.Bond]] = {}
+    for bond in rwmol.GetBonds():
+        if bond.GetBondType() == Chem.BondType.DATIVE and _has_limited_coordination_valence(
+            bond.GetEndAtom().GetAtomicNum()
+        ):
+            by_donor.setdefault(bond.GetBeginAtomIdx(), []).append(bond)
+    conformer = rwmol.GetConformer() if rwmol.GetNumConformers() else None
+    for donor_idx, bonds in by_donor.items():
+        donor = rwmol.GetAtomWithIdx(donor_idx)
+        # Allocate additional order to shorter contacts first. All contacts are
+        # selected by the existing coordination search, not by this conversion.
+        bonds.sort(
+            key=lambda bond: (
+                (
+                    conformer.GetAtomPosition(donor_idx)
+                    - conformer.GetAtomPosition(bond.GetEndAtomIdx())
+                ).LengthSq()
+                if conformer is not None
+                else 0.0,
+                bond.GetEndAtomIdx(),
+            )
+        )
+        extra_order = max(0, -donor.GetFormalCharge() - len(bonds))
+        for bond in bonds:
+            order = 1 + min(2, extra_order)
+            extra_order -= order - 1
+            bond.SetBondType(
+                (Chem.BondType.SINGLE, Chem.BondType.DOUBLE, Chem.BondType.TRIPLE)[order - 1]
+            )
+            donor.SetFormalCharge(donor.GetFormalCharge() + order)
+            metal = bond.GetEndAtom()
+            metal.SetFormalCharge(metal.GetFormalCharge() - order)
+        _consume_active_lone_pair(donor)
 
 
 def _is_explicit_singlet_two_electron_center(atom: Chem.Atom) -> bool:
@@ -209,7 +267,13 @@ def make_dative_bond(
                 # BR4- type, skip
                 continue
             close_non_metal_atom_ids_set.add(close_non_metal_atom_id)
-            if _is_explicit_carbyne_center(non_metal_atom):
+            if _has_limited_coordination_valence(
+                metal_atom.GetAtomicNum()
+            ) and _is_explicit_singlet_two_electron_center(non_metal_atom):
+                # A lone-pair donor to a valence-limited acceptor uses the same
+                # charge-separated single-bond representation as other donors.
+                rwmol.AddBond(close_non_metal_atom_id, int(metal_atom_id), Chem.BondType.DATIVE)
+            elif _is_explicit_carbyne_center(non_metal_atom):
                 rwmol.AddBond(
                     close_non_metal_atom_id,
                     int(metal_atom_id),
@@ -264,6 +328,7 @@ def make_dative_bond(
             rwmol.AddBond(rd_bond.GetBeginAtomIdx(), int(metal_atom_id), Chem.BondType.DATIVE)
             rwmol.AddBond(rd_bond.GetEndAtomIdx(), int(metal_atom_id), Chem.BondType.DATIVE)
 
+    _normalize_limited_valence_coordination(rwmol)
     result = rwmol.GetMol()
     refresh_atom_electron_property_lists(result)
     return result
@@ -271,7 +336,7 @@ def make_dative_bond(
 
 def make_stereochemistry(rdmol: Chem.Mol) -> Chem.Mol:
     rdmol.UpdatePropertyCache(strict=False)
-    Chem.SetAromaticity(rdmol)
+    refresh_rdkit_aromaticity(rdmol)
     # This already perceives bond directions and atom tags, then cleans stereo.
     # Keep its directional single bonds: STEREONONE on a single bond does not
     # mean its direction is unused (it may encode E/Z on an adjacent double).

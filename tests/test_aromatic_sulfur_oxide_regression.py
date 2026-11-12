@@ -33,6 +33,11 @@ def test_aromatic_sulfur_oxide_uses_charge_separated_s_o_state(backend: str) -> 
         backend=backend,
     )
     heavy = Chem.RemoveHs(reconstructed)
+    # This test compares a hydrogen-folded reference. Drop the explicit-H
+    # writer's bracket requests on this copy before comparing canonical text.
+    for atom in heavy.GetAtoms():
+        if atom.HasProp("smilesSymbol"):
+            atom.ClearProp("smilesSymbol")
     sulfur = next(atom for atom in heavy.GetAtoms() if atom.GetAtomicNum() == 16)
     negative_oxygen = next(
         neighbor

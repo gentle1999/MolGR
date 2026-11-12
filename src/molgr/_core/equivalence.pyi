@@ -2,6 +2,7 @@ from typing import Any
 
 from .utils import MoleculeData
 
+def compare_mapped_stereo(left: MoleculeData, right: MoleculeData, mapping: list[int]) -> int: ...
 def evaluate(
     left: MoleculeData,
     right: MoleculeData,

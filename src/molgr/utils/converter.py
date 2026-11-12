@@ -35,26 +35,97 @@ OB_RDKIT_BOND_ORDER_MAPPING = {
 METAL_UNPAIRED_ELECTRONS_PROP = "MOLGR_METAL_UNPAIRED_ELECTRONS"
 
 
-def _sanitize_preserving_explicit_bonds(rdmol: Chem.Mol, *, kekulize: bool) -> None:
-    """Sanitize a graph without rejecting a valid explicit-bond representation.
+def _explicit_bond_copy(rdmol: Chem.Mol) -> Chem.Mol:
+    """Discard cached aromaticity while retaining authoritative integer bonds.
 
-    Reconstruction can leave an aromaticity assignment that RDKit cannot
-    Kekulize after charge/bond edits. In that case retain the explicit bond
-    orders supplied by Open Babel and skip only the failing Kekule step.
+    Open Babel's aromatic flags can outlive charge and bond edits. Asking
+    RDKit to Kekulize those flags can change double bonds *before* raising.
+    Only actual AROMATIC bond types require a Kekule assignment; perform that
+    operation on a disposable copy and propagate failures instead of returning
+    a partially modified graph.
     """
+    explicit = Chem.Mol(rdmol)
+    if any(b.GetBondType() == Chem.BondType.AROMATIC for b in explicit.GetBonds()):
+        Chem.Kekulize(explicit, clearAromaticFlags=True)
+    for atom in explicit.GetAtoms():
+        atom.SetIsAromatic(False)
+    for bond in explicit.GetBonds():
+        bond.SetIsAromatic(False)
+    explicit.ClearComputedProps()
+    explicit.UpdatePropertyCache(strict=False)
+    return explicit
 
-    if not kekulize:
-        Chem.SanitizeMol(rdmol)
+
+def _sanitize_preserving_explicit_bonds(rdmol: Chem.Mol, *, kekulize: bool) -> Chem.Mol:
+    """Return a sanitized copy; never reuse a failed Kekulization's mutations."""
+    sanitized = _explicit_bond_copy(rdmol)
+    Chem.SanitizeMol(sanitized)
+    if kekulize:
+        Chem.Kekulize(sanitized)
+    return sanitized
+
+
+def _perceive_rdkit_aromaticity(rdmol: Chem.Mol) -> None:
+    Chem.SanitizeMol(
+        rdmol,
+        sanitizeOps=(
+            Chem.SanitizeFlags.SANITIZE_SYMMRINGS
+            | Chem.SanitizeFlags.SANITIZE_FINDRADICALS
+            | Chem.SanitizeFlags.SANITIZE_SETAROMATICITY
+            | Chem.SanitizeFlags.SANITIZE_SETCONJUGATION
+        ),
+    )
+
+
+def refresh_rdkit_aromaticity(rdmol: Chem.Mol) -> None:
+    """Refresh serialization-facing aromaticity, preserving MolGR electron states.
+
+    Reconstruction supplies integer bond orders, so its normal path needs no
+    molecule copy or Kekulization. Save only the fields perception can change;
+    restore radicals in all cases and roll back graph fields on failure.
+    Actual AROMATIC bond inputs still require a disposable Kekulization copy.
+    """
+    bonds = [rdmol.GetBondWithIdx(i) for i in range(rdmol.GetNumBonds())]
+    if any(bond.GetBondType() == Chem.BondType.AROMATIC for bond in bonds):
+        perceived = _explicit_bond_copy(rdmol)
+        _perceive_rdkit_aromaticity(perceived)
+        for atom, normalized in zip(rdmol.GetAtoms(), perceived.GetAtoms()):
+            atom.SetIsAromatic(normalized.GetIsAromatic())
+        for bond, normalized in zip(bonds, perceived.GetBonds()):
+            bond.SetBondType(normalized.GetBondType())
+            bond.SetIsAromatic(normalized.GetIsAromatic())
+            bond.SetIsConjugated(normalized.GetIsConjugated())
+        rdmol.UpdatePropertyCache(strict=False)
         return
+
+    atoms = [rdmol.GetAtomWithIdx(i) for i in range(rdmol.GetNumAtoms())]
+    atom_state = [(atom.GetNumRadicalElectrons(), atom.GetIsAromatic()) for atom in atoms]
+    bond_state = [
+        (bond.GetBondType(), bond.GetIsAromatic(), bond.GetIsConjugated()) for bond in bonds
+    ]
     try:
-        Chem.SanitizeMol(rdmol)
-        Chem.Kekulize(rdmol)
-        return
-    except Chem.KekulizeException:
+        for atom in atoms:
+            atom.SetIsAromatic(False)
+        for bond in bonds:
+            bond.SetIsAromatic(False)
         rdmol.ClearComputedProps()
-        sanitize_ops = Chem.SanitizeFlags.SANITIZE_ALL ^ Chem.SanitizeFlags.SANITIZE_KEKULIZE
-        Chem.SanitizeMol(rdmol, sanitizeOps=sanitize_ops)
-        Chem.KekulizeIfPossible(rdmol, clearAromaticFlags=False)
+        rdmol.UpdatePropertyCache(strict=False)
+        _perceive_rdkit_aromaticity(rdmol)
+    except Exception:
+        for atom, (_, aromatic) in zip(atoms, atom_state):
+            atom.SetIsAromatic(aromatic)
+        for bond, (kind, aromatic, conjugated) in zip(bonds, bond_state):
+            bond.SetBondType(kind)
+            bond.SetIsAromatic(aromatic)
+            bond.SetIsConjugated(conjugated)
+        # Perception may have left intermediate ring/computed caches. Discard
+        # those derived values after restoring the authoritative graph fields.
+        rdmol.ClearComputedProps()
+        raise
+    finally:
+        for atom, (radicals, _) in zip(atoms, atom_state):
+            atom.SetNumRadicalElectrons(radicals)
+        rdmol.UpdatePropertyCache(strict=False)
 
 
 def _is_metal_atomic_num(atomic_num: int) -> bool:
@@ -422,7 +493,7 @@ def mol_data_to_rdkit(
     rdmol.AddConformer(conf)
 
     if sanitize:
-        _sanitize_preserving_explicit_bonds(rdmol, kekulize=kekulize)
+        rdmol = _sanitize_preserving_explicit_bonds(rdmol, kekulize=kekulize)
     elif kekulize:
         Chem.KekulizeIfPossible(rdmol)
     _restore_rdkit_unpaired_electrons(rdmol, unpaired_electrons)
@@ -470,7 +541,7 @@ def pybel_to_rdmol(
     rdmol = rwmol.GetMol()
     rdmol.UpdatePropertyCache(strict=False)
     if sanitize:
-        _sanitize_preserving_explicit_bonds(rdmol, kekulize=kekulize)
+        rdmol = _sanitize_preserving_explicit_bonds(rdmol, kekulize=kekulize)
     elif kekulize:
         Chem.KekulizeIfPossible(rdmol)
     _restore_rdkit_unpaired_electrons(rdmol, formal_radicals)
