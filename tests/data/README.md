@@ -30,8 +30,13 @@ square-planar center reached through a ring closure. Independently checked XYZ
 trans pairs N28/O30 and C19/O21 are asserted alongside rejection of the other
 square-planar isomers; their angles are approximately 169.74 and 174.61 degrees.
 
-The ten accepted cases from the reconstruction review are frozen under
-`reviewed/reconstruction/`, with their original XYZ checksums and electron-state
-annotations. Their regression tests compare coordination and stereochemistry on
-both backends. The aluminum case uses the corrected, subsequently approved graph with no
-radical oxygen–Al contact.
+The mixed reconstruction selections are frozen under `reviewed/reconstruction/`.
+Non-tmQMg manual examples retain their approved local graphs and strict
+coordination/stereochemistry checks (including the corrected aluminum case).
+The tmQMg records carry `published_reference` and use only tmQMg-Corrected
+2026-11-23. Release-excluded inputs have been removed, not retained as boundary
+or successful-reconstruction tests. Their comparisons use the release policy.
+
+All retained tmQMg inputs throughout this tree, including the 706-case regression
+selection, are eligible in the pinned published release. See [the offline tmQMg
+fixture README](tmqmg/README.md) for native payloads, provenance and licensing.

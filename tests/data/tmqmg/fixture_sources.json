@@ -2,105 +2,1709 @@
   "reconstruction": [
     {
       "id": "ABACAL",
-      "classification": "primary_no_neighbor_branch",
-      "reason": "Primary unified resonance pool without neighbor-radical or recovery actions."
+      "selection_classification": "primary_no_neighbor_branch",
+      "selection_reason": "Primary unified resonance pool without neighbor-radical or recovery actions."
     },
     {
       "id": "ABIRIO",
-      "classification": "neighbor_bond_order",
-      "reason": "Multiple adjacent-radical pairs resolved through bond-order actions with a published reference graph."
+      "selection_classification": "neighbor_bond_order",
+      "selection_reason": "Multiple adjacent-radical pairs resolved through bond-order actions with a published reference graph."
     },
     {
       "id": "ABELOK",
-      "classification": "radical_charge_localization",
-      "reason": "Primary pool winner uses radical-to-anion charge localization."
+      "selection_classification": "radical_charge_localization",
+      "selection_reason": "Primary pool winner uses radical-to-anion charge localization."
     },
     {
       "id": "ABUMUH",
-      "classification": "neighbor_bond_order",
-      "reason": "Progressive search succeeds in the bond-order-only neighbor-radical layer."
+      "selection_classification": "neighbor_bond_order",
+      "selection_reason": "Progressive search succeeds in the bond-order-only neighbor-radical layer."
     },
     {
       "id": "ABAGAM",
-      "classification": "primary_no_neighbor_branch",
-      "reason": "Unified resonance pool succeeds without neighbor-radical or recovery actions."
+      "selection_classification": "primary_no_neighbor_branch",
+      "selection_reason": "Unified resonance pool succeeds without neighbor-radical or recovery actions."
     },
     {
       "id": "ACEKAU",
-      "classification": "recovery_bond_break_with_neighbor",
-      "reason": "Neighbor bond-order resolution followed by last-tier bond recovery."
+      "selection_classification": "recovery_bond_break_with_neighbor",
+      "selection_reason": "Neighbor bond-order resolution followed by last-tier bond recovery."
     },
     {
       "id": "ADASOR",
-      "classification": "neutral_carbene_charge_localization",
-      "reason": "Preserve the neutral carbene instead of increasing the metal charge by two at unchanged aromaticity."
+      "selection_classification": "neutral_carbene_charge_localization",
+      "selection_reason": "Preserve the neutral carbene instead of increasing the metal charge by two at unchanged aromaticity."
     },
     {
       "id": "AFOYAV",
-      "classification": "neutral_carbene_charge_localization",
-      "reason": "Preserve the neutral carbene instead of increasing the metal charge by two at unchanged aromaticity."
+      "selection_classification": "neutral_carbene_charge_localization",
+      "selection_reason": "Preserve the neutral carbene instead of increasing the metal charge by two at unchanged aromaticity."
     },
     {
       "id": "ALUBAL",
-      "classification": "neutral_carbene_charge_localization",
-      "reason": "Preserve the neutral carbene instead of increasing the metal charge by two at unchanged aromaticity."
+      "selection_classification": "neutral_carbene_charge_localization",
+      "selection_reason": "Preserve the neutral carbene instead of increasing the metal charge by two at unchanged aromaticity."
     },
     {
       "id": "ABATUT",
-      "classification": "neutral_carbene_scope",
-      "reason": "Preserve Co(III) imido assignment; neutral-carbene preference must not apply to a nitrogen two-electron center."
+      "selection_classification": "neutral_carbene_scope",
+      "selection_reason": "Preserve Co(III) imido assignment; neutral-carbene preference must not apply to a nitrogen two-electron center."
     },
     {
-      "id": "ADEQOS",
-      "classification": "neutral_carbene_scope",
-      "reason": "Do not prefer a ligand-internal two-electron carbon center that is not visible for metal coordination."
+      "id": "GUMBAS",
+      "selection_classification": "seed_perception_alignment",
+      "selection_reason": "Shared seed bond perception preserves the Ni(II) reference instead of selecting Ni(IV) from a different initial Kekule graph."
+    },
+    {
+      "id": "OPAGES",
+      "selection_classification": "seed_perception_alignment",
+      "selection_reason": "Shared seed bond perception preserves the Hg(II) reference instead of selecting Hg(0) from the Open Babel XYZ plugin seed."
+    },
+    {
+      "id": "ZUPYAN",
+      "selection_classification": "metal_visible_cumulated_ring",
+      "selection_reason": "Retain Ru(II) and the short carbonyl instead of rejecting a metal-visible ring center."
+    },
+    {
+      "id": "BODFIJ",
+      "selection_classification": "unclosed_substituted_no_seed",
+      "selection_reason": "Keep the unclosed N-O seed so charge-aware normalization can recover the Ni(II) oximate ligands."
+    },
+    {
+      "id": "OXMTMI",
+      "selection_classification": "unclosed_substituted_no_seed",
+      "selection_reason": "Retain both equivalent Ni(II) oximate ligands without forced early N=O closure."
+    },
+    {
+      "id": "BADGUL",
+      "selection_classification": "coordinated_cumulene_scope",
+      "selection_reason": "Preserve Os(III); the neutral carbon-allene exception must not admit a charged N=C=C ring."
+    },
+    {
+      "id": "KARMIZ",
+      "selection_classification": "coordinated_cumulene_scope",
+      "selection_reason": "Preserve Ir(III); the neutral carbon-allene exception must not admit a charged O=C=C ring."
+    },
+    {
+      "id": "WECYUB",
+      "selection_classification": "coordinated_cumulene_aromatic_control",
+      "selection_reason": "Preserve aromatic ligand and Au(III) after refreshing stale candidate aromatic flags."
     }
   ],
   "source_issues": [
     {
       "id": "ABARAX",
-      "classification": "missing_reference_graph",
-      "reason": "tmQMg provides an XYZ structure but no reference SMILES graph."
+      "selection_classification": "missing_reference_graph",
+      "selection_reason": "tmQMg provides an XYZ structure but no reference SMILES graph."
     },
     {
       "id": "ABEGOD",
-      "classification": "accepted_reference_issue",
-      "reason": "Manual review found the MolGR Co(III) assignment chemically preferable to the tmQMg reference graph."
+      "selection_classification": "accepted_reference_issue",
+      "selection_reason": "Manual review found the MolGR Co(III) assignment chemically preferable to the tmQMg reference graph."
     },
     {
       "id": "ABETIK",
-      "classification": "accepted_reference_issue",
-      "reason": "Manual review found the MolGR Zr complex graph chemically preferable to the tmQMg reference graph."
+      "selection_classification": "accepted_reference_issue",
+      "selection_reason": "Manual review found the MolGR Zr complex graph chemically preferable to the tmQMg reference graph."
     },
     {
       "id": "ABETOQ",
-      "classification": "accepted_reference_issue",
-      "reason": "Manual review found the MolGR reconstruction chemically preferable to the tmQMg reference graph."
-    },
-    {
-      "id": "ABATEC",
-      "classification": "accepted_reference_issue",
-      "reason": "Manual review accepted the MolGR metal-hydride graph over the tmQMg reference graph."
+      "selection_classification": "accepted_reference_issue",
+      "selection_reason": "Manual review found the MolGR reconstruction chemically preferable to the tmQMg reference graph."
     },
     {
       "id": "ABEVAG",
-      "classification": "reference_formula_mismatch",
-      "reason": "Reference contains Br:3,C:10,H:30,La:1,N:5 while XYZ contains Br:3,C:10,H:15,La:1,N:5."
+      "selection_classification": "reference_formula_mismatch",
+      "selection_reason": "Reference contains Br:3,C:10,H:30,La:1,N:5 while XYZ contains Br:3,C:10,H:15,La:1,N:5."
     },
     {
       "id": "ACUGIP",
-      "classification": "reference_formula_mismatch",
-      "reason": "Reference contains C:20,H:45,La:1,N:9,O:11 while XYZ contains C:20,H:20,La:1,N:9,O:11."
+      "selection_classification": "reference_formula_mismatch",
+      "selection_reason": "Reference contains C:20,H:45,La:1,N:9,O:11 while XYZ contains C:20,H:20,La:1,N:9,O:11."
     },
     {
       "id": "ACUGOV",
-      "classification": "reference_formula_mismatch",
-      "reason": "Reference contains C:18,H:38,La:1,N:9,O:10 while XYZ contains C:18,H:14,La:1,N:9,O:10."
+      "selection_classification": "reference_formula_mismatch",
+      "selection_reason": "Reference contains C:18,H:38,La:1,N:9,O:10 while XYZ contains C:18,H:14,La:1,N:9,O:10."
     },
     {
       "id": "AKAGEZ",
-      "classification": "reference_formula_mismatch",
-      "reason": "Reference contains C:26,H:34,N:2,O:5,P:1,S:1,W:1 while XYZ contains C:26,H:33,N:2,O:5,P:1,S:1,W:1."
+      "selection_classification": "reference_formula_mismatch",
+      "selection_reason": "Reference contains C:26,H:34,N:2,O:5,P:1,S:1,W:1 while XYZ contains C:26,H:33,N:2,O:5,P:1,S:1,W:1."
+    }
+  ],
+  "backend_parity": [
+    {
+      "id": "XILPAL",
+      "selection_classification": "branch_perception_cache",
+      "selection_reason": "Replacement branches must discard cached hybridization and atom types before candidate scoring. Backend agreement does not establish reference equivalence."
+    },
+    {
+      "id": "XIXNID",
+      "selection_classification": "cation_recovery_endpoint_orientation",
+      "selection_reason": "Cation bond recovery must use SMARTS endpoint order rather than stored bond orientation. Backend agreement does not establish reference equivalence."
+    },
+    {
+      "id": "EGEHIJ",
+      "selection_classification": "cation_recovery_endpoint_orientation",
+      "selection_reason": "Cation bond recovery must use SMARTS endpoint order rather than stored bond orientation. Backend agreement does not establish reference equivalence."
+    },
+    {
+      "id": "FAKDOL",
+      "selection_classification": "nitrosyl_force_field_selection",
+      "selection_reason": "Near-linear NO+ must survive detached-ligand force-field ranking; local NO assertion only."
+    },
+    {
+      "id": "BIBZEV",
+      "selection_classification": "nitrosyl_zero_metal_filter",
+      "selection_reason": "Near-linear coordinated NO+ must not be rejected as an arbitrary organic cation at Fe(0); local NO assertion only."
+    },
+    {
+      "id": "BOBYAS",
+      "selection_classification": "nitrosyl_positive_control",
+      "selection_reason": "Preserve the already preferred NO+ assignment; no approval of other ligand assignments."
+    },
+    {
+      "id": "PEDNIY",
+      "selection_classification": "nitrosyl_bent_control",
+      "selection_reason": "Bent NO must abstain from the near-linear NO+ geometry preference."
+    },
+    {
+      "id": "RASBOC",
+      "selection_classification": "nitrosyl_charge_redistribution",
+      "selection_reason": "Only exempt the zero-metal cation veto when a same-ligand M(II)/NO- partner proves that the change is confined to M/NO."
+    },
+    {
+      "id": "BOWPEL",
+      "selection_classification": "anionic_nnn_charge_budget",
+      "selection_reason": "Preserve short ester carbonyls while assigning two tetrazole anions and Zn(II)."
+    },
+    {
+      "id": "GOHCOY",
+      "selection_classification": "anionic_nnn_charge_budget",
+      "selection_reason": "Do not consume a triazole radical as a cation when negative charge remains to be assigned."
+    },
+    {
+      "id": "JAYGEV",
+      "selection_classification": "short_carbonyl_geometry",
+      "selection_reason": "Reject gratuitous adjacent C-/O- localization at a short carbamate C=O; local assertion only."
+    },
+    {
+      "id": "YEVWAX",
+      "selection_classification": "long_dioxygen_geometry",
+      "selection_reason": "Long coordinated O-O bonds select peroxide ligands and Mo(VI) before the generic charge margin."
+    },
+    {
+      "id": "COCJOT",
+      "selection_classification": "co2_activation_control",
+      "selection_reason": "Retain the accepted reduced CO2 representation outside the ordinary-carbonyl rules; local decision only."
+    },
+    {
+      "id": "ALUSEI",
+      "selection_classification": "peroxide_candidate_generation",
+      "selection_reason": "Keep elongated O2 radicals available for charge assignment instead of reducing an imine."
+    },
+    {
+      "id": "FOXZOH",
+      "selection_classification": "peroxide_candidate_generation",
+      "selection_reason": "Generate both peroxide ligands before invoking N-oxide or aromatic bond recovery."
+    },
+    {
+      "id": "RITCIG",
+      "selection_classification": "long_carbonyl_seed_and_selection",
+      "selection_reason": "Retain the reduced ketone candidate and select Hf(IV) with a long C-O single bond; local assertion only."
+    },
+    {
+      "id": "FUDRIF",
+      "selection_classification": "long_carbonyl_geometry",
+      "selection_reason": "Two elongated coordinated acetones must not be promoted to neutral carbonyls by the charge margin."
+    },
+    {
+      "id": "TILXIX",
+      "selection_classification": "long_carbonyl_geometry",
+      "selection_reason": "Preserve reduced elongated aldehyde ligands; local assertion only."
+    },
+    {
+      "id": "KUPMOX",
+      "selection_classification": "long_carbonyl_geometry",
+      "selection_reason": "Preserve the elongated coordinated aldehyde single bond without approving other ligand states."
+    },
+    {
+      "id": "SIPDEB",
+      "selection_classification": "long_carbonyl_geometry",
+      "selection_reason": "Select the reduced elongated aldehyde while retaining the other carbonyl ligands."
+    },
+    {
+      "id": "AVEPEW",
+      "selection_classification": "long_carbonyl_geometry",
+      "selection_reason": "Preserve both elongated coordinated aldehyde single bonds."
+    },
+    {
+      "id": "XASJEK",
+      "selection_classification": "reduced_co2_and_nitrosyl_control",
+      "selection_reason": "Retain the accepted reduced CO2 representation and previously fixed NO+ assignment."
+    },
+    {
+      "id": "QEHQUP",
+      "selection_classification": "nhc_charge_separation_control",
+      "selection_reason": "Retain the accepted C-=N+ carbene representation and normal short carbonyl."
+    },
+    {
+      "id": "ACADCO",
+      "selection_classification": "azinium_charge_assignment",
+      "selection_reason": "Restore the aromatic azinium cation before spending positive charge on nitrite."
+    },
+    {
+      "id": "GAYZEO",
+      "selection_classification": "bent_ring_allene_cleanup",
+      "selection_reason": "Preserve aromatic aryl anions and restore Ir-C and sulfoxide-S coordination."
+    },
+    {
+      "id": "OHIMEA",
+      "selection_classification": "bent_ring_allene_seed",
+      "selection_reason": "Defer bent ring-allene closure and preserve peripheral aryl rings with Ru(IV)."
+    },
+    {
+      "id": "SOZCIW",
+      "selection_classification": "azinium_geometry_selection",
+      "selection_reason": "Retain the compact planar pyridinium ring at the valid Ni(II) charge target."
+    },
+    {
+      "id": "ITUCUW",
+      "selection_classification": "coordinated_cumulene_macrocycle_control",
+      "selection_reason": "Preserve ligand aromaticity and metal(II) across the same covalent component; whole-reference equivalence remains unresolved."
+    },
+    {
+      "id": "QEJSIK",
+      "selection_classification": "coordinated_cumulene_macrocycle_control",
+      "selection_reason": "Preserve ligand aromaticity and metal(II) across the same covalent component; whole-reference equivalence remains unresolved."
+    },
+    {
+      "id": "CAKKIM",
+      "selection_classification": "geometry_electronic_seed",
+      "selection_reason": "Explore geometry-supported fluorophosphoranide alternatives while retaining the ordinary state. Dataset SMILES is provenance, not an approved graph; manual standard review is pending."
+    },
+    {
+      "id": "BUBNUK",
+      "selection_classification": "geometry_electronic_seed",
+      "selection_reason": "Explore an O/N seesaw phosphoranide while retaining the ordinary seed. Verify backend parity and conservation; the existing standard remains under chemical review. Same-ligand structural evidence: doi:10.1016/j.ica.2019.119239."
+    },
+    {
+      "id": "ARUTIR",
+      "selection_classification": "nitrosonium_formal_charge_bookkeeping",
+      "selection_reason": "Geometry-qualified NO+ with neutral resolved ancillary ligands must not force ancillary-ligand reduction to avoid a negative formal metal charge. Native candidate scoring parity; full graphs are maintained in the standard SQLite database."
+    },
+    {
+      "id": "DEYCUI",
+      "selection_classification": "nitrosonium_formal_charge_bookkeeping",
+      "selection_reason": "Geometry-qualified NO+ with neutral resolved ancillary ligands must not force ancillary-ligand reduction to avoid a negative formal metal charge. Native candidate scoring parity; full graphs are maintained in the standard SQLite database."
+    },
+    {
+      "id": "BISJOC",
+      "selection_classification": "nitrosonium_formal_charge_bookkeeping",
+      "selection_reason": "Geometry-qualified NO+ with neutral resolved ancillary ligands must not force ancillary-ligand reduction to avoid a negative formal metal charge. Native candidate scoring parity; full graphs are maintained in the standard SQLite database."
+    },
+    {
+      "id": "NSTPRU",
+      "selection_classification": "nitrosonium_formal_charge_bookkeeping",
+      "selection_reason": "Geometry-qualified NO+ with neutral resolved ancillary ligands must not force ancillary-ligand reduction to avoid a negative formal metal charge. Native candidate scoring parity; full graphs are maintained in the standard SQLite database."
+    },
+    {
+      "id": "BALDIE",
+      "selection_classification": "nitrosonium_formal_charge_bookkeeping",
+      "selection_reason": "Geometry-qualified NO+ with neutral resolved ancillary ligands must not force ancillary-ligand reduction to avoid a negative formal metal charge. Native candidate scoring parity; full graphs are maintained in the standard SQLite database."
+    },
+    {
+      "id": "HIKPUP",
+      "selection_classification": "nitrosonium_formal_charge_bookkeeping",
+      "selection_reason": "Geometry-qualified NO+ with neutral resolved ancillary ligands must not force ancillary-ligand reduction to avoid a negative formal metal charge. Native candidate scoring parity; full graphs are maintained in the standard SQLite database."
+    },
+    {
+      "id": "CEBWUB",
+      "selection_classification": "nitrosonium_formal_charge_bookkeeping",
+      "selection_reason": "Geometry-qualified NO+ with neutral resolved ancillary ligands must not force ancillary-ligand reduction to avoid a negative formal metal charge. Native candidate scoring parity; full graphs are maintained in the standard SQLite database."
+    },
+    {
+      "id": "OHIHEV",
+      "selection_classification": "nitrosonium_formal_charge_bookkeeping",
+      "selection_reason": "Geometry-qualified NO+ with neutral resolved ancillary ligands must not force ancillary-ligand reduction to avoid a negative formal metal charge. Native candidate scoring parity; full graphs are maintained in the standard SQLite database."
+    },
+    {
+      "id": "WEDNEY",
+      "selection_classification": "nitrosonium_formal_charge_bookkeeping",
+      "selection_reason": "Geometry-qualified NO+ with neutral resolved ancillary ligands must not force ancillary-ligand reduction to avoid a negative formal metal charge. Native candidate scoring parity; full graphs are maintained in the standard SQLite database."
+    },
+    {
+      "id": "XEMDEZ",
+      "selection_classification": "terminal_hydrazido_geometry",
+      "selection_reason": "Geometry-qualified terminal hydrazido alternatives preserve charge and explicit hydrogen constraints; pyramidal long N=N+ and bent isodiazene controls. Backend parity does not approve a complete standard graph."
+    },
+    {
+      "id": "DERYUV",
+      "selection_classification": "terminal_hydrazido_geometry",
+      "selection_reason": "Geometry-qualified terminal hydrazido alternatives preserve charge and explicit hydrogen constraints; pyramidal long N=N+ and bent isodiazene controls. Backend parity does not approve a complete standard graph."
+    },
+    {
+      "id": "HUPHOR",
+      "selection_classification": "terminal_hydrazido_geometry",
+      "selection_reason": "Geometry-qualified terminal hydrazido alternatives preserve charge and explicit hydrogen constraints; pyramidal long N=N+ and bent isodiazene controls. Backend parity does not approve a complete standard graph."
+    }
+  ],
+  "connectivity": [
+    {
+      "id": "ETAPUK",
+      "required_edges": [
+        [
+          1,
+          7
+        ]
+      ],
+      "forbidden_edges": [],
+      "selection_classification": "reviewed_missing_connection",
+      "selection_reason": "Connectivity-only review; published SMILES is context, not a whole-graph answer. Edge indices are zero-based XYZ indices."
+    },
+    {
+      "id": "JUZJOD",
+      "required_edges": [],
+      "forbidden_edges": [
+        [
+          17,
+          19
+        ]
+      ],
+      "selection_classification": "retain_small_angle_pruning",
+      "selection_reason": "Connectivity-only review; published SMILES is context, not a whole-graph answer. Edge indices are zero-based XYZ indices."
+    },
+    {
+      "id": "LAFYOI",
+      "required_edges": [
+        [
+          4,
+          6
+        ]
+      ],
+      "forbidden_edges": [],
+      "selection_classification": "reviewed_missing_connection",
+      "selection_reason": "Connectivity-only review; published SMILES is context, not a whole-graph answer. Edge indices are zero-based XYZ indices."
+    },
+    {
+      "id": "ODOGOF",
+      "required_edges": [
+        [
+          1,
+          4
+        ]
+      ],
+      "forbidden_edges": [],
+      "selection_classification": "reviewed_missing_connection",
+      "selection_reason": "Connectivity-only review; published SMILES is context, not a whole-graph answer. Edge indices are zero-based XYZ indices."
+    },
+    {
+      "id": "CUSTAL",
+      "required_edges": [],
+      "forbidden_edges": [
+        [
+          41,
+          43
+        ]
+      ],
+      "selection_classification": "retain_small_angle_pruning",
+      "selection_reason": "Connectivity-only review; published SMILES is context, not a whole-graph answer. Edge indices are zero-based XYZ indices."
+    },
+    {
+      "id": "CEQGUA",
+      "required_edges": [
+        [
+          1,
+          5
+        ]
+      ],
+      "forbidden_edges": [],
+      "selection_classification": "reviewed_missing_connection",
+      "selection_reason": "Connectivity-only review; published SMILES is context, not a whole-graph answer. Edge indices are zero-based XYZ indices."
+    },
+    {
+      "id": "QANQAA",
+      "required_edges": [
+        [
+          48,
+          63
+        ]
+      ],
+      "forbidden_edges": [],
+      "selection_classification": "reviewed_missing_connection",
+      "selection_reason": "Connectivity-only review; published SMILES is context, not a whole-graph answer. Edge indices are zero-based XYZ indices."
+    },
+    {
+      "id": "CAGJED",
+      "required_edges": [
+        [
+          2,
+          4
+        ]
+      ],
+      "forbidden_edges": [],
+      "selection_classification": "reviewed_missing_connection",
+      "selection_reason": "Connectivity-only review; published SMILES is context, not a whole-graph answer. Edge indices are zero-based XYZ indices."
+    },
+    {
+      "id": "RIHGAQ",
+      "required_edges": [
+        [
+          4,
+          17
+        ]
+      ],
+      "forbidden_edges": [],
+      "selection_classification": "reviewed_missing_connection",
+      "selection_reason": "Connectivity-only review; published SMILES is context, not a whole-graph answer. Edge indices are zero-based XYZ indices."
+    },
+    {
+      "id": "FETBOY",
+      "required_edges": [
+        [
+          2,
+          5
+        ]
+      ],
+      "forbidden_edges": [
+        [
+          1,
+          2
+        ]
+      ],
+      "selection_classification": "reviewed_missing_connection",
+      "selection_reason": "Connectivity-only review; published SMILES is context, not a whole-graph answer. Edge indices are zero-based XYZ indices."
+    },
+    {
+      "id": "FODQUK",
+      "required_edges": [
+        [
+          53,
+          56
+        ]
+      ],
+      "forbidden_edges": [],
+      "selection_classification": "reviewed_missing_connection",
+      "selection_reason": "Connectivity-only review; published SMILES is context, not a whole-graph answer. Edge indices are zero-based XYZ indices."
+    },
+    {
+      "id": "ODOGUL",
+      "required_edges": [
+        [
+          1,
+          4
+        ]
+      ],
+      "forbidden_edges": [],
+      "selection_classification": "reviewed_missing_connection",
+      "selection_reason": "Connectivity-only review; published SMILES is context, not a whole-graph answer. Edge indices are zero-based XYZ indices."
+    }
+  ],
+  "electronic_validity": [],
+  "gold_electronic_assignment": [
+    {
+      "id": "AGACAP",
+      "gold_formal_charge": 3,
+      "gold_neighbors_1based": [
+        28,
+        29,
+        30,
+        31
+      ],
+      "selection_classification": "reviewed_gold_local_invariant",
+      "selection_reason": "Square-planar corrole retains Au(III) and a trianionic macrocycle."
+    },
+    {
+      "id": "CEGPAI",
+      "gold_formal_charge": 1,
+      "gold_neighbors_1based": [
+        2,
+        13,
+        34,
+        65
+      ],
+      "selection_classification": "reviewed_gold_local_invariant",
+      "selection_reason": "Boroauride retains neutral detached boranes and Au(-I); RDKit Au-B single-bond normalization gives formal Au+ and two B-."
+    },
+    {
+      "id": "CIDWEV",
+      "gold_formal_charge": 1,
+      "gold_neighbors_1based": [
+        5,
+        14
+      ],
+      "selection_classification": "reviewed_gold_local_invariant",
+      "selection_reason": "Preserve short terminal diazo N-N multiple bonding and Au-C coordination."
+    },
+    {
+      "id": "EBOYIG",
+      "gold_formal_charge": 3,
+      "gold_neighbors_1based": [
+        17,
+        18,
+        19,
+        20
+      ],
+      "selection_classification": "reviewed_gold_local_invariant",
+      "selection_reason": "Pyrrolide resonance normalization preserves the Au(III) corrole assignment."
+    },
+    {
+      "id": "ENSPAU",
+      "gold_formal_charge": 3,
+      "gold_neighbors_1based": [
+        12,
+        13,
+        20,
+        21
+      ],
+      "selection_classification": "reviewed_gold_local_invariant",
+      "selection_reason": "Sulfite S+ retains a Lewis lone pair and can coordinate through sulfur."
+    },
+    {
+      "id": "FATCEJ",
+      "gold_formal_charge": 3,
+      "gold_neighbors_1based": [
+        2,
+        3,
+        26,
+        27
+      ],
+      "selection_classification": "reviewed_gold_local_invariant",
+      "selection_reason": "Long terminal C-S bonds and a short exocyclic C-C support the dithiolate resonance contributor."
+    },
+    {
+      "id": "FETBIS",
+      "gold_formal_charge": 1,
+      "gold_neighbors_1based": [
+        2,
+        4,
+        6
+      ],
+      "selection_classification": "reviewed_gold_local_invariant",
+      "selection_reason": "Restore boron contacts and the short B=N bond without spurious spin or the distant covalent-Cl contact."
+    },
+    {
+      "id": "HUXZIM",
+      "gold_formal_charge": 3,
+      "gold_neighbors_1based": [
+        2,
+        3,
+        5,
+        16
+      ],
+      "selection_classification": "reviewed_gold_local_invariant",
+      "selection_reason": "Restore the short contact to the bent carbon-only cumulene center."
+    },
+    {
+      "id": "MIKLOK",
+      "gold_formal_charge": 1,
+      "gold_neighbors_1based": [
+        38,
+        40
+      ],
+      "selection_classification": "reviewed_gold_local_invariant",
+      "selection_reason": "Three resonance steps recover Au(I) without reducing the remote short C=C."
+    },
+    {
+      "id": "OTOPIY",
+      "gold_formal_charge": 1,
+      "gold_neighbors_1based": [
+        2,
+        3
+      ],
+      "selection_classification": "reviewed_gold_local_invariant",
+      "selection_reason": "Resolve phosphorus cumulene charge onto the adjacent imidazolium ring, retaining Au(I)-P coordination."
+    },
+    {
+      "id": "QEPYUH",
+      "gold_formal_charge": 3,
+      "gold_neighbors_1based": [
+        2,
+        4,
+        57,
+        68
+      ],
+      "selection_classification": "reviewed_gold_local_invariant",
+      "selection_reason": "Retain the four-coordinate Au(III) core and both phosphorus donors."
+    },
+    {
+      "id": "RIZHAL",
+      "gold_formal_charge": 3,
+      "gold_neighbors_1based": [
+        2,
+        3,
+        6,
+        16
+      ],
+      "selection_classification": "reviewed_gold_local_invariant",
+      "selection_reason": "Two pyrrolide anions and two neutral imines give Au(III), independently of the erroneous Au(V) source."
+    },
+    {
+      "id": "WONRAV",
+      "gold_formal_charge": 3,
+      "gold_neighbors_1based": [
+        2,
+        3,
+        5,
+        16
+      ],
+      "selection_classification": "reviewed_gold_local_invariant",
+      "selection_reason": "Restore the short contact to the bent carbon-only cumulene center."
+    },
+    {
+      "id": "XOLVOK",
+      "gold_formal_charge": 1,
+      "gold_neighbors_1based": [
+        2,
+        69
+      ],
+      "selection_classification": "reviewed_gold_local_invariant",
+      "selection_reason": "Preserve diazo N-N multiple bonding, Au-C coordination and the short ester carbonyl."
+    }
+  ],
+  "sulfur_electronic_assignment": [
+    {
+      "id": "ACUTAU",
+      "metal_formal_charge": 4,
+      "required_bonds_1based": [
+        [
+          2,
+          14,
+          "SINGLE"
+        ],
+        [
+          3,
+          12,
+          "SINGLE"
+        ],
+        [
+          4,
+          16,
+          "SINGLE"
+        ],
+        [
+          5,
+          18,
+          "SINGLE"
+        ],
+        [
+          14,
+          12,
+          "DOUBLE"
+        ],
+        [
+          16,
+          18,
+          "DOUBLE"
+        ]
+      ],
+      "required_atom_charges_1based": [
+        [
+          2,
+          -1
+        ],
+        [
+          3,
+          -1
+        ],
+        [
+          4,
+          -1
+        ],
+        [
+          5,
+          -1
+        ]
+      ],
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_repair",
+      "selection_reason": "User accepts the complete post-fix MolGR graph; preserve explicit atoms, electronic state, coordination and stereo."
+    },
+    {
+      "id": "ADURUP",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_long_cs_reference_issue",
+      "selection_reason": "User rejects source reference and accepts the complete current explicit-H MolGR graph after the 39-case long C-S review."
+    },
+    {
+      "id": "ALILOX",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_control",
+      "selection_reason": "User accepts the displayed original MolGR graph; geometry-selection changes must preserve this explicit-H graph."
+    },
+    {
+      "id": "AMAMOQ",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_control",
+      "selection_reason": "User accepts the displayed original MolGR graph; geometry-selection changes must preserve this explicit-H graph."
+    },
+    {
+      "id": "ARAMIQ",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "ASALIR",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "ATETUR",
+      "metal_formal_charge": 4,
+      "required_bonds_1based": [
+        [
+          2,
+          6,
+          "SINGLE"
+        ],
+        [
+          3,
+          11,
+          "SINGLE"
+        ],
+        [
+          16,
+          20,
+          "SINGLE"
+        ],
+        [
+          17,
+          25,
+          "SINGLE"
+        ],
+        [
+          6,
+          11,
+          "AROMATIC"
+        ],
+        [
+          20,
+          25,
+          "AROMATIC"
+        ]
+      ],
+      "required_atom_charges_1based": [
+        [
+          2,
+          -1
+        ],
+        [
+          3,
+          -1
+        ],
+        [
+          16,
+          -1
+        ],
+        [
+          17,
+          -1
+        ]
+      ],
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_repair",
+      "selection_reason": "User accepts the complete post-fix MolGR graph; preserve explicit atoms, electronic state, coordination and stereo."
+    },
+    {
+      "id": "ATULUZ",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "ATUMAG",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "AZESED",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "BABMUO",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_repair",
+      "selection_reason": "User accepts the complete post-fix MolGR graph; preserve explicit atoms, electronic state, coordination and stereo."
+    },
+    {
+      "id": "BEQFOS",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_long_cs_reference_issue",
+      "selection_reason": "User rejects source reference and accepts the complete current explicit-H MolGR graph after the 39-case long C-S review."
+    },
+    {
+      "id": "BEQGAF",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_long_cs_reference_issue",
+      "selection_reason": "User rejects source reference and accepts the complete current explicit-H MolGR graph after the 39-case long C-S review."
+    },
+    {
+      "id": "BESTOJ",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_control",
+      "selection_reason": "User accepts the displayed original MolGR graph; geometry-selection changes must preserve this explicit-H graph."
+    },
+    {
+      "id": "BEWFAN",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_control",
+      "selection_reason": "User accepts the displayed original MolGR graph; geometry-selection changes must preserve this explicit-H graph."
+    },
+    {
+      "id": "CEQSEW",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_long_cs_reference_issue",
+      "selection_reason": "User rejects source reference and accepts the complete current explicit-H MolGR graph after the 39-case long C-S review."
+    },
+    {
+      "id": "DETKIW",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_control",
+      "selection_reason": "User accepts the displayed original MolGR graph; geometry-selection changes must preserve this explicit-H graph."
+    },
+    {
+      "id": "DICMOT",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_control",
+      "selection_reason": "User accepts the displayed original MolGR graph; geometry-selection changes must preserve this explicit-H graph."
+    },
+    {
+      "id": "DIJROD",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "DIKCIJ",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "DISFIX",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "DULPUV",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "ECIKIN",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_long_cs_reference_issue",
+      "selection_reason": "User rejects source reference and accepts the complete current explicit-H MolGR graph after the 39-case long C-S review."
+    },
+    {
+      "id": "EGEGON",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "EPISEC",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "FIQCUF",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_long_cs_reference_issue",
+      "selection_reason": "User rejects source reference and accepts the complete current explicit-H MolGR graph after the 39-case long C-S review."
+    },
+    {
+      "id": "FIQDAM",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_long_cs_reference_issue",
+      "selection_reason": "User rejects source reference and accepts the complete current explicit-H MolGR graph after the 39-case long C-S review."
+    },
+    {
+      "id": "FOCCAC",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_repair",
+      "selection_reason": "User accepts the complete post-fix MolGR graph; preserve explicit atoms, electronic state, coordination and stereo."
+    },
+    {
+      "id": "GACLIF",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "GAKTUH",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_long_cs_reference_issue",
+      "selection_reason": "User rejects source reference and accepts the complete current explicit-H MolGR graph after the 39-case long C-S review."
+    },
+    {
+      "id": "GAXDUE",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_long_cs_reference_issue",
+      "selection_reason": "User rejects source reference and accepts the complete current explicit-H MolGR graph after the 39-case long C-S review."
+    },
+    {
+      "id": "GEFLOS",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_repair",
+      "selection_reason": "User accepts the complete post-fix MolGR graph; preserve explicit atoms, electronic state, coordination and stereo."
+    },
+    {
+      "id": "GOYQES",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_long_cs_reference_issue",
+      "selection_reason": "User rejects source reference and accepts the complete current explicit-H MolGR graph after the 39-case long C-S review."
+    },
+    {
+      "id": "HECHAA",
+      "metal_formal_charge": 4,
+      "required_bonds_1based": [
+        [
+          2,
+          15,
+          "SINGLE"
+        ],
+        [
+          15,
+          1,
+          "DATIVE"
+        ]
+      ],
+      "required_atom_charges_1based": [
+        [
+          2,
+          0
+        ],
+        [
+          15,
+          -1
+        ]
+      ],
+      "metal_neighbors_1based": [
+        5,
+        6,
+        7,
+        8,
+        9,
+        15
+      ],
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_repair",
+      "selection_reason": "User accepts the complete post-fix MolGR graph; preserve explicit atoms, electronic state, coordination and stereo."
+    },
+    {
+      "id": "HELQUK",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_long_cs_reference_issue",
+      "selection_reason": "User rejects source reference and accepts the complete current explicit-H MolGR graph after the 39-case long C-S review."
+    },
+    {
+      "id": "HELWUQ",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_long_cs_reference_issue",
+      "selection_reason": "User rejects source reference and accepts the complete current explicit-H MolGR graph after the 39-case long C-S review."
+    },
+    {
+      "id": "HGCETS",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "HOCMAN",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "HOCMER",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "HOGMEV",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_repair",
+      "selection_reason": "User accepts the complete post-fix MolGR graph; preserve explicit atoms, electronic state, coordination and stereo."
+    },
+    {
+      "id": "HOGMUL",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_long_cs_reference_issue",
+      "selection_reason": "User rejects source reference and accepts the complete current explicit-H MolGR graph after the 39-case long C-S review."
+    },
+    {
+      "id": "HOXJUZ",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_long_cs_reference_issue",
+      "selection_reason": "User rejects source reference and accepts the complete current explicit-H MolGR graph after the 39-case long C-S review."
+    },
+    {
+      "id": "HOXKAG",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_long_cs_reference_issue",
+      "selection_reason": "User rejects source reference and accepts the complete current explicit-H MolGR graph after the 39-case long C-S review."
+    },
+    {
+      "id": "HOXKEK",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_long_cs_reference_issue",
+      "selection_reason": "User rejects source reference and accepts the complete current explicit-H MolGR graph after the 39-case long C-S review."
+    },
+    {
+      "id": "HOYFAC",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_long_cs_reference_issue",
+      "selection_reason": "User rejects source reference and accepts the complete current explicit-H MolGR graph after the 39-case long C-S review."
+    },
+    {
+      "id": "HOYFEG",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_long_cs_reference_issue",
+      "selection_reason": "User rejects source reference and accepts the complete current explicit-H MolGR graph after the 39-case long C-S review."
+    },
+    {
+      "id": "HOYFUW",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_long_cs_reference_issue",
+      "selection_reason": "User rejects source reference and accepts the complete current explicit-H MolGR graph after the 39-case long C-S review."
+    },
+    {
+      "id": "HOYGAD",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_long_cs_reference_issue",
+      "selection_reason": "User rejects source reference and accepts the complete current explicit-H MolGR graph after the 39-case long C-S review."
+    },
+    {
+      "id": "HUYDUB",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_long_cs_reference_issue",
+      "selection_reason": "User rejects source reference and accepts the complete current explicit-H MolGR graph after the 39-case long C-S review."
+    },
+    {
+      "id": "IFIZIH",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_control",
+      "selection_reason": "User accepts the displayed original MolGR graph; geometry-selection changes must preserve this explicit-H graph."
+    },
+    {
+      "id": "IFIZON",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "IHEPIV",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "IHUDIZ",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_long_cs_reference_issue",
+      "selection_reason": "User rejects source reference and accepts the complete current explicit-H MolGR graph after the 39-case long C-S review."
+    },
+    {
+      "id": "IYABES",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "JESSEI",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "JIYZAT",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_repair",
+      "selection_reason": "User accepts the complete post-fix MolGR graph; preserve explicit atoms, electronic state, coordination and stereo."
+    },
+    {
+      "id": "JIYZEX",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_repair",
+      "selection_reason": "User accepts the complete post-fix MolGR graph; preserve explicit atoms, electronic state, coordination and stereo."
+    },
+    {
+      "id": "KAJNEQ",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "KEWSAK",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_long_cs_reference_issue",
+      "selection_reason": "User rejects source reference and accepts the complete current explicit-H MolGR graph after the 39-case long C-S review."
+    },
+    {
+      "id": "KIWCEY",
+      "assert_reviewed_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "KIWCIC",
+      "assert_reviewed_graph": true,
+      "selection_classification": "user_accepted_long_cs_reference_issue",
+      "selection_reason": "User rejects source reference and accepts the complete current explicit-H MolGR graph after the 39-case long C-S review."
+    },
+    {
+      "id": "KOGMEY",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_long_cs_reference_issue",
+      "selection_reason": "User rejects source reference and accepts the complete current explicit-H MolGR graph after the 39-case long C-S review."
+    },
+    {
+      "id": "KUFLAZ",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_repair",
+      "selection_reason": "User accepts the complete post-fix MolGR graph; preserve explicit atoms, electronic state, coordination and stereo."
+    },
+    {
+      "id": "KUFLED",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_repair",
+      "selection_reason": "User accepts the complete post-fix MolGR graph; preserve explicit atoms, electronic state, coordination and stereo."
+    },
+    {
+      "id": "LABMIL",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "LEMDOW",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "LUTSOL",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_repair",
+      "selection_reason": "User accepts the complete post-fix MolGR graph; preserve explicit atoms, electronic state, coordination and stereo."
+    },
+    {
+      "id": "MAZYUL",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_long_cs_reference_issue",
+      "selection_reason": "User rejects source reference and accepts the complete current explicit-H MolGR graph after the 39-case long C-S review."
+    },
+    {
+      "id": "MELBEN",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "MEMJIX",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "MIDJEQ",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "MOBYUZ",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "NAHDAB",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_control",
+      "selection_reason": "User accepts the displayed original MolGR graph; geometry-selection changes must preserve this explicit-H graph."
+    },
+    {
+      "id": "NAKMOF",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "NALSAU",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_long_cs_reference_issue",
+      "selection_reason": "User rejects source reference and accepts the complete current explicit-H MolGR graph after the 39-case long C-S review."
+    },
+    {
+      "id": "NAPRIH",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "NAXREK",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "NAXRIO",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "NUDTIP",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "NUJDED",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "NUNVIB",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_control",
+      "selection_reason": "User accepts the displayed original MolGR graph; geometry-selection changes must preserve this explicit-H graph."
+    },
+    {
+      "id": "NUSMOE",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_repair",
+      "selection_reason": "User accepts the complete post-fix MolGR graph; preserve explicit atoms, electronic state, coordination and stereo."
+    },
+    {
+      "id": "OJOMAC",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "OLOHIH",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "OLOHON",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "OLOHUT",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "ONOQOY",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "OQENUU",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "OQIMAF",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "OWUKIB",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "PAGNUI",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "PAGPAQ",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "PANFEP",
+      "assert_published_graph": true,
+      "selection_classification": "user_corrected_standard",
+      "selection_reason": "User approved the complete Nb(V), N–C⁻=S graph on 2026-11-16 and revoked the former Nb(III), N⁺=C=S graph. Native graph validation is covered by the reviewed SQLite fixture."
+    },
+    {
+      "id": "PCESMO",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_repair",
+      "selection_reason": "User accepts the complete post-fix MolGR graph; preserve explicit atoms, electronic state, coordination and stereo."
+    },
+    {
+      "id": "PETQEN",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_long_cs_reference_issue",
+      "selection_reason": "User rejects source reference and accepts the complete current explicit-H MolGR graph after the 39-case long C-S review."
+    },
+    {
+      "id": "PEWSUF",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_control",
+      "selection_reason": "User accepts the displayed original MolGR graph; geometry-selection changes must preserve this explicit-H graph."
+    },
+    {
+      "id": "POHLON",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "PSRHCP",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_long_cs_reference_issue",
+      "selection_reason": "User rejects source reference and accepts the complete current explicit-H MolGR graph after the 39-case long C-S review."
+    },
+    {
+      "id": "RARRIL",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_long_cs_reference_issue",
+      "selection_reason": "User rejects source reference and accepts the complete current explicit-H MolGR graph after the 39-case long C-S review."
+    },
+    {
+      "id": "REKYAK",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "RINQUB",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_repair",
+      "selection_reason": "User accepts the complete post-fix MolGR graph; preserve explicit atoms, electronic state, coordination and stereo."
+    },
+    {
+      "id": "ROKGUT",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "RUHVUL",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_long_cs_reference_issue",
+      "selection_reason": "User rejects source reference and accepts the complete current explicit-H MolGR graph after the 39-case long C-S review."
+    },
+    {
+      "id": "SAPPIJ",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_long_cs_reference_issue",
+      "selection_reason": "User rejects source reference and accepts the complete current explicit-H MolGR graph after the 39-case long C-S review."
+    },
+    {
+      "id": "SAQFUL",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "SESZIC",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_repair",
+      "selection_reason": "User accepts the complete post-fix MolGR graph; preserve explicit atoms, electronic state, coordination and stereo."
+    },
+    {
+      "id": "SOCWAI",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "SOHFOK",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_repair",
+      "selection_reason": "User accepts the complete post-fix MolGR graph; preserve explicit atoms, electronic state, coordination and stereo."
+    },
+    {
+      "id": "TADTUP",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "TAMHEY",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "TECMIA",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_repair",
+      "selection_reason": "User accepts the complete post-fix MolGR graph; preserve explicit atoms, electronic state, coordination and stereo."
+    },
+    {
+      "id": "TECNAT",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_repair",
+      "selection_reason": "User accepts the complete post-fix MolGR graph; preserve explicit atoms, electronic state, coordination and stereo."
+    },
+    {
+      "id": "TELBER",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "TONPIW",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "TONTIZ",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "TOWPOK",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "UCECIP",
+      "metal_formal_charge": 5,
+      "required_bonds_1based": [
+        [
+          2,
+          7,
+          "SINGLE"
+        ],
+        [
+          3,
+          8,
+          "SINGLE"
+        ],
+        [
+          4,
+          23,
+          "SINGLE"
+        ],
+        [
+          5,
+          24,
+          "SINGLE"
+        ],
+        [
+          7,
+          8,
+          "DOUBLE"
+        ],
+        [
+          23,
+          24,
+          "DOUBLE"
+        ]
+      ],
+      "required_atom_charges_1based": [
+        [
+          2,
+          -1
+        ],
+        [
+          3,
+          -1
+        ],
+        [
+          4,
+          -1
+        ],
+        [
+          5,
+          -1
+        ]
+      ],
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_repair",
+      "selection_reason": "User accepts the complete post-fix MolGR graph; preserve explicit atoms, electronic state, coordination and stereo."
+    },
+    {
+      "id": "VIFTOT",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_long_cs_reference_issue",
+      "selection_reason": "User rejects source reference and accepts the complete current explicit-H MolGR graph after the 39-case long C-S review."
+    },
+    {
+      "id": "VUGNAO",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_long_cs_reference_issue",
+      "selection_reason": "User rejects source reference and accepts the complete current explicit-H MolGR graph after the 39-case long C-S review."
+    },
+    {
+      "id": "WEQCOL",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "WOWQAC",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_long_cs_reference_issue",
+      "selection_reason": "User rejects source reference and accepts the complete current explicit-H MolGR graph after the 39-case long C-S review."
+    },
+    {
+      "id": "XAKCAP",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "XASVAS",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "XBECMO",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "XEFWEK",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "XOSRAZ",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_repair",
+      "selection_reason": "User accepts the complete post-fix MolGR graph; preserve explicit atoms, electronic state, coordination and stereo."
+    },
+    {
+      "id": "XOYZES",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "XUJHIT",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "YICXAM",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "YIHPAI",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "YIMCEG",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_long_cs_reference_issue",
+      "selection_reason": "User rejects source reference and accepts the complete current explicit-H MolGR graph after the 39-case long C-S review."
+    },
+    {
+      "id": "YISPUO",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "YISQAV",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "YOCSUE",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_long_cs_reference_issue",
+      "selection_reason": "User rejects source reference and accepts the complete current explicit-H MolGR graph after the 39-case long C-S review."
+    },
+    {
+      "id": "YOHPIV",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "YOJDEG",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "YOMJAL",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "YUCFIL",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "YUSQEL",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_long_cs_reference_issue",
+      "selection_reason": "User rejects source reference and accepts the complete current explicit-H MolGR graph after the 39-case long C-S review."
+    },
+    {
+      "id": "ZANKAA",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "ZAZKAM",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "ZAZKEQ",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
+    },
+    {
+      "id": "ZEQKIP",
+      "assert_published_graph": true,
+      "selection_classification": "user_accepted_sulfur_alternative",
+      "selection_reason": "User accepts the current MolGR graph as a usable representation; charge-separated carbene forms are preferred. Source reference is not labelled erroneous or excluded as an alternative."
     }
   ]
 }

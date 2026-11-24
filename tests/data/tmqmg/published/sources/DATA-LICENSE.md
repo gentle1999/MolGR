@@ -1,0 +1,9 @@
+# tmQMg-Corrected data license
+
+The tmQMg-Corrected contributors license the new Lewis structure annotations under Creative Commons Attribution 4.0 International (CC BY 4.0). When using or redistributing these annotations, credit tmQMg-Corrected, link the license, and indicate whether you made changes. Identify the release version when citing the dataset. [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) · [Full license text](CC-BY-4.0.txt)
+
+The identifiers and optimized coordinates originate in tmQMg by Kneiding and colleagues. tmQMg-Corrected reannotated the Lewis graphs while retaining the upstream coordinates and atom order. The upstream GitHub revision is `e1dc9887b8f20a217a1db6ca972d726bcbaab45b` and includes an MIT license. The NIRD graph archive by Kneiding and Balcells specifies CC BY 4.0. Retain upstream attribution and license notices. [Upstream repository](https://github.com/uiocompcat/tmQMg/tree/e1dc9887b8f20a217a1db6ca972d726bcbaab45b) · [Upstream MIT license](tmQMg-LICENSE.txt) · [NIRD archive](https://doi.org/10.11582/2025.5if4m3y3)
+
+H. Kneiding, R. Lukin, L. Lang, S. Reine, T. B. Pedersen, R. De Bin and D. Balcells. “Deep learning metal complex properties with natural quantum graphs.” *Digital Discovery* **2**, 618–633 (2023). [Original paper](https://doi.org/10.1039/D2DD00129B)
+
+The source comparisons use the Jensen Group’s `xyz2mol_tm` transcription at revision `db2734b084045ef895528c7a3d5040d38da23983`. For matched and alternative source strings, the evidence records the CSD ID, table, row, field and SHA-256 of the UTF-8 string. Obtain the named CSV from its source to repeat the comparison. The CC BY 4.0 grant above applies to the contributors’ new annotations. The source CSVs have their own provenance and applicable terms. [Source tables and provenance](https://github.com/jensengroup/xyz2mol_tm/tree/db2734b084045ef895528c7a3d5040d38da23983/SMILES_csvs) · [Jensen Group repository notice](xyz2mol_tm-LICENSE.txt)

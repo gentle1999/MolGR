@@ -99,13 +99,15 @@ def load_cases():
     for idx, smiles in enumerate((ROOT / "tests/test_cases.csv").read_text().splitlines()[1:], 1):
         if smiles.strip():
             cases.append(("regression_organic", f"case-{idx:02}", embedded(smiles.strip())))
-    for path in sorted((ROOT / "tests/data/reviewed/tmqmg/approved_graph").glob("*.sdf")):
-        mol = Chem.MolFromMolFile(str(path), sanitize=False, removeHs=False)
-        if mol is None:
-            raise RuntimeError(f"Cannot read {path}")
-        mol.UpdatePropertyCache(strict=False)
-        Chem.GetSymmSSSR(mol)
-        cases.append(("reviewed_coordination", path.stem, mol))
+    from scripts.tmqmg_fixture_data import reference_graph
+
+    manifest = json.loads((ROOT / "tests/data/reviewed/tmqmg/manifest.json").read_text())
+    for record in manifest["fixtures"]:
+        if record["kind"] == "published_reference":
+            mol = reference_graph(record["case_id"])
+            mol.UpdatePropertyCache(strict=False)
+            Chem.GetSymmSSSR(mol)
+            cases.append(("published_coordination", record["case_id"], mol))
     examples = {
         "TH_outside": coordination(((1, 0, 0), (0, 1, 0), (0, 0, 1), (-1, -1, -1)), "C", (3, 0, 0)),
         "OH4": coordination(((1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1))),

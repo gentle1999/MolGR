@@ -1,0 +1,67 @@
+{
+  "fixtures": [
+    {
+      "case_id": "OXYLDW",
+      "xyz_file": "OXYLDW.xyz",
+      "total_charge": 0,
+      "spin_multiplicity": 1,
+      "xyz_sha256": "21d046a0b2d2ed6d23234f442d4339f01b0db1536def6031181f972373b9896a",
+      "scope": "Original explicit-H input for geometry and candidate-filter regression; not a newly approved standard graph.",
+      "source": "tmQMg; original study DOI 10.1039/DT9840000883"
+    },
+    {
+      "case_id": "GOSHIF",
+      "xyz_file": "GOSHIF.xyz",
+      "total_charge": 0,
+      "spin_multiplicity": 1,
+      "xyz_sha256": "223e358616d99b8f8e2cc4bbc8814cf853bd5b53cf1025c9d7be4328fa793429",
+      "scope": "Original explicit-H input for local geometry and electronic candidate regression; no standard answer replaced.",
+      "source": "tmQMg; original study DOI 10.1021/ic981125w"
+    },
+    {
+      "case_id": "ZEGTUC",
+      "xyz_file": "ZEGTUC.xyz",
+      "total_charge": 0,
+      "spin_multiplicity": 1,
+      "xyz_sha256": "a3409cbcfac4758d5455f359c26108291668d214fafc8b40bc90eb37f1d3a611",
+      "scope": "Original explicit-H input for local geometry and electronic candidate regression; no standard answer replaced.",
+      "source": "tmQMg; original study DOI 10.1039/C2DT31537H"
+    },
+    {
+      "case_id": "WOLSOF",
+      "xyz_file": "WOLSOF.xyz",
+      "total_charge": 0,
+      "spin_multiplicity": 1,
+      "xyz_sha256": "c233e40a4a9fc3db4e78ee309cf39599b8b51251021e2c71f621a62f445f5213",
+      "scope": "Original explicit-H input; regression against the existing approved Zn(+2) graph, no standard replacement.",
+      "source": "tmQMg; same-composition primary study DOI 10.1021/ja991481t; CSD mapping not yet verified."
+    },
+    {
+      "case_id": "HOHMUP",
+      "xyz_file": "HOHMUP.xyz",
+      "total_charge": 0,
+      "spin_multiplicity": 1,
+      "xyz_sha256": "afa64cfbf12c747869244c8328afd71d496adca4362239c93bf419178b20de60",
+      "scope": "Original explicit-H input for neutral dithiooxamide candidate exploration; no standard graph replacement.",
+      "source": "tmQMg"
+    },
+    {
+      "case_id": "PIJNUS",
+      "xyz_file": "PIJNUS.xyz",
+      "total_charge": 0,
+      "spin_multiplicity": 1,
+      "xyz_sha256": "d0f76f3796d26556573d18f052a7d1e674bbb28c493b5dc60ca014edb87102c9",
+      "scope": "Original explicit-H input for localized allyl geometry and three C-Pd contacts; no standard graph replacement.",
+      "source": "tmQMg; original study DOI 10.1021/om7002865, compound 12. Heavy-atom topology and all 25 H attachments mapped to public CIF; crystal polymorph not uniquely identified."
+    },
+    {
+      "case_id": "PUBKED",
+      "xyz_file": "PUBKED.xyz",
+      "total_charge": 0,
+      "spin_multiplicity": 1,
+      "xyz_sha256": "710b7f6925215c657597efb12c4204aa6319019ba23335d707cd2085998e2ffc",
+      "scope": "Original explicit-H input for metal-supported N-N-C seed exploration; the sole reference is the published tmQMg-Corrected native graph loaded via scripts.tmqmg_fixture_data.reference_graph('PUBKED').",
+      "source": "tmQMg; same-composition primary study DOI 10.1021/ja808542j, compound 5. Crystal mapping not yet verified."
+    }
+  ]
+}

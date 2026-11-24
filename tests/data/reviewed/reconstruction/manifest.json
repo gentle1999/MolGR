@@ -3,16 +3,36 @@
   "fixtures": [
     {
       "case_id": "ADUGEO",
-      "kind": "approved_graph",
-      "review_status": "accept_candidate",
-      "source": "molgr_reconstruction",
-      "structure_file": "approved_graph/ADUGEO.sdf",
+      "kind": "published_reference",
+      "source": "tmQMg-Corrected",
+      "structure_file": "reference_graph/ADUGEO.sdf",
       "xyz_file": "xyz/ADUGEO.xyz",
       "xyz_sha256": "79cebb53d3c6fccea0e5e159a8aa4979ec7ac3dc774736c09283f481d2d3bc70",
       "total_charge": 1,
       "spin_multiplicity": 1,
       "total_radical_electrons": 0,
-      "smiles_stereo_roundtrip": true
+      "source_dataset": {
+        "dataset": "tmqmg-corrected",
+        "version": "2026-11-23",
+        "repository": "https://github.com/gentle1999/tmQMg-Corrected",
+        "revision": "aac372de0e859a6daf451084abe84a9ae58ad8e6",
+        "manifest_sha256": "ea04563079dfe4344601f6c896e36c24a847a69e4f320ec4f906a69203c3faf3",
+        "inputs": 74547,
+        "targets": 72040,
+        "exclusions": {
+          "Boron hydrogen bridge": 354,
+          "Missing input hydrogens": 770,
+          "Boron cluster": 1189,
+          "Questionable electronic state": 194
+        },
+        "benchmark": {
+          "use_chirality": false,
+          "ignore_metal_coordination_bonds": true,
+          "max_resonance": 100000,
+          "comparison_timeout_seconds": 60
+        }
+      },
+      "graph_sha256": "828e1e2de0edb0422fe087c2e069570e7b55b79544a03b49e892790d82bcde70"
     },
     {
       "case_id": "geometry-01a03dd8-a5ef-7c30-901a-3c8c4442b2f9",
@@ -93,43 +113,71 @@
       "smiles_stereo_roundtrip": false
     },
     {
-      "case_id": "ABATEC",
-      "kind": "approved_graph",
-      "review_status": "accept_candidate",
-      "source": "molgr_reconstruction",
-      "structure_file": "approved_graph/ABATEC.sdf",
-      "xyz_file": "tmqmg/source_issues/ABATEC.xyz",
-      "xyz_sha256": "6777d213d56dcc993bbd43508267fdad005b965054d8c323ba4ee038e2b3dab3",
-      "total_charge": 0,
-      "spin_multiplicity": 1,
-      "total_radical_electrons": 0,
-      "smiles_stereo_roundtrip": true
-    },
-    {
       "case_id": "ABEGOD",
-      "kind": "approved_graph",
-      "review_status": "accept_candidate",
-      "source": "molgr_reconstruction",
-      "structure_file": "approved_graph/ABEGOD.sdf",
+      "kind": "published_reference",
+      "source": "tmQMg-Corrected",
+      "structure_file": "reference_graph/ABEGOD.sdf",
       "xyz_file": "tmqmg/source_issues/ABEGOD.xyz",
       "xyz_sha256": "d784b80f69c7110ddc64a2888757e247f62bf8963a19f71cede6d0dac06d003d",
       "total_charge": 1,
       "spin_multiplicity": 1,
       "total_radical_electrons": 0,
-      "smiles_stereo_roundtrip": false
+      "review_note": "User approved adding the 2.069 A S22->Co17 contact on 2026-11-14; frozen stereo updated for the six-coordinate graph.",
+      "source_dataset": {
+        "dataset": "tmqmg-corrected",
+        "version": "2026-11-23",
+        "repository": "https://github.com/gentle1999/tmQMg-Corrected",
+        "revision": "aac372de0e859a6daf451084abe84a9ae58ad8e6",
+        "manifest_sha256": "ea04563079dfe4344601f6c896e36c24a847a69e4f320ec4f906a69203c3faf3",
+        "inputs": 74547,
+        "targets": 72040,
+        "exclusions": {
+          "Boron hydrogen bridge": 354,
+          "Missing input hydrogens": 770,
+          "Boron cluster": 1189,
+          "Questionable electronic state": 194
+        },
+        "benchmark": {
+          "use_chirality": false,
+          "ignore_metal_coordination_bonds": true,
+          "max_resonance": 100000,
+          "comparison_timeout_seconds": 60
+        }
+      },
+      "graph_sha256": "474f14a78699ec615deddeb83a9f40abb5672328796c1669fb593f68ce43d5df"
     },
     {
       "case_id": "AKAGEZ",
-      "kind": "approved_graph",
-      "review_status": "accept_candidate",
-      "source": "molgr_reconstruction",
-      "structure_file": "approved_graph/AKAGEZ.sdf",
+      "kind": "published_reference",
+      "source": "tmQMg-Corrected",
+      "structure_file": "reference_graph/AKAGEZ.sdf",
       "xyz_file": "tmqmg/source_issues/AKAGEZ.xyz",
       "xyz_sha256": "b024e54f1fa5dffba779e5483909bde18b12ab24ffd882b82b833534b756c1d7",
       "total_charge": 0,
       "spin_multiplicity": 1,
       "total_radical_electrons": 0,
-      "smiles_stereo_roundtrip": true
+      "source_dataset": {
+        "dataset": "tmqmg-corrected",
+        "version": "2026-11-23",
+        "repository": "https://github.com/gentle1999/tmQMg-Corrected",
+        "revision": "aac372de0e859a6daf451084abe84a9ae58ad8e6",
+        "manifest_sha256": "ea04563079dfe4344601f6c896e36c24a847a69e4f320ec4f906a69203c3faf3",
+        "inputs": 74547,
+        "targets": 72040,
+        "exclusions": {
+          "Boron hydrogen bridge": 354,
+          "Missing input hydrogens": 770,
+          "Boron cluster": 1189,
+          "Questionable electronic state": 194
+        },
+        "benchmark": {
+          "use_chirality": false,
+          "ignore_metal_coordination_bonds": true,
+          "max_resonance": 100000,
+          "comparison_timeout_seconds": 60
+        }
+      },
+      "graph_sha256": "52d20819c2f747c365eca0ec67eec2ded1d915aacd5869997e75e826ca172269"
     }
   ]
 }
