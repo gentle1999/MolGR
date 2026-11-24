@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 
+from molgr._native_types import NativeResonanceMove
+
 
 class EquivalenceMethod(str, Enum):
     IDEAL = "ideal"
@@ -166,7 +168,7 @@ class EquivalenceResult:
     open_shell_heuristic_triggered: bool = False
     native_stats: dict[str, object] = field(default_factory=dict)
     atom_mapping: tuple[int, ...] = ()
-    resonance_witness: tuple[dict[str, object], ...] = ()
+    resonance_witness: tuple[NativeResonanceMove, ...] = ()
 
 
 # Compatibility name retained for callers that imported the former detail type.

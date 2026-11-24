@@ -50,11 +50,11 @@ def _replay(left, right, result):
             assert cycle[0] == cycle[-1] and len(cycle) % 2 == 1
             for i, (u, v) in enumerate(zip(cycle, cycle[1:])):
                 bond(u, v, c if i % 2 == 0 else -c)
-        elif kind == "carbene_normalization":
+        elif kind in ("carbene_normalization", "paired_carbene_normalization"):
             bond(a, b, -1)
             q[a] += 1
             q[b] -= 1
-            r[a] = 2
+            r[a] = 0 if kind == "paired_carbene_normalization" else 2
         elif kind in ("polarization", "pair_donation"):
             bond(a, b, -1 if kind == "polarization" else 1)
             q[a] += 1
@@ -101,6 +101,44 @@ def test_native_witness_reaches_same_state(smiles1, smiles2, reverse):
     assert result["decision"] == "equivalent", result
     assert result["witness"]
     _replay(left, right, result)
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("renumber", [False, True])
+def test_raw_resonance_before_carbene_normalization(reverse, renumber):
+    # Delocalizing the carbon lone pair requires one ordinary electron-pair
+    # shift. Normalizing only the left C-=N+ first invents a bookkeeping
+    # diradical and prevents that closed-shell proof.
+    mols = [
+        Chem.AddHs(_mol(s))
+        for s in (
+            "C[N+](C)=[C-]C=CC=O",
+            "C[N+](C)=C=C[CH-]C=O",
+        )
+    ]
+    if renumber:
+        mols[1] = Chem.RenumberAtoms(mols[1], list(reversed(range(mols[1].GetNumAtoms()))))
+    if reverse:
+        mols.reverse()
+    inputs = [rdkit_to_mol_data(m) for m in mols]
+    result = _core.equivalence.evaluate(*inputs, use_chirality=False, max_resonance=128)
+    assert result["decision"] == "equivalent", result
+    assert result["witness"]
+    assert all("carbene" not in move["kind"] for move in result["witness"])
+    _replay(*inputs, result)
+
+
+def test_raw_resonance_probe_respects_zero_budget():
+    inputs = [
+        rdkit_to_mol_data(Chem.AddHs(_mol(s)))
+        for s in (
+            "C[N+](C)=[C-]C=CC=O",
+            "C[N+](C)=C=C[CH-]C=O",
+        )
+    ]
+    result = _core.equivalence.evaluate(*inputs, use_chirality=False, max_resonance=0)
+    assert result["decision"] == "inconclusive", result
+    assert not result["witness"]
 
 
 def test_public_entry_never_serializes_or_calls_legacy(monkeypatch):
@@ -492,11 +530,91 @@ def test_cached_regional_success_replays_and_does_not_leak_between_calls():
     _replay(a, b, result)
 
 
+def test_later_polyene_mapping_gets_a_deeper_round_within_the_shared_budget():
+    # In this numbering the first orientation of the carbon chain puts the
+    # negative charges far apart. Reversing the mapping needs only three shifts.
+    left = _mol("[CH2-]C=CC=CC=CC=CC=CC=CC=CC=C")
+    right = _mol("C=CC=CC=C[CH-]C=CC=CC=CC=CC=C")
+    right = Chem.RenumberAtoms(right, list(reversed(range(right.GetNumAtoms()))))
+    a, b = [eq._prepare_input(m, False)[0] for m in (left, right)]
+    compare = _core.equivalence.evaluate
+    assert compare(a, b, max_resonance=50, max_mappings=1)["decision"] == "inconclusive"
+    assert compare(a, b, max_resonance=50, max_resonance_steps=2)["decision"] == "inconclusive"
+    result = compare(a, b, max_resonance=50)
+    assert result["decision"] == "equivalent"
+    assert result["mappings"] == 2
+    assert len(result["witness"]) == 3
+    assert result["states_left"] + result["states_right"] <= 100
+    _replay(a, b, result)
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_repeated_spectators_preserve_the_short_resonance_proof(reverse):
+    left = _mol("[CH2-]" + "C=C" * 30)
+    right = _mol("C=C" * 3 + "[CH-]" + "C=C" * 27)
+    right = Chem.RenumberAtoms(right, list(reversed(range(right.GetNumAtoms()))))
+    spectators = _mol(".".join(["CC"] * 6))
+    inputs = [eq._prepare_input(Chem.CombineMols(m, spectators), False)[0] for m in (left, right)]
+    if reverse:
+        inputs.reverse()
+    result = _core.equivalence.evaluate(*inputs)
+    assert result["decision"] == "equivalent", result["reason"]
+    assert len(result["witness"]) == 3
+    assert result["mappings"] <= 2
+    assert not result["mapping_limit"]
+    _replay(*inputs, result)
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("renumber", [False, True])
+@pytest.mark.parametrize("conflict", [False, True])
+def test_missing_stereo_does_not_hide_an_independent_absolute_center(reverse, renumber, conflict):
+    left = _mol("F[C@H](Cl)[C@H](Br)I")
+    right = _mol("FC(Cl)[C@@H](Br)I" if conflict else "FC(Cl)[C@H](Br)I")
+    if renumber:
+        left = Chem.RenumberAtoms(left, list(reversed(range(left.GetNumAtoms()))))
+    if reverse:
+        left, right = right, left
+    result = eq.evaluate_equivalence(left, right, use_chirality=True)
+    assert result.decision.value == ("not_equivalent" if conflict else "inconclusive")
+
+
+@pytest.mark.parametrize("conflict", [False, True])
+def test_different_relative_groups_leave_independent_absolute_evidence(conflict):
+    left = _mol("F[C@H](Cl)[C@H](Br)I |&1:1|")
+    right = _mol("F[C@@H](Cl)[C@@H](Br)I" if conflict else "F[C@@H](Cl)[C@H](Br)I")
+    for a, b in ((left, right), (right, left)):
+        result = eq.evaluate_equivalence(a, b, use_chirality=True)
+        assert result.decision.value == ("not_equivalent" if conflict else "inconclusive")
+
+
+def test_spectator_assignment_preserves_cross_component_relative_stereo():
+    # The first two identical sigma skeletons belong to an AND group with the
+    # third fragment. Only one assignment preserves all three relative configurations.
+    left = _mol("F[C@H](Cl)Br.F[C@@H](Cl)Br.F[C@H](Cl)I |&1:1,5,9|")
+    right = _mol("F[C@@H](Cl)Br.F[C@H](Cl)Br.F[C@H](Cl)I |&1:1,5,9|")
+    wrong = _mol("F[C@H](Cl)Br.F[C@H](Cl)Br.F[C@H](Cl)I |&1:1,5,9|")
+    for a, b in ((left, right), (right, left)):
+        assert eq.evaluate_equivalence(a, b, use_chirality=True).equivalent
+    assert (
+        eq.evaluate_equivalence(left, wrong, use_chirality=True).decision.value == "not_equivalent"
+    )
+
+
+def test_repeated_topology_can_still_require_electron_moves():
+    left = _mol("CC(=O)N.CC(=O)N")
+    right = _mol("CC([O-])=[NH2+].CC(=O)N")
+    inputs = [eq._prepare_input(m, False)[0] for m in (left, right)]
+    result = _core.equivalence.evaluate(*inputs)
+    assert result["decision"] == "equivalent" and result["witness"]
+    _replay(*inputs, result)
+
+
 def test_expanded_defaults_agree_across_public_wrapper_and_native_entry():
-    # AGICAU needs more states than the former default permits.
+    # A single state per side leaves no room for AGICAU's ligand-electron shifts.
     left = _mol("COc1ccc(N2=C3C=CC=CC3=N3N=c4nccc[n-]4->[Pd+2]<-3<-2<-[Cl-])cc1")
     right = _mol("COc1ccc([N-]2c3ccccc3/[N]3=N/c4nccc[n]4->[Pd@SP1+2]<-3<-2<-[Cl-])cc1")
-    limited = eq.evaluate_equivalence(left, right, use_chirality=False, max_resonance=50)
+    limited = eq.evaluate_equivalence(left, right, use_chirality=False, max_resonance=1)
     assert limited.decision == eq.EquivalenceDecision.INCONCLUSIVE
     result = eq.evaluate_equivalence(left, right, use_chirality=False)
     assert result.equivalent, result

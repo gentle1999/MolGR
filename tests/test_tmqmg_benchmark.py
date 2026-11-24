@@ -988,29 +988,23 @@ def test_benchmark_default_budget_proves_native_abelok_resonance(scoring_runner)
     from molgr import MolGRConfig
     from molgr.interface import xyz_to_rdmol
     from molgr.utils.equivalence import EquivalenceDecision, evaluate_equivalence
+    from scripts.tmqmg_fixture_data import fixture as published_fixture
+    from scripts.tmqmg_fixture_data import reference_graph
 
-    fixtures = _PROJECT_ROOT / "tests" / "data" / "tmqmg" / "reconstruction"
-    with (fixtures / "manifest.csv").open() as handle:
-        fixture = next(row for row in csv.DictReader(handle) if row["case_id"] == "ABELOK")
+    fixture = published_fixture("ABELOK")
     config = MolGRConfig()
     config.cpp_backend.max_threads = 1
-    candidate = Chem.RemoveHs(
-        xyz_to_rdmol(
-            (fixtures / fixture["xyz_file"]).read_text(),
-            int(fixture["charge"]),
-            1,
-            backend="cpp",
-            config=config,
-        )
+    candidate = xyz_to_rdmol(
+        fixture["xyz"], fixture["charge"], fixture["multiplicity"], backend="cpp", config=config
     )
-    reference = Chem.MolFromSmiles(fixture["reference_smiles"])
+    reference = reference_graph("ABELOK")
     limited = evaluate_equivalence(reference, candidate, max_resonance=100)
-    assert limited.decision == EquivalenceDecision.INCONCLUSIVE
-    assert limited.bounded_search.limit_reached
+    assert limited.decision == EquivalenceDecision.EQUIVALENT
+    assert not limited.bounded_search.limit_reached
 
     result = scoring_runner(
         {
-            "case_idx": int(fixture["row_index"]),
+            "case_idx": fixture["input_index"],
             "input_smiles": fixture["reference_smiles"],
             "ground_truth_smiles": fixture["reference_smiles"],
             "ground_truth_rdmol": reference,

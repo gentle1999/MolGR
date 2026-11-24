@@ -3,6 +3,8 @@
 
 namespace
 {
+    /// @param s Native graph summary to expose in Python.
+    /// @return The Python field mapping for the composition, charge and known electron labels of one graph.
     py::dict Summary(const molgr::equivalence::Summary &s)
     {
         py::dict out;

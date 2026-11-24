@@ -5,10 +5,12 @@
 #include <openbabel/elements.h>
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <cmath>
 #include <deque>
 #include <functional>
 #include <numeric>
+#include <queue>
 #include <set>
 #include <stdexcept>
 #include <tuple>
@@ -20,37 +22,55 @@ namespace molgr::equivalence
     using namespace utils;
     namespace
     {
+        constexpr int MaxResonanceSteps = 10000;
         using Clock = std::chrono::steady_clock;
+        /// @param start Steady-clock timestamp at the beginning of the interval.
+        /// @return Elapsed steady-clock time in milliseconds.
         double Milliseconds(Clock::time_point start)
         {
             return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
         }
+        /// @param z Atomic number to look up in the nonmetal table.
+        /// @return True for an atomic number outside the reconstruction nonmetal table.
         bool Metal(int z) { return kNonMetalDict.count(z) == 0; }
+        /// @param z Atomic number to look up in the nonmetal table.
+        /// @return The tabulated outer electron count, or -1 for an element outside the nonmetal table.
         int Outer(int z)
         {
             auto p = kNonMetalDict.find(z);
             return p == kNonMetalDict.end() ? -1 : p->second.num_outer_electrons;
         }
+        /// Indexed graph edge carrying bond order, aromaticity and coordination-bond direction.
         struct Edge
         {
             int u, v, order, kind; // kind: 0=covalent, 1=metal incident, 2=directed dative, 3=undirected
             bool aromatic;
         };
+        /// Comparison graph with atom labels, edge indices and adjacency for a single reconstruction.
         struct Graph
         {
             const MoleculeData &source;
             int n;
-            std::vector<int> charge, radical, valence, matrix;
+            std::vector<int> charge, radical, valence, matrix, returned_pair_electrons;
             std::vector<Edge> edges;
             std::vector<std::vector<std::pair<int, int>>> adj;
             std::vector<bool> metal, stereo_fixed, unsupported;
-            bool rearrangeable = false;
+            bool rearrangeable = false, paired_carbene_mode = false;
+            /// @param u Zero-based graph vertex.
+            /// @param v Zero-based graph vertex.
+            /// @return Zero-based edge index, or -1 if the two vertices are not adjacent.
             int EdgeAt(int u, int v) const { return matrix[u * n + v]; }
+            /// Initialize the graph representation from transferable molecule records.
+            /// @param d Input atom, bond and stereo records.
             explicit Graph(const MoleculeData &d) : source(d), n(d.atoms.size()),
-                charge(n), radical(n), valence(n, 0), matrix(n * n, -1), adj(n),
+                charge(n), radical(n), valence(n, 0), matrix(n * n, -1), returned_pair_electrons(n, 0), adj(n),
                 metal(n), stereo_fixed(n, false), unsupported(n, false) {}
         };
 
+        /// @param data Transferable molecular graph records.
+        /// @param heavy Whether to omit hydrogen from the composition signature.
+        /// @param organic Whether to restrict the composition signature to nonmetal atoms.
+        /// @return A deterministic element-count signature with the requested atom filters.
         std::string Formula(const MoleculeData &data, bool heavy, bool organic)
         {
             std::map<std::string, int> counts;
@@ -58,6 +78,7 @@ namespace molgr::equivalence
                 if ((!heavy || a.atomic_num != 1) && (!organic || !Metal(a.atomic_num)))
                     ++counts[OpenBabel::OBElements::GetSymbol(a.atomic_num)];
             std::string result;
+            /// Append one element count to the formula and consume it from the remaining composition.
             auto add = [&](const std::string &symbol)
             {
                 auto p = counts.find(symbol);
@@ -71,6 +92,10 @@ namespace molgr::equivalence
             return result;
         }
 
+        /// Validate molecular records before using their atom indices for equivalence matching.
+        /// @param d Input atom, bond and stereo records.
+        /// @exception std::invalid_argument Malformed atom, bond, stereo or electronic records, or an
+        ///     input exceeding the native size limit.
         void Validate(const MoleculeData &d)
         {
             const int n = d.atoms.size();
@@ -141,9 +166,63 @@ namespace molgr::equivalence
             }
         }
 
-        Graph Prepare(const MoleculeData &d, const Options &options, Summary &summary)
+        /// Mark potential metal-bound carbene sites in molecular atom order.
+        /// @param d Input atom, bond and stereo records.
+        /// @return Mask in input atom order marking potential metal-carbene sites.
+        std::vector<bool> MetalCarbeneSites(const MoleculeData &d)
+        {
+            std::vector<bool> sites(d.atoms.size());
+            std::vector<int> metal_bonds(d.atoms.size(), 0), valence(d.atoms.size(), 0);
+            for (int i = 0; i < static_cast<int>(d.atoms.size()); ++i)
+            {
+                const auto &atom = d.atoms[i];
+                sites[i] = atom.atomic_num == 6 && !atom.formal_charge && !atom.radical_num &&
+                    !((atom.electron_property_presence & 4) && atom.unresolved_two_electron_center);
+            }
+            for (const auto &bond : d.bonds)
+            {
+                int u = bond.begin_atom_idx - 1, v = bond.end_atom_idx - 1;
+                for (auto [carbon, other] : {std::pair<int, int>{u, v}, {v, u}})
+                {
+                    if (!sites[carbon]) continue;
+                    if (bond.kind != BondKind::Covalent) { sites[carbon] = false; continue; }
+                    if (Metal(d.atoms[other].atomic_num))
+                    {
+                        if (bond.order != 2) sites[carbon] = false;
+                        ++metal_bonds[carbon];
+                    }
+                    else valence[carbon] += bond.order;
+                }
+            }
+            for (int i = 0; i < static_cast<int>(sites.size()); ++i)
+                sites[i] = sites[i] && metal_bonds[i] == 1 && valence[i] == 2;
+            return sites;
+        }
+
+        /// @param d Input atom, bond and stereo records.
+        /// @param sites Mask of potential carbene sites in molecular atom order.
+        /// @return True when a marked carbene site carries the electron annotations needed for
+        ///     normalization.
+        bool HasKnownPairedMetalCarbene(const MoleculeData &d, const std::vector<bool> &sites)
+        {
+            for (int i = 0; i < static_cast<int>(d.atoms.size()); ++i)
+                if ((d.atoms[i].electron_property_presence & 5) == 5 && sites[i]) return true;
+            return false;
+        }
+
+        /// Construct the comparison graph and collect composition and electronic-state diagnostics.
+        /// @param d Input atom, bond and stereo records.
+        /// @param options Graph projection settings and bounds for equivalence search.
+        /// @param summary Destination for the graph invariants used in equivalence comparison.
+        /// @param paired_carbene_mode Whether to compare the explicit paired-electron metal-carbene
+        ///     representation.
+        /// @param carbene_sites Mask of atom positions eligible for metal-carbene normalization.
+        /// @return Indexed graph prepared for the requested comparison.
+        Graph Prepare(const MoleculeData &d, const Options &options, Summary &summary,
+                      bool paired_carbene_mode, const std::vector<bool> &carbene_sites)
         {
             Graph g(d);
+            g.paired_carbene_mode = paired_carbene_mode;
             summary.atom_count = g.n;
             summary.formula = Formula(d, false, false);
             summary.heavy_formula = Formula(d, true, true);
@@ -169,7 +248,14 @@ namespace molgr::equivalence
                 {
                     int m = g.metal[u] ? u : v, ligand = g.metal[u] ? v : u;
                     if (b.order == 2)
-                        g.radical[ligand] += 2;
+                    {
+                        // A resolved, explicitly closed-shell metal carbene
+                        // returns a pair to carbon when the metal bond is
+                        // removed. Do not turn that pair into real radicals.
+                        // Unknown legacy inputs retain the prior convention.
+                        if (!paired_carbene_mode || !carbene_sites[ligand]) g.radical[ligand] += 2;
+                        else g.returned_pair_electrons[ligand] = 2;
+                    }
                     else
                     {
                         g.charge[m] += b.order;
@@ -191,6 +277,19 @@ namespace molgr::equivalence
                 else if (!metal_edge)
                     g.unsupported[u] = g.unsupported[v] = true;
             }
+            // RDKit's unannotated neutral valence-two C uses two bookkeeping
+            // radicals for an unspecified carbene. In a paired comparison it
+            // may represent a pair, but an explicitly known unpaired count
+            // or unresolved center must never be overwritten.
+            if (paired_carbene_mode)
+                for (int i = 0; i < g.n; ++i)
+                {
+                    const auto &atom = d.atoms[i];
+                    if (atom.atomic_num == 6 && !g.charge[i] && g.valence[i] == 2 && g.radical[i] == 2 &&
+                        !(atom.electron_property_presence & 1) &&
+                        !((atom.electron_property_presence & 2) && !atom.lone_pair_count) &&
+                        !((atom.electron_property_presence & 4) && atom.unresolved_two_electron_center)) g.radical[i] = 0;
+                }
             // Preserve the established deterministic hypervalent normalization.
             bool changed = true;
             while (changed)
@@ -239,6 +338,12 @@ namespace molgr::equivalence
             return g;
         }
 
+        /// @param g Indexed graph used for equivalence matching.
+        /// @param edge Index of the graph edge to label.
+        /// @param from Zero-based vertex from which the edge direction is viewed.
+        /// @param exact Whether to distinguish exact covalent orders and aromaticity.
+        /// @return An oriented edge label, optionally distinguishing exact covalent order and aromatic
+        ///     bonds.
         int EdgeLabel(const Graph &g, int edge, int from, bool exact)
         {
             if (edge < 0) return 0;
@@ -249,6 +354,10 @@ namespace molgr::equivalence
             return exact ? (b.aromatic ? 10 : b.order) : 1;
         }
 
+        /// Compare the multiplicities of the two sets of atom refinement colors.
+        /// @param left First vector of refined atom colors.
+        /// @param right Second vector of refined atom colors.
+        /// @return True if all color classes have matching populations.
         bool SameColors(const std::vector<int> &left, const std::vector<int> &right)
         {
             int count = 0;
@@ -262,10 +371,16 @@ namespace molgr::equivalence
 
         // One shared partition of the sigma skeleton. Electronic labels and
         // covalent orders must not split candidates that resonance can connect.
+        /// Refine atom colors jointly so the resulting labels can be compared across both graphs.
+        /// @param a First graph in the fixed comparison order.
+        /// @param b Second graph in the fixed comparison order.
+        /// @return Atom colors for the left and right graph, respectively.
         std::pair<std::vector<int>, std::vector<int>> Colors(const Graph &a, const Graph &b)
         {
             std::vector<int> left(a.n), right(b.n), next_a(a.n), next_b(b.n);
             std::map<std::vector<int>, int> table;
+            /// Intern a refinement signature in the table shared by both graphs so color numbers are
+            /// comparable.
             auto color = [&](const std::vector<int> &key) { auto [it, added] = table.emplace(key, table.size()); return it->second; };
             for (int side = 0; side < 2; ++side)
             {
@@ -301,6 +416,14 @@ namespace molgr::equivalence
             return {left, right};
         }
 
+        /// Test whether this atom pair and its electronic labels admit the metal-carbene normalization.
+        /// @param g Indexed graph used for equivalence matching.
+        /// @param u Zero-based graph vertex.
+        /// @param v Zero-based graph vertex.
+        /// @param q Formal charges indexed by vertex.
+        /// @param r Unpaired-electron counts indexed by vertex.
+        /// @param valence Current valence of each graph vertex.
+        /// @return True when this metal-carbon assignment meets the normalization conditions.
         bool CarbeneSite(const Graph &g, int u, int v, const std::vector<int> &q,
                          const std::vector<int> &r, const std::vector<int> &valence)
         {
@@ -310,6 +433,8 @@ namespace molgr::equivalence
                 valence[v] == element->second.default_valence + 1 && !r[u] && !r[v];
         }
 
+        /// @param g Indexed graph used for equivalence matching.
+        /// @return True when at least one edge permits metal-carbene normalization.
         bool CanNormalizeCarbene(const Graph &g)
         {
             for (const auto &e : g.edges)
@@ -319,10 +444,14 @@ namespace molgr::equivalence
             return false;
         }
 
+        /// Connected components and color signatures used to restrict atom mapping.
         struct Components
         {
             std::vector<int> of, charge, radicals;
             std::vector<std::vector<int>> signatures;
+            /// Partition the comparison graph into connected components using the supplied color labels.
+            /// @param g Indexed graph used for equivalence matching.
+            /// @param colors Jointly refined atom labels used to restrict possible mappings.
             Components(const Graph &g, const std::vector<int> &colors) : of(g.n, -1)
             {
                 for (int seed = 0; seed < g.n; ++seed)
@@ -344,6 +473,14 @@ namespace molgr::equivalence
             }
         };
 
+        /// Compare available electron annotations and track whether the two sides supply comparable data.
+        /// @param a First graph in the fixed comparison order.
+        /// @param b Second graph in the fixed comparison order.
+        /// @param i Source vertex index, zero-based.
+        /// @param j Target vertex index, zero-based.
+        /// @param comparable Output flag tracking whether both sides supply comparable electron
+        ///     annotations.
+        /// @return True if the comparable electron annotations agree.
         bool AtomAnnotations(const Graph &a, const Graph &b, int i, int j, int &comparable)
         {
             const auto &x = a.source.atoms[i], &y = b.source.atoms[j];
@@ -360,12 +497,19 @@ namespace molgr::equivalence
             {
                 ++comparable;
                 if (x.lone_pair_count != y.lone_pair_count)
-                    equal &= 2 * x.lone_pair_count + a.charge[i] + a.valence[i] + a.radical[i] ==
-                             2 * y.lone_pair_count + b.charge[j] + b.valence[j] + b.radical[j];
+                    equal &= 2 * x.lone_pair_count + a.charge[i] + a.valence[i] + a.radical[i] + a.returned_pair_electrons[i] ==
+                             2 * y.lone_pair_count + b.charge[j] + b.valence[j] + b.radical[j] + b.returned_pair_electrons[j];
             }
             return equal;
         }
 
+        /// Compare available electron annotations and track whether the two sides supply comparable data.
+        /// @param a First graph in the fixed comparison order.
+        /// @param b Second graph in the fixed comparison order.
+        /// @param mapping Zero-based image of each source atom in the target graph.
+        /// @param comparable Output flag tracking whether both sides supply comparable electron
+        ///     annotations.
+        /// @return True if the comparable electron annotations agree.
         bool Annotations(const Graph &a, const Graph &b, const std::vector<int> &mapping, int &comparable)
         {
             comparable = 0;
@@ -374,6 +518,10 @@ namespace molgr::equivalence
             return equal;
         }
 
+        /// @param a First graph in the fixed comparison order.
+        /// @param b Second graph in the fixed comparison order.
+        /// @param mapping Zero-based image of each source atom in the target graph.
+        /// @return True when the mapping preserves charges, radicals and exact oriented bond labels.
         bool ExactMapping(const Graph &a, const Graph &b, const std::vector<int> &mapping)
         {
             for (int i = 0; i < a.n; ++i)
@@ -387,13 +535,121 @@ namespace molgr::equivalence
             return true;
         }
 
+        /// Keep one proven identity mapping for each independent family of repeated components.
+        /// Other charge/topology families cannot use these atoms. Fixing the entire family
+        /// preserves a full bijection even when some electronic annotations are unknown.
+        struct SpectatorMappings
+        {
+            std::vector<std::vector<int>> families;
+            std::vector<int> fixed;
+            /// Relative stereo can couple configurations across otherwise disconnected fragments.
+            enum class StereoRole { None, Local, Relative };
+            std::vector<StereoRole> left_stereo, right_stereo;
+
+            /// @param g Prepared graph whose projected stereo records will be compared.
+            /// @param options Stereo and metal-coordination projection settings.
+            /// @return Centers with local stereo or enhanced stereo that may couple disconnected fragments.
+            static std::vector<StereoRole> StereoRoles(const Graph &g, const Options &options)
+            {
+                std::vector<StereoRole> roles(g.n, StereoRole::None);
+                if (!options.use_chirality) return roles;
+                for (const auto &s : g.source.stereo)
+                    if (ActiveStereo(g.source, s, options.ignore_metal_coordination_bonds))
+                        roles[s.center - 1] = StereoRole::Local;
+                for (const auto &group : g.source.stereo_groups)
+                    if (group.kind != StereoGroupKind::Absolute)
+                        for (int atom : group.atoms)
+                            if (roles[atom - 1] != StereoRole::None) roles[atom - 1] = StereoRole::Relative;
+                return roles;
+            }
+
+            /// @param a Source graph after applying the comparison's coordination policy.
+            /// @param b Target graph after the same projection.
+            /// @param components Covalent-component membership in the source graph.
+            /// @param signatures Color multiset and conserved charge used to restrict component pairing.
+            /// @param options Stereo and metal-coordination projection settings.
+            SpectatorMappings(const Graph &a, const Graph &b, const Components &components,
+                              const std::vector<std::vector<int>> &signatures, const Options &options)
+                : fixed(a.n, -1)
+            {
+                if (signatures.size() < 2) return;
+                std::map<std::vector<int>, std::vector<int>> classes;
+                for (int c = 0; c < static_cast<int>(signatures.size()); ++c)
+                    classes[signatures[c]].push_back(c);
+                std::vector<int> family_of(signatures.size(), -1);
+                for (const auto &[signature, members] : classes)
+                    if (members.size() > 1)
+                    {
+                        for (int c : members) family_of[c] = families.size();
+                        families.emplace_back();
+                    }
+                if (families.empty()) return;
+                std::vector<bool> linked(families.size(), false);
+                for (int i = 0; i < a.n; ++i)
+                {
+                    int family = family_of[components.of[i]];
+                    if (family < 0) continue;
+                    families[family].push_back(i);
+                    for (auto [j, e] : a.adj[i])
+                        if (family_of[components.of[j]] != family) linked[family] = true;
+                }
+                for (int i = static_cast<int>(families.size()) - 1; i >= 0; --i)
+                    if (linked[i]) families.erase(families.begin() + i);
+                if (families.empty()) return;
+                left_stereo = StereoRoles(a, options);
+                right_stereo = StereoRoles(b, options);
+            }
+
+            /// @param a Source electronic graph.
+            /// @param b Target electronic graph.
+            /// @param mapping Complete topology bijection respecting component signatures and charges.
+            /// @param stereo_matches Whether this bijection satisfies the projected stereo constraints.
+            void Remember(const Graph &a, const Graph &b, const std::vector<int> &mapping, bool stereo_matches)
+            {
+                for (auto family = families.begin(); family != families.end();)
+                {
+                    // A signature identifies possible partners, not chemical identity. Verify every
+                    // atom and edge of this whole family before suppressing any alternatives.
+                    bool exact = std::all_of(family->begin(), family->end(), [&](int i)
+                    {
+                        const int j = mapping[i];
+                        const auto role = std::max(left_stereo[i], right_stereo[j]);
+                        int comparable = 0;
+                        if (role == StereoRole::Relative || (role == StereoRole::Local && !stereo_matches) ||
+                            a.charge[i] != b.charge[j] || a.radical[i] != b.radical[j] ||
+                            !AtomAnnotations(a, b, i, j, comparable)) return false;
+                        for (auto [neighbor, e] : a.adj[i])
+                        {
+                            const auto &x = a.edges[e];
+                            const auto &y = b.edges[b.EdgeAt(j, mapping[neighbor])];
+                            if (x.order != y.order || x.aromatic != y.aromatic) return false;
+                        }
+                        return true;
+                    });
+                    if (!exact) { ++family; continue; }
+                    for (int i : *family) fixed[i] = mapping[i];
+                    family = families.erase(family);
+                }
+            }
+        };
+
+        /// Enumerate compatible vertex mappings under the mapping budget until a witness is accepted.
+        /// @param a First graph in the fixed comparison order.
+        /// @param b Second graph in the fixed comparison order.
+        /// @param candidates Candidate target vertices for each source vertex.
+        /// @param options Graph projection settings and bounds for equivalence search.
+        /// @param result Result record carrying the operation's output.
+        /// @param stereo_found Tracks whether a stereochemically compatible mapping has been found.
+        /// @param fixed Source atoms whose target partners are already proved in independent spectator families.
+        /// @param accept Callback deciding whether the current atom mapping supplies a witness.
+        /// @return True if the mapping search finds an accepted witness.
         bool MapGraphs(const Graph &a, const Graph &b, std::vector<std::vector<int>> candidates,
-                       const Options &options, Result &result, const bool &stereo_found,
+                       const Options &options, Result &result, const bool &stereo_found, const std::vector<int> &fixed,
                        const std::function<bool(const std::vector<int> &)> &accept)
         {
-            // Prefer localized identity, but never remove a candidate just for a
-            // charge/radical/bond-order difference. The same search proves both
-            // identity and resonance, without fixing an arbitrary first mapping.
+            /// Prefer localized identity, but never remove a candidate just for a
+            /// charge/radical/bond-order difference. The same search proves both
+            /// identity and resonance, without fixing an arbitrary first mapping.
             auto local_labels = [](const Graph &g)
             {
                 std::vector<std::vector<int>> labels(g.n);
@@ -419,6 +675,8 @@ namespace molgr::equivalence
             std::vector<int> available(a.n), mapping(a.n, -1);
             for (int i = 0; i < a.n; ++i)
             {
+                /// Prefer target vertices with compatible electron annotations, charges, radicals and local
+                /// bond labels.
                 auto score = [&](int j)
                 {
                     int count = 0;
@@ -442,6 +700,7 @@ namespace molgr::equivalence
                 for (const auto &s : b.source.stereo)
                     if (ActiveStereo(b.source, s, options.ignore_metal_coordination_bonds))
                         for (int ref : s.refs) if (ref) stereo_ref[ref - 1] = true;
+            /// Group interchangeable target vertices before branching on symmetry-equivalent mappings.
             auto twin_key = [&](int j)
             {
                 const auto &atom = b.source.atoms[j];
@@ -450,6 +709,7 @@ namespace molgr::equivalence
                     atom.electron_property_presence, atom.radical_num, atom.lone_pair_count, atom.unresolved_two_electron_center};
             };
             std::vector<int> removed;
+            /// Extend the partial atom bijection until a witness is accepted or a mapping limit is reached.
             std::function<bool(int)> visit = [&](int depth)
             {
                 if (result.mapping_nodes >= options.max_mapping_nodes || result.mappings >= options.max_mappings)
@@ -476,7 +736,7 @@ namespace molgr::equivalence
                 std::set<std::vector<int>> twins;
                 for (int j : candidates[selected])
                 {
-                    if (!allowed[selected * b.n + j]) continue;
+                    if ((fixed[selected] >= 0 && fixed[selected] != j) || !allowed[selected * b.n + j]) continue;
                     // First obtain a topology/stereo witness for diagnostics.
                     // Afterwards known annotation conflicts can reject partial
                     // mappings; unknown annotations remain compatible.
@@ -516,8 +776,12 @@ namespace molgr::equivalence
         }
 
         using State = std::vector<std::int16_t>;
+        /// Hash a vector of charge, radical and bond-order labels for visited-state lookup.
         struct StateHash
         {
+            /// Hash a vector of charge, radical and bond-order labels for visited-state lookup.
+            /// @param state Charge, radical and bond-order labels of the regional search state.
+            /// @return Hash of the state labels for use in the visited table or proof cache.
             std::size_t operator()(const State &state) const
             {
                 std::size_t h = 1469598103934665603ULL;
@@ -525,6 +789,7 @@ namespace molgr::equivalence
                 return h;
             }
         };
+        /// A connected subproblem with local atom labels and bond orders for a resonance proof.
         struct Region
         {
             std::vector<int> atoms, edges, fixed_valence;
@@ -535,6 +800,14 @@ namespace molgr::equivalence
             bool proved = false;
         };
 
+        /// Normalize eligible carbene electronic labels in place and record the moves in the witness.
+        /// @param g Indexed graph used for equivalence matching.
+        /// @param q Formal charges indexed by vertex.
+        /// @param r Unpaired-electron counts indexed by vertex.
+        /// @param orders Bond orders indexed by edge.
+        /// @param witness Electronic moves forming the equivalence proof.
+        /// @param side Graph side on which to record the normalization move.
+        /// @return True if at least one carbene normalization was applied.
         bool CarbeneNormalize(const Graph &g, std::vector<int> &q, std::vector<int> &r, std::vector<int> &orders,
                               std::vector<Move> &witness, int side)
         {
@@ -550,8 +823,8 @@ namespace molgr::equivalence
                 {
                     if (!CarbeneSite(g, u, v, q, r, valence)) continue;
                     --orders[e]; --valence[u]; --valence[v];
-                    ++q[u]; --q[v]; r[u] = 2; r[v] = 0;
-                    witness.push_back({"carbene_normalization", u, v, -1, side});
+                    ++q[u]; --q[v]; r[u] = g.paired_carbene_mode ? 0 : 2; r[v] = 0;
+                    witness.push_back({g.paired_carbene_mode ? "paired_carbene_normalization" : "carbene_normalization", u, v, -1, side});
                     changed = true;
                     break;
                 }
@@ -559,6 +832,11 @@ namespace molgr::equivalence
             return changed;
         }
 
+        /// Bound the number of local electron shifts needed to reach a target label vector.
+        /// @param state Charge, radical and bond-order labels of the regional search state.
+        /// @param target Desired regional electron and bond-order labels.
+        /// @param n Number of local vertices represented in the electronic state.
+        /// @return Minimum number of moves implied by the differing charge, radical and bond labels.
         int LowerBound(const State &state, const State &target, int n)
         {
             int q = 0, r = 0, bonds = 0;
@@ -567,7 +845,77 @@ namespace molgr::equivalence
             return std::max({(q + 1) / 2, (r + 1) / 2, (bonds + 1) / 2});
         }
 
-        bool SearchRegion(const Graph &g, const Region &region, const Options &options, Result &result)
+        /// @param region Connected atoms and eligible bonds in one ligand resonance problem.
+        /// @return Shortest bond-path lengths for estimating how far charge or radical labels must move.
+        std::vector<std::vector<int>> BondDistances(const Region &region)
+        {
+            const int n = region.atoms.size();
+            std::vector<std::vector<int>> distances(n, std::vector<int>(n, n));
+            for (int source = 0; source < n; ++source)
+            {
+                auto &row = distances[source];
+                row[source] = 0;
+                std::vector<int> queue{source};
+                for (std::size_t i = 0; i < queue.size(); ++i)
+                    for (auto [next, edge] : region.adj[queue[i]])
+                        if (row[next] == n)
+                        {
+                            row[next] = row[queue[i]] + 1;
+                            queue.push_back(next);
+                        }
+            }
+            return distances;
+        }
+
+        /// @param state Current formal-charge, radical and bond-order labels.
+        /// @param target Corresponding labels at the opposite end of the search.
+        /// @param distances Shortest bond paths inside the region.
+        /// @return Lower bound on the electron moves needed to transport charge and radicals.
+        int TransportBound(const State &state, const State &target,
+                           const std::vector<std::vector<int>> &distances)
+        {
+            const int n = distances.size();
+            std::int64_t moves = 0;
+            for (int offset : {0, n})
+            {
+                std::int64_t excess = 0, deficit = 0;
+                for (int i = 0; i < n; ++i)
+                {
+                    int delta = state[offset + i] - target[offset + i];
+                    if (!delta) continue;
+                    int nearest = n;
+                    for (int j = 0; j < n; ++j)
+                        if (delta > 0 ? state[offset + j] < target[offset + j]
+                                      : state[offset + j] > target[offset + j])
+                            nearest = std::min(nearest, distances[i][j]);
+                    if (delta > 0) excess += delta * nearest;
+                    else deficit -= delta * nearest;
+                }
+                // A move transports one unit of either charge or radical by at
+                // most two bonds. Both source and destination distances are lower bounds.
+                moves += (std::max(excess, deficit) + 1) / 2;
+            }
+            return static_cast<int>(std::min<std::int64_t>(moves, MaxResonanceSteps + 1));
+        }
+
+        /// Limits which prevented expansion in this round of ligand resonance search.
+        struct ResonanceCutoffs
+        {
+            int next_depth = INT32_MAX;
+            bool state_limit = false;
+        };
+
+        /// Search the region's electronic assignments for a path within the configured limits.
+        /// @param g Indexed graph used for equivalence matching.
+        /// @param region Connected electronic subproblem under the fixed atom mapping.
+        /// @param options Graph projection settings and bounds for equivalence search.
+        /// @param result Result record carrying the operation's output.
+        /// @param cutoffs Smallest excluded path bound and whether the state slice was exhausted.
+        /// @param directed Whether to prioritize regional states using their estimated distance to the
+        ///     target.
+        /// @return True if a path between the electronic assignments was found.
+        bool SearchRegion(const Graph &g, const Region &region, const Options &options, Result &result,
+                          ResonanceCutoffs &cutoffs, bool directed)
         {
             const int n = region.atoms.size();
             if (region.left == region.right) return true;
@@ -609,18 +957,29 @@ namespace molgr::equivalence
                     return true;
                 }
             }
-            if (options.max_resonance <= 0 || options.max_resonance_steps <= 0)
-            { result.resonance_limit = true; return false; }
+            const auto distances = directed ? BondDistances(region) : std::vector<std::vector<int>>{};
+            const int lower_bound = std::max(LowerBound(region.left, region.right, n),
+                                             TransportBound(region.left, region.right, distances));
+            if (lower_bound > options.max_resonance_steps)
+            {
+                cutoffs.next_depth = std::min(cutoffs.next_depth, lower_bound);
+                result.resonance_limit = true;
+                return false;
+            }
             if (result.states_left + result.states_right + 2 > 2 * options.max_resonance)
-            { result.resonance_limit = true; return false; }
+            { cutoffs.state_limit = true; result.resonance_limit = true; return false; }
             for (int offset : {0, n})
                 if (std::accumulate(region.left.begin() + offset, region.left.begin() + offset + n, 0) !=
                     std::accumulate(region.right.begin() + offset, region.right.begin() + offset + n, 0)) return false;
 
+            /// Search state with the parent information needed to reconstruct a witness path.
             struct Node { State state; int parent, depth; Move move; };
             std::vector<Node> nodes[2];
             std::unordered_map<State, int, StateHash> seen[2];
             std::vector<int> frontier[2]{{0}, {0}};
+            using Entry = std::tuple<int, int, int>;
+            std::priority_queue<Entry, std::vector<Entry>, std::greater<Entry>> ordered[2];
+            if (directed) { ordered[0].emplace(0, 0, 0); ordered[1].emplace(0, 0, 0); }
             nodes[0].push_back({region.left, -1, 0, {}});
             nodes[1].push_back({region.right, -1, 0, {}});
             seen[0].emplace(region.left, 0); seen[1].emplace(region.right, 0);
@@ -628,6 +987,8 @@ namespace molgr::equivalence
             int charge_bound = 0;
             for (int i = 0; i < n; ++i) charge_bound += std::max(std::abs(region.left[i]), std::abs(region.right[i]));
             charge_bound += 2;
+            /// Recompute regional valences and reject proposed charge, radical or bond labels outside their
+            /// limits.
             auto valid = [&](const State &state, std::vector<int> &valence)
             {
                 valence = region.fixed_valence;
@@ -654,6 +1015,8 @@ namespace molgr::equivalence
             std::vector<int> check;
             if (!valid(region.left, check) || !valid(region.right, check))
             { result.validation_failed = true; return false; }
+            /// Follow parent links from a meeting state on each side to append the electronic moves to the
+            /// proof.
             auto witness = [&](int side, int here, int there)
             {
                 for (auto [s, id] : {std::pair<int, int>{side, here}, {1 - side, there}})
@@ -668,32 +1031,55 @@ namespace molgr::equivalence
                     result.witness.insert(result.witness.end(), path.begin(), path.end());
                 }
             };
-            while (!frontier[0].empty() || !frontier[1].empty())
+            /// Count pending states for this side using its active search queue.
+            auto frontier_size = [&](int side) { return directed ? ordered[side].size() : frontier[side].size(); };
+            while (frontier_size(0) || frontier_size(1))
             {
-                int side = frontier[1].empty() ? 0 : frontier[0].empty() ? 1 :
-                    frontier[0].size() <= frontier[1].size() ? 0 : 1;
+                int side = !frontier_size(1) ? 0 : !frontier_size(0) ? 1 :
+                    frontier_size(0) <= frontier_size(1) ? 0 : 1;
                 const State &target = side ? region.left : region.right;
-                std::vector<int> next;
-                for (int parent : frontier[side])
+                std::vector<int> current, next;
+                if (directed)
+                {
+                    current.push_back(std::get<2>(ordered[side].top()));
+                    ordered[side].pop();
+                }
+                else current.swap(frontier[side]);
+                for (int parent : current)
                 {
                     // Node vectors may grow below: keep one small state copy,
                     // never a reference invalidated by vector reallocation.
                     State state = nodes[side][parent].state;
                     int depth = nodes[side][parent].depth;
-                    if (depth >= options.max_resonance_steps) { result.resonance_limit = true; continue; }
+                    if (seen[side].at(state) != parent) continue;
+                    if (depth >= options.max_resonance_steps)
+                    {
+                        cutoffs.next_depth = std::min(cutoffs.next_depth, depth + 1);
+                        result.resonance_limit = true;
+                        continue;
+                    }
                     std::vector<int> valence;
                     valid(state, valence);
-                    struct Candidate { State state; Move move; int distance; };
+                    /// A prospective local state ranked by its estimated remaining distance to the target.
+                    struct Candidate { State state; Move move; int distance, transport; };
                     std::vector<Candidate> candidates;
+                    /// Retain a valid electronic move only when its target-distance bound fits the
+                    /// remaining step budget.
                     auto emit = [&](State candidate, const char *kind, int a, int b, int c)
                     {
-                        if (seen[side].count(candidate)) return;
+                        auto previous = seen[side].find(candidate);
+                        if (previous != seen[side].end() && nodes[side][previous->second].depth <= depth + 1) return;
                         std::vector<int> unused;
                         if (!valid(candidate, unused)) return;
-                        int bound = LowerBound(candidate, target, n);
+                        const int transport = TransportBound(candidate, target, distances);
+                        const int bound = std::max(LowerBound(candidate, target, n), transport);
                         if (depth + 1 + bound > options.max_resonance_steps)
-                        { ++result.pruned_moves; result.resonance_limit = true; return; }
-                        candidates.push_back({std::move(candidate), {kind, region.atoms[a], region.atoms[b], c < 0 ? -1 : region.atoms[c], side}, bound});
+                        {
+                            cutoffs.next_depth = std::min(cutoffs.next_depth, depth + 1 + bound);
+                            ++result.pruned_moves; result.resonance_limit = true;
+                            return;
+                        }
+                        candidates.push_back({std::move(candidate), {kind, region.atoms[a], region.atoms[b], c < 0 ? -1 : region.atoms[c], side}, bound, transport});
                     };
                     for (int a = 0; a < n; ++a)
                     {
@@ -737,26 +1123,43 @@ namespace molgr::equivalence
                     std::stable_sort(candidates.begin(), candidates.end(), [](const auto &a, const auto &b) { return a.distance < b.distance; });
                     for (auto &candidate : candidates)
                     {
-                        if (seen[side].count(candidate.state)) continue;
+                        auto previous = seen[side].find(candidate.state);
+                        if (previous != seen[side].end() && nodes[side][previous->second].depth <= depth + 1) continue;
                         if (result.states_left + result.states_right >= 2 * options.max_resonance)
-                        { result.resonance_limit = true; return false; }
+                        { cutoffs.state_limit = true; result.resonance_limit = true; return false; }
                         int index = nodes[side].size();
-                        seen[side].emplace(candidate.state, index);
+                        // Directed expansion may reach a state by a longer path
+                        // first. Reopen it at a shorter depth without changing
+                        // the parent chain of an already recorded witness.
+                        seen[side].insert_or_assign(candidate.state, index);
                         auto meeting = seen[1 - side].find(candidate.state);
                         nodes[side].push_back({std::move(candidate.state), parent, depth + 1, candidate.move});
                         if (side) ++result.states_right; else ++result.states_left;
                         if (meeting != seen[1 - side].end() && depth + 1 + nodes[1 - side][meeting->second].depth <= options.max_resonance_steps)
                         { witness(side, index, meeting->second); return true; }
-                        next.push_back(index);
+                        if (directed)
+                        {
+                            int distance = 0;
+                            for (int k = 0; k < static_cast<int>(target.size()); ++k)
+                                distance += std::abs(nodes[side][index].state[k] - target[k]);
+                            // This is an expansion preference, not a proof or a
+                            // pruning bound. All chemical/step checks above apply.
+                            ordered[side].emplace(distance + 2 * candidate.transport, depth + 1, index);
+                        }
+                        else next.push_back(index);
                     }
                 }
-                frontier[side].swap(next);
+                if (!directed) frontier[side].swap(next);
             }
             return false;
         }
 
+        /// Hash the encoded resonance subproblem for memoization.
         struct ProblemHash
         {
+            /// Hash the encoded resonance subproblem for memoization.
+            /// @param key Lookup key for the recorded state or property.
+            /// @return Hash of the state labels for use in the visited table or proof cache.
             std::size_t operator()(const std::vector<int> &key) const
             {
                 std::size_t h = 1469598103934665603ULL;
@@ -765,32 +1168,40 @@ namespace molgr::equivalence
             }
         };
 
-        // Scoped to one Evaluate: the left graph, stereo constraints, allowed
-        // moves and step bound are fixed. Hash collisions still compare full keys.
+        /// Scoped to one deepening round: the left graph, stereo constraints, allowed
+        /// moves and step bound are fixed. Hash collisions still compare full keys.
         struct ResonanceContext
         {
+            ResonanceCutoffs cutoffs;
+            bool allow_normalization = true, directed = false;
             bool initialized = false, normalized = false, target_can_normalize = false;
             std::vector<int> charge, radical, orders, valence;
             std::vector<Move> normalization;
+            /// Cached match outcome and local electron-move witness.
             struct Proof { bool matched; std::vector<Move> moves; };
             std::unordered_set<std::vector<int>, ProblemHash> failed_targets;
             std::unordered_map<std::vector<int>, Proof, ProblemHash> regions;
             std::size_t payload_bytes = 0;
 
+            /// Initialize the reusable search context for the source and target graphs.
+            /// @param g Indexed graph used for equivalence matching.
+            /// @param target Target graph used in preparing the resonance context.
             void Initialize(const Graph &g, const Graph &target)
             {
                 if (initialized) return;
                 charge = g.charge; radical = g.radical;
                 orders.reserve(g.edges.size());
                 for (const auto &edge : g.edges) orders.push_back(edge.order);
-                target_can_normalize = CanNormalizeCarbene(target);
-                if (CanNormalizeCarbene(g))
+                target_can_normalize = allow_normalization && CanNormalizeCarbene(target);
+                if (allow_normalization && CanNormalizeCarbene(g))
                     normalized = CarbeneNormalize(g, charge, radical, orders, normalization, 0);
                 valence = g.valence;
                 for (const auto &move : normalization) { --valence[move.a]; --valence[move.b]; }
                 initialized = true;
             }
 
+            /// @param bytes Payload size requested from the bounded proof cache.
+            /// @return True if the requested storage fits within the memoization budget.
             bool Reserve(std::size_t bytes)
             {
                 // Bound both payload and container overhead. Saturation merely
@@ -801,6 +1212,12 @@ namespace molgr::equivalence
                 return true;
             }
 
+            /// Cache a region's outcome and the corresponding slice of its witness when space permits.
+            /// @param key Lookup key for the recorded state or property.
+            /// @param matched Whether this electronic subproblem has a successful witness.
+            /// @param witness Electronic moves forming the equivalence proof.
+            /// @param start First move of the witness slice to cache.
+            /// @param end End of the retained witness range.
             void RememberRegion(std::vector<int> key, bool matched, const std::vector<Move> &witness,
                                 std::size_t start, std::size_t end)
             {
@@ -814,12 +1231,17 @@ namespace molgr::equivalence
                 regions.emplace(std::move(key), std::move(proof));
             }
 
+            /// Cache a failed target to avoid repeating the electronic-state search.
+            /// @param key Lookup key for the recorded state or property.
             void RememberFailure(std::vector<int> key)
             {
                 if (Reserve(key.size() * sizeof(int))) failed_targets.insert(std::move(key));
             }
         };
 
+        /// Encode the region's connectivity and endpoint states for a cache lookup.
+        /// @param region Connected electronic subproblem under the fixed atom mapping.
+        /// @return Integer key encoding the local resonance subproblem.
         std::vector<int> RegionKey(const Region &region)
         {
             // Explicit membership/boundaries distinguish equal-looking states
@@ -832,13 +1254,20 @@ namespace molgr::equivalence
             return key;
         }
 
+        /// Reuse a cached proof or run bounded resonance search and record its outcome.
+        /// @param g Indexed graph used for equivalence matching.
+        /// @param region Connected electronic subproblem under the fixed atom mapping.
+        /// @param options Graph projection settings and bounds for equivalence search.
+        /// @param result Result record carrying the operation's output.
+        /// @param context Reusable search context and memoized resonance proofs.
+        /// @return True if a path between the electronic assignments was found.
         bool SearchRegionCached(const Graph &g, const Region &region, const Options &options,
                                 Result &result, ResonanceContext &context)
         {
             if (region.left == region.right) return true;
             // Successful first mappings need no cache. Their regional proofs
             // are stored lazily only if a later region rejects that mapping.
-            if (context.failed_targets.empty()) return SearchRegion(g, region, options, result);
+            if (context.failed_targets.empty()) return SearchRegion(g, region, options, result, context.cutoffs, context.directed);
             auto key = RegionKey(region);
             auto found = context.regions.find(key);
             if (found != context.regions.end())
@@ -849,18 +1278,38 @@ namespace molgr::equivalence
                 return found->second.matched;
             }
             std::size_t start = result.witness.size();
-            bool matched = SearchRegion(g, region, options, result);
+            bool matched = SearchRegion(g, region, options, result, context.cutoffs, context.directed);
             context.RememberRegion(std::move(key), matched, result.witness, start, result.witness.size());
             // A failed search stays inconclusive. Reuse is safe only within this
-            // evaluation, whose remaining shared state budget never increases.
+            // round; deeper rounds discard all cached negative results.
             return matched;
         }
 
+        /// Test resonance equivalence under a fixed atom mapping and record a successful electron-shift
+        /// witness.
+        /// @param a First graph in the fixed comparison order.
+        /// @param b Second graph in the fixed comparison order.
+        /// @param mapping Zero-based image of each source atom in the target graph.
+        /// @param options Graph projection settings and bounds for equivalence search.
+        /// @param result Result record carrying the operation's output.
+        /// @param carbene_only Output indicating whether carbene normalization alone explains the
+        ///     difference.
+        /// @param context Reusable search context and memoized resonance proofs.
+        /// @param raw_context Reusable search context and memoized resonance proofs.
+        /// @return True if the two mapped electronic states are connected by the allowed moves.
         bool Resonance(const Graph &a, const Graph &b, const std::vector<int> &mapping,
-                       const Options &options, Result &result, bool &carbene_only, ResonanceContext &context)
+                       const Options &options, Result &result, bool &carbene_only, ResonanceContext &context,
+                       ResonanceContext *raw_context = nullptr)
         {
             const auto start = Clock::now();
-            struct Timer { Result &r; Clock::time_point t; ~Timer() { r.resonance_ms += Milliseconds(t); } } timer{result, start};
+            /// Add the elapsed comparison time to the result on every scope exit.
+            struct Timer
+            {
+                Result &r;
+                Clock::time_point t;
+                /// Add the time spent in this resonance comparison to its result.
+                ~Timer() { r.resonance_ms += Milliseconds(t); }
+            } timer{result, start};
             context.Initialize(a, b);
             const auto &qa = context.charge, &ra = context.radical, &ba = context.orders, &va = context.valence;
             std::vector<int> qb(a.n), rb(a.n), bb;
@@ -875,7 +1324,34 @@ namespace molgr::equivalence
             normalized |= context.normalized;
             if (qa == qb && ra == rb && ba == bb) { carbene_only = normalized; return true; }
             carbene_only = false;
+            // Carbene conventions can move a closed-shell resonance problem
+            // into a less useful radical bookkeeping space. Before that search,
+            // try a bounded proof on the prepared, unnormalized electronic graphs.
+            // A failed probe never establishes inequivalence. Its states count
+            // toward the same global budget, leaving at least seven eighths for
+            // the normalized search on this mapping.
+            const int used = result.states_left + result.states_right;
+            const int probe_budget = std::min(4096, (2 * options.max_resonance - used) / 16);
+            if (raw_context && normalized && probe_budget == 0)
+                raw_context->cutoffs.state_limit = true;
+            if (raw_context && normalized && probe_budget > 0)
+            {
+                auto probe_options = options;
+                probe_options.max_resonance = used / 2 + probe_budget;
+                auto normalization = result.witness;
+                bool previous_limit = result.resonance_limit, previous_validation = result.validation_failed;
+                double previous_ms = result.resonance_ms;
+                bool unused = false;
+                bool proved = Resonance(a, b, mapping, probe_options, result, unused, *raw_context);
+                // The outer timer already includes the recursive probe.
+                result.resonance_ms = previous_ms;
+                result.resonance_limit = previous_limit;
+                result.validation_failed = previous_validation;
+                if (proved) return true;
+                result.witness = std::move(normalization);
+            }
             std::vector<int> target;
+            /// Encode the target labels under this mapping to reuse an earlier resonance-search result.
             auto target_key = [&]()
             {
                 target.reserve(2 * a.n + bb.size());
@@ -996,12 +1472,16 @@ namespace molgr::equivalence
         try
         {
             if (options.max_resonance < 0 || options.max_resonance > 1000000 ||
-                options.max_resonance_steps < 0 || options.max_resonance_steps > 10000 ||
+                options.max_resonance_steps < 0 || options.max_resonance_steps > MaxResonanceSteps ||
                 options.max_mappings < 0 || options.max_mapping_nodes < 0)
                 throw std::invalid_argument("Invalid native search budget");
             auto started = Clock::now();
             Validate(left); Validate(right);
-            auto a = Prepare(left, options, result.left), b = Prepare(right, options, result.right);
+            auto left_carbenes = MetalCarbeneSites(left), right_carbenes = MetalCarbeneSites(right);
+            bool paired_carbene_mode = HasKnownPairedMetalCarbene(left, left_carbenes) ||
+                                       HasKnownPairedMetalCarbene(right, right_carbenes);
+            auto a = Prepare(left, options, result.left, paired_carbene_mode, left_carbenes);
+            auto b = Prepare(right, options, result.right, paired_carbene_mode, right_carbenes);
             result.preparation_ms = Milliseconds(started);
             auto invariant = [&](const char *name, bool same) { result.invariants[name] = same ? 1 : -1; return same; };
             auto fail = [&](const char *reason) { result.decision = "not_equivalent"; result.reason = reason; return result; };
@@ -1028,32 +1508,32 @@ namespace molgr::equivalence
             bool stereo_missing = options.use_chirality &&
                 (HasActiveStereo(left, options.ignore_metal_coordination_bonds) !=
                  HasActiveStereo(right, options.ignore_metal_coordination_bonds));
-            ResonanceContext resonance_context;
-            auto accept = [&](const std::vector<int> &mapping, bool exact)
+            // Mapping enumeration is charged once. Try short electron-move paths as
+            // mappings arrive, then revisit compatible mappings in depth rounds.
+            // Each attempt gets a slice of the one shared state budget.
+            Options search = options;
+            int allowance = options.max_resonance;
+            if (options.max_mappings > 1 && options.max_resonance > 0)
             {
-                topology_found = true;
-                result.invariants["nonmetal_connectivity"] = 1;
-                if (!options.ignore_metal_coordination_bonds) result.invariants["metal_coordination"] = 1;
-                if (stereo_missing)
-                {
-                    result.reason = "Insufficient matching stereochemical information.";
-                    result.stop_reason = "stereo_incomplete";
-                    return true; // Stop mapping with INC, never an EQ witness.
-                }
-                int stereo = options.use_chirality ? CompareStereo(left, right, mapping, options.ignore_metal_coordination_bonds) : 1;
-                if (stereo < 0) stereo_unknown = true;
-                if (stereo != 1) return false;
-                stereo_found = true;
-                result.invariants["stereochemistry"] = options.use_chirality ? 1 : 0;
-                int comparable = 0;
-                bool compatible = Annotations(a, b, mapping, comparable);
-                result.comparable_fields = std::max(result.comparable_fields, comparable);
-                if (!compatible) { if (exact) structural_found = true; return false; }
-                annotation_found = true;
+                search.max_resonance_steps = std::min(2, options.max_resonance_steps);
+                allowance = std::min(16, std::max(1, options.max_resonance / 8));
+            }
+            std::vector<std::vector<int>> pending;
+            ResonanceContext resonance_context, raw_resonance_context;
+            raw_resonance_context.allow_normalization = false;
+            raw_resonance_context.directed = true;
+            /// Look for an electronic witness within this mapping's current depth and state allowance.
+            auto prove = [&](const std::vector<int> &mapping, bool exact)
+            {
+                const int used = result.states_left + result.states_right;
+                search.max_resonance = std::min(options.max_resonance, used / 2 + allowance);
                 bool carbene_only = false;
-                if (!exact && !Resonance(a, b, mapping, options, result, carbene_only, resonance_context))
+                if (!exact && !Resonance(a, b, mapping, search, result, carbene_only,
+                                         resonance_context, &raw_resonance_context))
                 { result.witness.clear(); return false; }
                 result.mapping = mapping;
+                int comparable = 0;
+                Annotations(a, b, mapping, comparable);
                 result.invariants["electronic_properties"] = comparable ? 1 : 0;
                 result.decision = "equivalent";
                 result.method = exact ? "ideal" : carbene_only ? "carbene_zwitterion" : "resonance";
@@ -1063,6 +1543,8 @@ namespace molgr::equivalence
             };
             started = Clock::now();
             auto [ca, cb] = Colors(a, b);
+            /// Classify the failed graph mapping using the search limits and stereo evidence recorded so
+            /// far.
             auto topology_failure = [&]()
             {
                 result.mapping_ms = Milliseconds(started);
@@ -1118,8 +1600,66 @@ namespace molgr::equivalence
             // Stereo references cannot distinguish the topology witness in the
             // missing-information case, so terminal-H symmetry pruning applies.
             if (stereo_missing) mapping_options.use_chirality = false;
-            bool matched = MapGraphs(a, b, std::move(candidates), mapping_options, result, stereo_found,
+            SpectatorMappings spectators(a, b, ac, sa, mapping_options);
+            /// Check the proposed atom mapping against electronic and stereochemical equivalence
+            /// requirements.
+            auto accept = [&](const std::vector<int> &mapping, bool exact)
+            {
+                topology_found = true;
+                result.invariants["nonmetal_connectivity"] = 1;
+                if (!options.ignore_metal_coordination_bonds) result.invariants["metal_coordination"] = 1;
+                if (stereo_missing)
+                {
+                    result.reason = "Insufficient matching stereochemical information.";
+                    result.stop_reason = "stereo_incomplete";
+                    return true; // Stop mapping with INC, never an EQ witness.
+                }
+                int stereo = options.use_chirality ? CompareStereo(left, right, mapping, options.ignore_metal_coordination_bonds) : 1;
+                spectators.Remember(a, b, mapping, stereo == 1);
+                if (stereo < 0) stereo_unknown = true;
+                if (stereo != 1) return false;
+                stereo_found = true;
+                result.invariants["stereochemistry"] = options.use_chirality ? 1 : 0;
+                int comparable = 0;
+                bool compatible = Annotations(a, b, mapping, comparable);
+                result.comparable_fields = std::max(result.comparable_fields, comparable);
+                if (!compatible) { if (exact) structural_found = true; return false; }
+                annotation_found = true;
+                if (prove(mapping, exact)) return true;
+                if (result.states_left + result.states_right < 2 * options.max_resonance &&
+                    (search.max_resonance_steps < options.max_resonance_steps || allowance < options.max_resonance))
+                    pending.push_back(mapping);
+                return false;
+            };
+            bool matched = MapGraphs(a, b, std::move(candidates), mapping_options, result, stereo_found, spectators.fixed,
                 [&](const auto &map) { return accept(map, !stereo_missing && ExactMapping(a, b, map)); });
+            while (!matched && !pending.empty() &&
+                   result.states_left + result.states_right < 2 * options.max_resonance &&
+                   (search.max_resonance_steps < options.max_resonance_steps || allowance < options.max_resonance))
+            {
+                // Admit the shortest path bound pruned by any mapping. Skipping
+                // directly to a looser depth can flood a shallow layer with
+                // irrelevant electronic states before other mappings get a turn.
+                const int next_depth = std::min(resonance_context.cutoffs.next_depth,
+                                                raw_resonance_context.cutoffs.next_depth);
+                const bool grow_slice = allowance < options.max_resonance &&
+                    (resonance_context.cutoffs.state_limit || raw_resonance_context.cutoffs.state_limit);
+                if (next_depth > options.max_resonance_steps && !grow_slice) break;
+                if (next_depth <= options.max_resonance_steps) search.max_resonance_steps = next_depth;
+                if (grow_slice) allowance = std::min(options.max_resonance, 2 * allowance);
+                // A truncated proof under a shallower depth or a smaller slice
+                // says nothing about this round. Keep cumulative counters only.
+                resonance_context = {};
+                // Within the deeper contour, prefer electron moves toward the
+                // target labels before spending the slice on wide side branches.
+                resonance_context.directed = true;
+                raw_resonance_context = {};
+                raw_resonance_context.allow_normalization = false;
+                raw_resonance_context.directed = true;
+                result.resonance_limit = false;
+                for (const auto &mapping : pending)
+                    if (prove(mapping, false)) { matched = true; break; }
+            }
             result.mapping_ms = std::max(0.0, Milliseconds(started) - result.resonance_ms);
             if (matched) return result;
             if (result.mapping_limit)

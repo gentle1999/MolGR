@@ -7,6 +7,7 @@
 
 namespace molgr::equivalence
 {
+    /// Limits and graph projection used for atom mapping, resonance and stereo comparison.
     struct Options
     {
         bool use_chirality = false;
@@ -17,6 +18,7 @@ namespace molgr::equivalence
         int max_resonance_steps = 24;
     };
 
+    /// Element, charge, radical and electron-label invariants of one input graph.
     struct Summary
     {
         std::string formula, heavy_formula;
@@ -27,6 +29,7 @@ namespace molgr::equivalence
         std::vector<std::pair<int, int>> metal_states;
     };
 
+    /// One side of a resonance witness expressed in the first input’s zero-based indices.
     struct Move
     {
         std::string kind;
@@ -35,6 +38,7 @@ namespace molgr::equivalence
         std::vector<int> cycle; // closed alternating trail; c is its first bond delta
     };
 
+    /// Comparison decision with its mapping, witness, search limits and measured work.
     struct Result
     {
         std::string decision = "inconclusive", method, reason;
@@ -54,11 +58,20 @@ namespace molgr::equivalence
     };
 
     // Pure native graph/electron kernel. No toolkit objects or callbacks inside BFS.
+    /// Compare the two molecular graphs under the configured electronic, stereo and search constraints.
+    /// @param left First input molecular graph.
+    /// @param right Second input molecular graph.
+    /// @param options Graph projection settings and bounds for equivalence search.
+    /// @return Comparison decision, atom mapping and any resonance witness or search-limit diagnostics.
     Result Evaluate(const utils::MoleculeData &left, const utils::MoleculeData &right,
                     const Options &options = {});
 
-    // Compare stereo under a caller-supplied zero-based bijection, without
-    // resonance search or a different symmetry mapping hiding information loss.
+    /// Compare stereo under a caller-supplied zero-based bijection, without
+    /// resonance search or a different symmetry mapping hiding information loss.
+    /// @param left First input molecular graph.
+    /// @param right Second input molecular graph.
+    /// @param mapping Zero-based image of each source atom in the target graph.
+    /// @return 1 for compatible stereo, 0 for a contradiction, or -1 for insufficient information.
     int CompareMappedStereo(const utils::MoleculeData &left, const utils::MoleculeData &right,
                             const std::vector<int> &mapping);
 }
