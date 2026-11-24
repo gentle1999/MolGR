@@ -32,13 +32,26 @@ WATER_XYZ = "3\nwater\nO 0 0 0\nH 0.9572 0 0\nH -0.2390 0.9270 0\n"
 
 
 @pytest.mark.parametrize("backend", ["cpp", "python"])
-@pytest.mark.parametrize("case", CASES, ids=lambda case: case["case_id"])
+@pytest.mark.parametrize(
+    "frame",
+    [
+        pytest.param(
+            ReconstructionBatchRequest(
+                (DATA / case["xyz_file"]).read_text(encoding="utf-8"),
+                int(case["charge"]),
+                int(case["spin_multiplicity"]),
+            ),
+            id=case["case_id"],
+        )
+        for case in CASES
+    ],
+)
 @pytest.mark.parametrize("kekulize", [True, False])
-def test_existing_public_inputs_preserve_the_explicit_h_graph(case, backend, kekulize):
-    xyz = (DATA / case["xyz_file"]).read_text()
-    mol = xyz_to_rdmol(
-        xyz, int(case["charge"]), int(case["spin_multiplicity"]), backend=backend, kekulize=kekulize
-    )
+def test_existing_public_inputs_preserve_the_explicit_h_graph(
+    frame, backend, kekulize, rebuild_fixture
+):
+    xyz = frame.xyz_block
+    mol = rebuild_fixture(frame, backend, kekulize)
     before = mol.ToBinary(Chem.PropertyPickleOptions.AllProps)
     smiles = validate_smiles_roundtrip(mol, kekulize=kekulize)
     assert smiles == Chem.MolToSmiles(Chem.Mol(mol))

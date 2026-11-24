@@ -149,6 +149,12 @@ markers = [
 ]
 
 
+[tool.coverage.run]
+# Include Python reconstruction executed by spawned fixture workers in pytest-cov.
+concurrency = ["thread", "multiprocessing"]
+source = ["src"]
+
+
 [tool.mypy]
 mypy_path = "$MYPY_CONFIG_FILE_DIR/src"
 warn_return_any = false       # 允许函数返回 Any (这对调用未加类型的第三方库很有用)

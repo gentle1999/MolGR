@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import hashlib
-from functools import lru_cache
 
 import pytest
 from rdkit import Chem
 
-from molgr import MolGRConfig
+from molgr import ReconstructionBatchRequest
 from molgr.interface import xyz_to_rdmol
 from molgr.utils.equivalence import evaluate_equivalence
 from scripts.tmqmg_fixture_data import (
@@ -87,35 +86,29 @@ def test_coupled_singlet_standards_preserve_local_radicals_and_input():
         )
 
 
-@pytest.fixture(scope="module", params=RECONSTRUCTION_CASES, ids=lambda case: case["id"])
-def reconstruction(request):
-    """Reuse reconstruction, not decisions, across independent test assertions."""
-    case = request.param
-    config = MolGRConfig()
-    config.cpp_backend.max_threads = 1
-    config.cpp_backend.target_bucket_parallel_max_threads = 1
-
-    @lru_cache(maxsize=2)
-    def rebuild(backend):
-        return xyz_to_rdmol(
-            case["xyz"],
-            total_charge=case["charge"],
-            spin_multiplicity=case["multiplicity"],
-            backend=backend,
-            config=config,
+published_cases = pytest.mark.parametrize(
+    "case,frame",
+    [
+        pytest.param(
+            case,
+            ReconstructionBatchRequest(case["xyz"], case["charge"], case["multiplicity"]),
+            id=case["id"],
         )
-
-    return case, rebuild
+        for case in RECONSTRUCTION_CASES
+    ],
+)
 
 
 @pytest.mark.parametrize("backend", ["cpp", "python"])
-def test_reconstruction_preserves_input_and_matches_reference_target(reconstruction, backend):
-    case, rebuild = reconstruction
+@published_cases
+def test_reconstruction_preserves_input_and_matches_reference_target(
+    case, frame, backend, rebuild_fixture
+):
     xyz_text = case["xyz"]
     assert hashlib.sha256(xyz_text.encode()).hexdigest() == case["xyz_sha256"]
     xyz = Chem.MolFromXYZBlock(xyz_text)
     assert xyz is not None
-    result = Chem.Mol(rebuild(backend))
+    result = rebuild_fixture(frame, backend)
     assert [a.GetAtomicNum() for a in result.GetAtoms()] == [
         a.GetAtomicNum() for a in xyz.GetAtoms()
     ]
@@ -137,12 +130,12 @@ def test_reconstruction_preserves_input_and_matches_reference_target(reconstruct
     assert comparison.decision.value == "equivalent", (backend, comparison)
 
 
-def test_backends_match_with_coordination_bonds(reconstruction):
+@published_cases
+def test_backends_match_with_coordination_bonds(case, frame, rebuild_fixture):
     """A separate control, even when one backend misses the published target."""
-    _, rebuild = reconstruction
     parity = evaluate_equivalence(
-        Chem.Mol(rebuild("cpp")),
-        Chem.Mol(rebuild("python")),
+        rebuild_fixture(frame, "cpp"),
+        rebuild_fixture(frame, "python"),
         use_chirality=False,
         ignore_metal_coordination_bonds=False,
         max_resonance=100000,

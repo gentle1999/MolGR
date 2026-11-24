@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import csv
 import json
-from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
 import pytest
 from rdkit import Chem
 
+from molgr import ReconstructionBatchRequest
 from molgr.config import MolGRConfig
 from molgr.interface import xyz_to_rdmol
 from molgr.utils.equivalence import (
@@ -134,46 +134,35 @@ _SULFUR_REVIEW_EXPECTATIONS = {
 }
 
 
-_SULFUR_CASES = [
-    (group, case)
-    for group, expectations in _SULFUR_REVIEW_EXPECTATIONS.items()
-    for case in _manifest(group)
-    if expectations[case["case_id"]].get("assert_published_graph")
-    or expectations[case["case_id"]].get("assert_reviewed_graph")
-]
-
-
-@pytest.fixture(scope="module")
-def sulfur_reconstruction():
-    config = MolGRConfig()
-    config.cpp_backend.max_threads = 1
-    config.cpp_backend.target_bucket_parallel_max_threads = 1
-    cases = {(group, case["case_id"]): case for group, case in _SULFUR_CASES}
-
-    @lru_cache(maxsize=None)
-    def rebuild(group, case_id, backend):
-        case = cases[group, case_id]
-        xyz = (_FIXTURE_ROOT / group / case["xyz_file"]).read_text(encoding="utf-8")
-        return xyz_to_rdmol(
-            xyz, int(case["charge"]), int(case["multiplicity"]), backend=backend, config=config
+sulfur_cases = pytest.mark.parametrize(
+    "group,case,frame",
+    [
+        pytest.param(
+            group,
+            case,
+            ReconstructionBatchRequest(
+                (_FIXTURE_ROOT / group / case["xyz_file"]).read_text(encoding="utf-8"),
+                int(case["charge"]),
+                int(case["multiplicity"]),
+            ),
+            id=f"{group}-{case['case_id']}",
         )
-
-    return rebuild
+        for group, expectations in _SULFUR_REVIEW_EXPECTATIONS.items()
+        for case in _manifest(group)
+        if expectations[case["case_id"]].get("assert_published_graph")
+        or expectations[case["case_id"]].get("assert_reviewed_graph")
+    ],
+)
 
 
 @pytest.mark.parametrize("backend", ["cpp", "python"])
-@pytest.mark.parametrize(
-    "group,case",
-    _SULFUR_CASES,
-    ids=lambda value: value["case_id"] if isinstance(value, dict) else value,
-)
+@sulfur_cases
 def test_sulfur_assignments_match_reference_target_and_local_controls(
-    group, case, backend, sulfur_reconstruction
+    group, case, frame, backend, rebuild_fixture
 ):
     expected = _SULFUR_REVIEW_EXPECTATIONS[group][case["case_id"]]
-    xyz = (_FIXTURE_ROOT / group / case["xyz_file"]).read_text(encoding="utf-8")
-    geometry = Chem.MolFromXYZBlock(xyz)
-    mol = Chem.Mol(sulfur_reconstruction(group, case["case_id"], backend))
+    geometry = Chem.MolFromXYZBlock(frame.xyz_block)
+    mol = rebuild_fixture(frame, backend)
     perceived = Chem.Mol(mol)
     Chem.SanitizeMol(perceived)
     assert [a.GetAtomicNum() for a in mol.GetAtoms()] == [
@@ -219,16 +208,12 @@ def test_sulfur_assignments_match_reference_target_and_local_controls(
             )
 
 
-@pytest.mark.parametrize(
-    "group,case",
-    _SULFUR_CASES,
-    ids=lambda value: value["case_id"] if isinstance(value, dict) else value,
-)
-def test_sulfur_backends_have_identical_canonical_output(group, case, sulfur_reconstruction):
+@sulfur_cases
+def test_sulfur_backends_have_identical_canonical_output(group, case, frame, rebuild_fixture):
     """Keep the strict control independent of release-policy graph matching."""
     outputs = []
     for backend in ("cpp", "python"):
-        mol = Chem.Mol(sulfur_reconstruction(group, case["case_id"], backend))
+        mol = rebuild_fixture(frame, backend)
         for atom in mol.GetAtoms():
             if atom.HasProp("smilesSymbol"):
                 atom.ClearProp("smilesSymbol")

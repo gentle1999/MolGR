@@ -7,3 +7,6 @@ from importlib.util import find_spec
 # Keep individual geometry tests runnable regardless of their collection order.
 if find_spec("rdkit") is not None:
     from rdkit import Chem  # noqa: F401
+
+
+pytest_plugins = ["fixture_reconstruction"]
