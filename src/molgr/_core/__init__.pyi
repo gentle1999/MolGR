@@ -28,7 +28,8 @@ __all__: list[str] = [
 ]
 
 class LogLevel:
-    """
+    """Minimum severity emitted by the native reconstruction logger.
+
     Members:
 
       DEBUG

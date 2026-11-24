@@ -14,6 +14,11 @@ namespace molgr::utils
 {
     namespace
     {
+        /// Convert an Open Babel stereo reference to a one-based atom index, using zero for an implicit
+        /// ligand.
+        /// @param mol Molecular graph supplying the coordinates, connectivity and atom labels.
+        /// @param ref Open Babel stereo reference identifying an atom or implicit ligand.
+        /// @return One-based atom index, or zero for the implicit-ligand reference.
         int IndexForRef(const OpenBabel::OBMol &mol, OpenBabel::OBStereo::Ref ref)
         {
             if (ref == OpenBabel::OBStereo::ImplicitRef)
@@ -24,6 +29,10 @@ namespace molgr::utils
             return atom->GetIdx();
         }
 
+        /// Convert a one-based ligand index to an Open Babel stereo reference, mapping zero to ImplicitRef.
+        /// @param mol Molecular graph supplying the coordinates, connectivity and atom labels.
+        /// @param index One-based molecular atom index.
+        /// @return Open Babel atom identifier, or ImplicitRef for index zero.
         OpenBabel::OBStereo::Ref RefForIndex(const OpenBabel::OBMol &mol, int index)
         {
             if (!index)

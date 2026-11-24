@@ -638,8 +638,6 @@ same `MolGRConfig`.
      - post-reinsertion base components
      - fixed UFF force-field metadata
    - bucket-shared no-metal states can reuse this bundle across many candidates
-   - `enable_target_bucket_score_bundle_preheat` is enabled by default and can
-     be disabled independently when debugging behavior differences
 
 7. Global force-field evaluation LRU
    - `ForceFieldEvaluationCache` is a thread-safe LRU keyed by structure,

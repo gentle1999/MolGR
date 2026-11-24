@@ -11,6 +11,8 @@
 
 namespace
 {
+    /// @return The process-wide SMILES reader. Callers serialize conversion with the native Open Babel
+    ///     mutex.
     OpenBabel::OBConversion &SmilesInputConversion()
     {
         static OpenBabel::OBConversion *conversion = []()
@@ -25,6 +27,8 @@ namespace
         return *conversion;
     }
 
+    /// @return The process-wide SMILES writer. Callers serialize conversion with the native Open Babel
+    ///     mutex.
     OpenBabel::OBConversion &SmilesOutputConversion()
     {
         static OpenBabel::OBConversion *conversion = []()

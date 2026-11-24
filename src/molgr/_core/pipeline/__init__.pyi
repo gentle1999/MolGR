@@ -8,6 +8,7 @@ import typing
 
 import molgr._core.utils
 import molgr.config
+from molgr._native_types import NativeDiagnostics as _NativeDiagnostics
 
 from . import reconstruct_with_metals, reconstruct_without_metals
 
@@ -19,10 +20,10 @@ __all__: list[str] = [
     "xyz2omol",
 ]
 
-def get_last_reconstruction_diagnostics() -> dict:
+def get_last_reconstruction_diagnostics() -> _NativeDiagnostics:
     """Return structured diagnostics from the most recent C++ failure."""
 
-def get_last_run_timing_breakdown_ms() -> dict:
+def get_last_run_timing_breakdown_ms() -> dict[str, float | int]:
     """
     Return timing breakdown (milliseconds) for the most recent reconstruction run.
     """

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 from openbabel import openbabel as ob
 from openbabel import pybel
 
 from molgr.fallback.utils import consts
+from molgr.fallback.utils.bond_geometry import allows_seesaw_phosphoranide
 from molgr.fallback.utils.electrons import (
     get_lone_pair_count,
     get_unpaired_electron_count,
@@ -14,6 +17,7 @@ from molgr.fallback.utils.electrons import (
     set_unpaired_electron_count,
     set_unresolved_two_electron_center,
 )
+from molgr.fallback.utils.ob_graph import mol_atoms
 
 
 def assign_radical_dots(atom: ob.OBAtom) -> int:
@@ -21,7 +25,7 @@ def assign_radical_dots(atom: ob.OBAtom) -> int:
 
     The result is not yet an unpaired-electron count. In particular, two missing
     bond-valence units may later become one active lone pair, two real unpaired
-    electrons, or an unresolved C/N/P two-electron center. Boron uses its
+    electrons, or an unresolved C/N/Si/P two-electron center. Boron uses its
     nonbonding electron budget, excluding the closed-shell anionic lone pairs
     that are not reconstruction-active. An odd electron left on B- remains
     active, including the three-bond radical anion.
@@ -90,7 +94,7 @@ def _assign_active_electron_occupancy(atom: ob.OBAtom, electron_count: int) -> N
 def assign_charge_radical_for_atom(atom: ob.OBAtom) -> bool:
     """Rebuild one atom's charge and explicit electron classification.
 
-    Neutral C/N/P atoms with a two-unit deficit are marked unresolved instead of
+    Neutral C/N/Si/P atoms with a two-unit deficit are marked unresolved instead of
     being forced to singlet or triplet occupancy. Explicitly resolved ``(0, 1)``
     and ``(2, 0)`` states are preserved while the same two-electron topology
     remains. Other atoms overwrite unpaired/active-lone-pair counts from the local
@@ -102,6 +106,15 @@ def assign_charge_radical_for_atom(atom: ob.OBAtom) -> bool:
     old_unpaired_electron_count = get_unpaired_electron_count(atom)
     old_lone_pair_count = get_lone_pair_count(atom)
     old_unresolved_center = has_unresolved_two_electron_center(atom)
+
+    if old_charge == -1 and allows_seesaw_phosphoranide(atom):
+        # Preserve an explicitly explored, geometry-supported phosphoranide.
+        # Its closed-shell pair is not a reconstruction-active electron deficit.
+        # The ordinary seed still starts as P+; geometry alone never selects P-.
+        set_unpaired_electron_count(atom, 0)
+        set_lone_pair_count(atom, 0)
+        set_unresolved_two_electron_center(atom, False)
+        return old_unpaired_electron_count != 0 or old_lone_pair_count != 0 or old_unresolved_center
 
     if consts.NON_METAL_DICT[atom.GetAtomicNum()].num_outer_electrons < atom.GetTotalValence():
         atom.SetFormalCharge(
@@ -118,7 +131,7 @@ def assign_charge_radical_for_atom(atom: ob.OBAtom) -> bool:
 
     radical_dots = assign_radical_dots(atom)
     is_two_electron_center = (
-        atom.GetAtomicNum() in (6, 7, 15) and atom.GetFormalCharge() == 0 and radical_dots == 2
+        atom.GetAtomicNum() in (6, 7, 14, 15) and atom.GetFormalCharge() == 0 and radical_dots == 2
     )
     if is_two_electron_center:
         explicit_occupancy = (
@@ -155,8 +168,8 @@ def fresh_omol_charge_radical(omol: pybel.Molecule) -> tuple[pybel.Molecule, boo
     """
 
     hit = False
-    for atom in omol.atoms:
-        hit = assign_charge_radical_for_atom(atom.OBAtom) or hit
+    for atom in mol_atoms(cast(ob.OBMol, omol.OBMol)):
+        hit = assign_charge_radical_for_atom(atom) or hit
     return omol, hit
 
 

@@ -22,6 +22,7 @@ namespace molgr
     {
         namespace parallel
         {
+            /// @return The hardware worker capacity used to size native parallel jobs.
             inline std::size_t HardwareParallelism()
             {
                 const unsigned int concurrency = std::thread::hardware_concurrency();
@@ -30,6 +31,9 @@ namespace molgr
                     concurrency == 0 ? 1 : static_cast<std::size_t>(concurrency));
             }
 
+            /// @param config Settings for the current reconstruction or scoring operation.
+            /// @param task_count Number of work items or occurrences.
+            /// @return The worker capacity after applying the configured thread limit.
             inline std::size_t ConfiguredParallelism(
                 const molgr::config::MolGRConfig &config,
                 std::size_t task_count)
@@ -50,9 +54,11 @@ namespace molgr
 
             namespace detail
             {
+                /// Shared native executor used by reconstruction and candidate-scoring loops.
                 class ParallelExecutor
                 {
                 public:
+                    /// @return The shared native executor used to schedule helper tasks.
                     static ParallelExecutor &Instance()
                     {
                         // Keep one fixed native worker budget for both single-
@@ -64,11 +70,14 @@ namespace molgr
                         return *instance;
                     }
 
+                    /// @return The number of helper threads available to a calling thread.
                     std::size_t HelperCapacity() const
                     {
                         return workers_.size();
                     }
 
+                    /// Queue a task for execution by the native worker pool.
+                    /// @param task Callable executed by the parallel worker.
                     void Submit(std::function<void()> task)
                     {
                         {
@@ -83,6 +92,11 @@ namespace molgr
                         queue_cv_.notify_one();
                     }
 
+                    /// Run the indexed work with bounded parallelism and propagate worker exceptions.
+                    /// @tparam Func Callable accepting one zero-based work index.
+                    /// @param count Number of work items or occurrences.
+                    /// @param worker_count Maximum workers participating in this operation.
+                    /// @param func Callable executed by the parallel worker.
                     template <typename Func>
                     void Run(std::size_t count, std::size_t worker_count, Func &&func)
                     {
@@ -138,8 +152,14 @@ namespace molgr
                     }
 
                 private:
+                    /// Work function and shared progress and failure state for a parallel range.
                     struct Job
                     {
+                        /// Initialize the range, work callback and completion bookkeeping for a parallel
+                        /// job.
+                        /// @param count_in Number of work items or occurrences.
+                        /// @param func_in Callable executed by the parallel worker.
+                        /// @param worker_count_in Maximum workers participating in this operation.
                         Job(
                             std::size_t count_in,
                             std::function<void(std::size_t)> func_in,
@@ -162,6 +182,8 @@ namespace molgr
                         std::exception_ptr first_exception;
                     };
 
+                    /// Start the executor's helper threads.
+                    /// @param helper_count Number of background worker threads to start.
                     explicit ParallelExecutor(std::size_t helper_count)
                     {
                         workers_.reserve(helper_count);
@@ -175,6 +197,7 @@ namespace molgr
                         }
                     }
 
+                    /// Signal shutdown and wait for all helper threads to exit.
                     ~ParallelExecutor()
                     {
                         {
@@ -191,6 +214,7 @@ namespace molgr
                         }
                     }
 
+                    /// Consume queued work until the executor is stopped.
                     void WorkerLoop()
                     {
                         while (true)
@@ -225,6 +249,8 @@ namespace molgr
                         }
                     }
 
+                    /// Execute available indices and notify peers when the job completes or fails.
+                    /// @param job Shared work and completion state for this indexed operation.
                     static void ExecuteJob(const std::shared_ptr<Job> &job)
                     {
                         try
@@ -266,6 +292,11 @@ namespace molgr
                 };
             }
 
+            /// Apply the indexed operation with the configured parallelism limit.
+            /// @tparam Func Callable accepting one zero-based work index.
+            /// @param count Number of work items or occurrences.
+            /// @param worker_count Maximum workers participating in this operation.
+            /// @param func Callable executed by the parallel worker.
             template <typename Func>
             void ParallelForIndices(std::size_t count, std::size_t worker_count, Func &&func)
             {

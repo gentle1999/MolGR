@@ -3,6 +3,7 @@
 #include <iostream>
 namespace molgr
 {
+    /// Severity threshold for messages emitted by the native algorithms.
     enum class LogLevel
     {
         DEBUG = 0,
@@ -14,11 +15,15 @@ namespace molgr
 
     extern LogLevel g_current_log_level;
 
+    /// Set C++ backend logging level.
+    /// @param level Minimum severity reported by the native logger.
     void SetLogLevel(LogLevel level);
 
-    // Emit a process-deduplicated warning for APIs that expose raw Open Babel
-    // objects. These objects are not safe to share across threads and have
-    // manual lifetime rules.
+    /// Emit a process-deduplicated warning for APIs that expose raw Open Babel
+    /// objects. These objects are not safe to share across threads and have
+    /// manual lifetime rules.
+    /// @param api Name of the calling API for the diagnostic message.
+    /// @param detail Additional context for the Open Babel warning.
     void WarnUnsafeOpenBabelUse(const char *api, const char *detail);
 }
 

@@ -7,6 +7,7 @@
 
 namespace molgr
 {
+    /// Outer-shell electron count and reference valence used to classify nonmetal centers.
     struct ElementInfo
     {
         std::string symbol;
@@ -17,6 +18,7 @@ namespace molgr
         int default_valence;
     };
 
+    /// Store the equilibrium separation and energy scale used by the Lennard-Jones model.
     struct LennardJonesParams
     {
         double epsilon;
@@ -24,6 +26,7 @@ namespace molgr
         double cutoff;
     };
 
+    /// Neutral-atom subshell occupations used when enumerating metal charge and spin.
     struct FDSP
     {
         int f, d, s, p;
@@ -39,5 +42,8 @@ namespace molgr
     extern const std::map<std::string, std::vector<int>> kMetalValencePrior;
     extern const std::map<std::string, std::vector<int>> kMetalValenceMinor;
 
+    /// @param metal_symbol Element symbol of the metal.
+    /// @param valence Proposed formal oxidation state of the metal.
+    /// @return Heuristic radical counts for a metal under a candidate valence.
     std::set<int> GetPossibleMetalRadicals(const std::string &metal_symbol, int valence);
 }

@@ -21,6 +21,7 @@ namespace
 {
     using Vector3 = std::tuple<double, double, double>;
 
+    /// Remaining metal-shell occupations after formal oxidation.
     struct ShellOccupation
     {
         int remaining_f = 0;
@@ -28,6 +29,7 @@ namespace
         int residual_sp = 0;
     };
 
+    /// A nearby coordinating atom with its donor identity, displacement and metal distance.
     struct DonorSample
     {
         int atom_idx = 0;
@@ -64,6 +66,9 @@ namespace
     constexpr double kMetalHydrideCovalentToleranceAngstrom = 0.45;
     constexpr double kMinMetalHydrideCutoffAngstrom = 1.25;
 
+    /// @param metal_atom Open Babel atom representing the metal center.
+    /// @param donor_atom Candidate ligand atom at the donor end of the metal contact.
+    /// @return The Cartesian displacement from the metal to its donor, in angstroms.
     Vector3 VectorFromAtoms(OpenBabel::OBAtom &metal_atom, OpenBabel::OBAtom &donor_atom)
     {
         return {
@@ -73,6 +78,8 @@ namespace
         };
     }
 
+    /// @param vector Cartesian displacement vector.
+    /// @return The Euclidean length of a Cartesian vector.
     double VectorNorm(const Vector3 &vector)
     {
         return std::sqrt(
@@ -81,6 +88,8 @@ namespace
             std::get<2>(vector) * std::get<2>(vector));
     }
 
+    /// @param atomic_num Atomic number of the element.
+    /// @return The covalent radius used in the distance estimate with invalid values guarded.
     double ClampedCovalentRadius(int atomic_num)
     {
         const double value = OpenBabel::OBElements::GetCovalentRad(atomic_num);
@@ -91,6 +100,8 @@ namespace
         return value;
     }
 
+    /// @param metal_atomic_num Atomic number of the indicated bond partner or site.
+    /// @return The element-dependent upper distance for a directly bound hydride, in angstroms.
     double MetalHydrideCutoffAngstrom(int metal_atomic_num)
     {
         return std::max(
@@ -99,6 +110,10 @@ namespace
                 kMetalHydrideCovalentToleranceAngstrom);
     }
 
+    /// @param metal_atom Open Babel atom representing the metal center.
+    /// @param donor_atom Candidate ligand atom at the donor end of the metal contact.
+    /// @param distance Measured donor-metal distance in angstroms.
+    /// @return True for a hydrogen donor within the metal-specific hydride distance cutoff.
     bool IsDirectMetalHydride(
         OpenBabel::OBAtom &metal_atom,
         OpenBabel::OBAtom &donor_atom,
@@ -108,6 +123,9 @@ namespace
                distance <= MetalHydrideCutoffAngstrom(static_cast<int>(metal_atom.GetAtomicNum()));
     }
 
+    /// @param lhs First Cartesian vector.
+    /// @param rhs Second Cartesian vector.
+    /// @return The cross product of the two Cartesian vectors.
     Vector3 Cross(const Vector3 &lhs, const Vector3 &rhs)
     {
         return {
@@ -117,6 +135,9 @@ namespace
         };
     }
 
+    /// @param lhs First Cartesian vector.
+    /// @param rhs Second Cartesian vector.
+    /// @return The dot product of the two Cartesian vectors.
     double Dot(const Vector3 &lhs, const Vector3 &rhs)
     {
         return std::get<0>(lhs) * std::get<0>(rhs) +
@@ -124,6 +145,9 @@ namespace
                std::get<2>(lhs) * std::get<2>(rhs);
     }
 
+    /// @param lhs First Cartesian vector.
+    /// @param rhs Second Cartesian vector.
+    /// @return The angle between two donor directions in degrees.
     double AngleDegrees(const Vector3 &lhs, const Vector3 &rhs)
     {
         constexpr double kPi = 3.14159265358979323846;
@@ -138,6 +162,8 @@ namespace
         return std::acos(cos_value) * 180.0 / kPi;
     }
 
+    /// @param vectors Displacements from the metal center to its donors, in angstroms.
+    /// @return The mean distance of the donor displacements from the estimated coordination plane.
     double PlanarityDistance(const std::vector<Vector3> &vectors)
     {
         if (vectors.size() < 3)
@@ -178,6 +204,10 @@ namespace
         return total / static_cast<double>(vectors.size());
     }
 
+    /// Collect nearby donor atoms and order their measurements by distance to the metal.
+    /// @param metal_atom Open Babel atom representing the metal center.
+    /// @param config Settings for the current reconstruction or scoring operation.
+    /// @return Donor measurements ordered by increasing metal distance.
     std::vector<DonorSample> CollectCoordinationEnvironment(
         OpenBabel::OBAtom &metal_atom,
         const molgr::config::MolGRConfig &config)
@@ -242,6 +272,10 @@ namespace
         return donors;
     }
 
+    /// Classify the metal coordination geometry from the donor count, angles and planarity.
+    /// @param donors Coordinating ligand sites used to characterize the metal environment.
+    /// @param config Ligand-field and coordination geometry thresholds for spin inference.
+    /// @return Geometry class inferred from the local arrangement.
     std::string ClassifyGeometry(
         const std::vector<DonorSample> &donors,
         const molgr::config::MetalRadicalInferenceConfig &config)
@@ -282,6 +316,10 @@ namespace
         return "octahedral_like";
     }
 
+    /// Estimate ligand-field strength from donor identities and the assigned coordination geometry.
+    /// @param donors Coordinating ligand sites used to characterize the metal environment.
+    /// @param geometry Coordination geometry assigned to the donor arrangement.
+    /// @return Numeric estimate of the ligand field for this geometry.
     double DonorFieldScore(
         const std::vector<DonorSample> &donors,
         const std::string &geometry)
@@ -315,6 +353,10 @@ namespace
         return weighted_sum / total_weight + geometry_adjustment;
     }
 
+    /// Classify the donor-field score as weak, strong or ambiguous under the configured thresholds.
+    /// @param field_score Estimated ligand-field score for the metal environment.
+    /// @param config Ligand-field and coordination geometry thresholds for spin inference.
+    /// @return Weak, strong or ambiguous field class.
     std::string ClassifyFieldStrength(
         double field_score,
         const molgr::config::MetalRadicalInferenceConfig &config)
@@ -331,6 +373,9 @@ namespace
         return "ambiguous";
     }
 
+    /// @param metal Chemical symbol of the metal.
+    /// @param valence Proposed formal oxidation state of the metal.
+    /// @return Shell occupations after applying the proposed metal valence, if supported.
     std::optional<ShellOccupation> ShellOccupationAfterOxidation(
         const std::string &metal,
         int valence)
@@ -368,6 +413,13 @@ namespace
         };
     }
 
+    /// Enumerate plausible d-shell unpaired-electron counts for the field and spin preferences.
+    /// @param effective_d Effective number of metal d electrons.
+    /// @param geometry Coordination geometry assigned to the donor arrangement.
+    /// @param field_strength Inferred weak, strong or ambiguous ligand-field class.
+    /// @param prefer_low_spin Whether to consider the low-spin choice first.
+    /// @param allow_low_spin_alternative Whether a low-spin alternative is permitted.
+    /// @return Ordered plausible d-shell unpaired-electron counts.
     std::vector<int> CandidateDUnpairedCounts(
         int effective_d,
         const std::string &geometry,

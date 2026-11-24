@@ -15,6 +15,7 @@ from typing import (
     Any,
     Callable,
     Dict,
+    Iterator,
     Literal,
     Optional,
     Sequence,
@@ -26,7 +27,7 @@ from typing import (
 from openbabel import openbabel as ob
 from openbabel import pybel
 
-from molgr.fallback.utils.dataclasses import MetalAtomPosition
+from molgr.fallback.utils.dataclasses import MetalAtomPosition, MetalSite
 from molgr.fallback.utils.tools import typed_lru_cache
 
 
@@ -244,7 +245,7 @@ class OmolTraceRecorder:
 
 
 @contextmanager
-def trace_omol_state_machine(recorder: OmolTraceRecorder):
+def trace_omol_state_machine(recorder: OmolTraceRecorder) -> Iterator[OmolTraceRecorder]:
     """Enable automatic trace-node registration for the current execution context."""
 
     token = _OMOL_TRACE_OBSERVER.set(recorder)
@@ -427,6 +428,10 @@ class OmolStateMachine:
             omol_revision=self.omol_revision if omol is None else self.omol_revision + 1,
         )
         if omol is not None:
+            # A replacement molecule may carry perception from its parent
+            # topology. Match the native branch boundary before scoring it.
+            next_machine.omol.OBMol.SetHybridizationPerceived(False)
+            next_machine.omol.OBMol.SetAtomTypesPerceived(False)
             _invalidate_omol_derived_metadata(next_machine.metadata)
         if phase is not None:
             next_machine.phase_history.append(phase)
@@ -472,6 +477,8 @@ class MetalPreparationState:
     total_radical_electrons: int
     phase_history: Tuple[str, ...] = ()
     metadata: Dict[str, Any] = field(default_factory=dict)
+
+    metal_sites: Tuple[MetalSite, ...] = ()
 
 
 @dataclass

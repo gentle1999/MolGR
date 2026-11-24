@@ -22,7 +22,7 @@ def eliminate_1_3_dipole_postive_ptr(
     given_charge: typing.SupportsInt | typing.SupportsIndex,
 ) -> tuple:
     """
-    Apply eliminate.eliminate_1_3_dipole_postive to an existing OBMol.
+    Use positive-charge budget to close a bond in a 1,3-dipole motif.
 
     Args:
         mol_ptr: int address of OpenBabel::OBMol
@@ -34,7 +34,7 @@ def eliminate_carbene_neighbor_heteroatom_ptr(
     given_charge: typing.SupportsInt | typing.SupportsIndex,
 ) -> tuple:
     """
-    Apply eliminate.eliminate_carbene_neighbor_heteroatom to an existing OBMol.
+    Close an unresolved two-electron center with a heteroatom donor.
 
     Args:
         mol_ptr: int address of OpenBabel::OBMol
@@ -46,7 +46,7 @@ def eliminate_carboxyl_ptr(
     given_charge: typing.SupportsInt | typing.SupportsIndex,
 ) -> tuple:
     """
-    Apply eliminate.eliminate_carboxyl to an existing OBMol.
+    Convert a carboxyl-like oxygen monoradical into an O- center.
 
     Args:
         mol_ptr: int address of OpenBabel::OBMol
@@ -59,7 +59,7 @@ def eliminate_possible_cp_like_radical_anion_ptr(
     total_radical_electrons: typing.SupportsInt | typing.SupportsIndex,
 ) -> tuple:
     """
-    Apply eliminate.eliminate_possible_cp_like_radical_anion to an existing OBMol.
+    Localize an excess cyclopentadienyl-like radical as an aromatic anion.
 
     Args:
         mol_ptr: int address of OpenBabel::OBMol
@@ -72,7 +72,7 @@ def eliminate_high_positive_charge_atoms_ptr(
     given_charge: typing.SupportsInt | typing.SupportsIndex,
 ) -> tuple:
     """
-    Apply eliminate.eliminate_high_positive_charge_atoms to an existing OBMol.
+    Neutralize positive centers from their most electronegative neighbors.
 
     Args:
         mol_ptr: int address of OpenBabel::OBMol
@@ -85,7 +85,7 @@ def eliminate_negative_charges_ptr(
     total_radical_electrons: typing.SupportsInt | typing.SupportsIndex = -1,
 ) -> tuple:
     """
-    Apply eliminate.eliminate_negative_charges to an existing OBMol.
+    Consume classified electron sources into negative formal charge.
 
     Args:
         mol_ptr: int address of OpenBabel::OBMol
@@ -100,7 +100,7 @@ def eliminate_nnn_ptr(
     positive: bool = False,
 ) -> tuple:
     """
-    Apply eliminate.eliminate_nnn to an existing OBMol.
+    Close N-N-N motifs using explicitly classified endpoint electrons.
 
     Args:
         mol_ptr: int address of OpenBabel::OBMol
@@ -113,7 +113,7 @@ def eliminate_positive_charges_ptr(
     given_charge: typing.SupportsInt | typing.SupportsIndex,
 ) -> tuple:
     """
-    Apply eliminate.eliminate_positive_charges to an existing OBMol.
+    Consume classified electron sources into positive formal charge.
 
     Args:
         mol_ptr: int address of OpenBabel::OBMol

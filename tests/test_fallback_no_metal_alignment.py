@@ -7,14 +7,14 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from rdkit import Chem, RDLogger
+from rdkit.Chem import rdDistGeom
 
 
 pytest.importorskip("openbabel")
 
 from openbabel import openbabel as ob
 from openbabel import pybel
-from rdkit import Chem, RDLogger
-from rdkit.Chem import rdDistGeom
 
 from molgr.config import MolGRConfig
 from molgr.fallback.pipeline import reconstruct_without_metals as no_metal_module
@@ -159,6 +159,112 @@ def test_break_deformed_ene_counts_unresolved_center_electrons_for_python_and_cp
     assert cpp_hit is expected_hit
     assert cpp_omol.OBMol.GetBond(2, 3).GetBondOrder() == expected_order
     assert has_unresolved_two_electron_center(cpp_omol.OBMol.GetAtom(1)) is unresolved
+
+
+@pytest.mark.parametrize("endpoints", [(1, 2), (2, 1)])
+def test_cation_bond_recovery_uses_matched_endpoints(endpoints: tuple[int, int]) -> None:
+    def make_omol() -> pybel.Molecule:
+        mol = ob.OBMol()
+        mol.BeginModify()
+        mol.NewAtom().SetAtomicNum(6)
+        nitrogen = mol.NewAtom()
+        nitrogen.SetAtomicNum(7)
+        nitrogen.SetFormalCharge(1)
+        mol.AddBond(*endpoints, 2)
+        mol.EndModify()
+        return pybel.Molecule(mol)
+
+    python_omol, charge, hit = break_one_bond(make_omol(), given_charge=-2)
+    assert hit and charge == -1
+    assert [a.OBAtom.GetFormalCharge() for a in python_omol] == [0, 0]
+    assert [get_unpaired_electron_count(a.OBAtom) for a in python_omol] == [1, 0]
+    assert python_omol.OBMol.GetBond(1, 2).GetBondOrder() == 1
+
+    from molgr import _core
+
+    cpp_omol = make_omol()
+    cpp_charge, cpp_hit = _core.dev.stages.break_bond.break_one_bond_ptr(
+        _get_ptr(cpp_omol.OBMol), -2, 0
+    )
+    assert (cpp_charge, cpp_hit) == (charge, hit)
+    assert _pybel_stage_signature(cpp_omol) == _pybel_stage_signature(python_omol)
+
+
+def test_recovery_neutralizes_cation_before_breaking_carbonyl() -> None:
+    """The same deficit can be filled without reducing an unrelated C=O."""
+    from molgr import _core
+
+    def make_omol():
+        return pybel.readstring("smi", "CC=O.C=[N+]=C")
+
+    python_omol = make_omol()
+    _, charge, hit = break_one_bond(python_omol, given_charge=-2)
+    assert hit and charge == -1
+    assert python_omol.OBMol.GetBond(2, 3).GetBondOrder() == 2
+    assert python_omol.OBMol.GetAtom(5).GetFormalCharge() == 0
+    cpp_omol = make_omol()
+    cpp_result = _core.dev.stages.break_bond.break_one_bond_ptr(_get_ptr(cpp_omol.OBMol), -2, 0)
+    assert cpp_result == (charge, hit)
+    assert _pybel_stage_signature(cpp_omol) == _pybel_stage_signature(python_omol)
+
+
+@pytest.mark.parametrize(
+    ("partner", "distance", "expected_hit"),
+    [(1, 1.09, False), (1, 1.40, True), (6, 1.54, False), (6, 1.90, True)],
+)
+def test_sigma_bond_recovery_requires_stretched_xyz_geometry(
+    partner: int, distance: float, expected_hit: bool
+) -> None:
+    from molgr import _core
+
+    def make_omol():
+        mol = ob.OBMol()
+        mol.SetDimension(3)
+        first, second = mol.NewAtom(), mol.NewAtom()
+        first.SetAtomicNum(6)
+        second.SetAtomicNum(partner)
+        first.SetVector(0.0, 0.0, 0.0)
+        second.SetVector(distance, 0.0, 0.0)
+        mol.AddBond(1, 2, 1)
+        return pybel.Molecule(mol)
+
+    python_omol, cpp_omol = make_omol(), make_omol()
+    _, charge, hit = break_one_bond(python_omol, given_charge=-2)
+    assert hit is expected_hit
+    assert python_omol.OBMol.NumBonds() == (0 if expected_hit else 1)
+    assert [get_unpaired_electron_count(a.OBAtom) for a in python_omol] == [
+        int(expected_hit),
+        int(expected_hit),
+    ]
+    assert _core.dev.stages.break_bond.break_one_bond_ptr(_get_ptr(cpp_omol.OBMol), -2, 0) == (
+        charge,
+        hit,
+    )
+    assert _pybel_stage_signature(cpp_omol) == _pybel_stage_signature(python_omol)
+
+
+@pytest.mark.parametrize("budget", [-2, -1, 0, 1])
+def test_positive_nnn_preserves_radical_for_negative_charge_budget(budget) -> None:
+    from molgr import _core
+
+    def make_omol():
+        omol = pybel.readstring("smi", "CN(C)[N]N(C)C")
+        fresh_omol_charge_radical(omol)
+        return omol
+
+    python_omol = make_omol()
+    before = _pybel_stage_signature(python_omol)
+    _, charge, hit = eliminate_NNN(python_omol, budget, True)
+    assert hit is (budget >= 0)
+    assert charge == budget - int(hit)
+    if budget < 0:
+        assert _pybel_stage_signature(python_omol) == before
+    cpp_omol = make_omol()
+    assert _core.dev.stages.eliminate.eliminate_nnn_ptr(_get_ptr(cpp_omol.OBMol), budget, True) == (
+        charge,
+        hit,
+    )
+    assert _pybel_stage_signature(cpp_omol) == _pybel_stage_signature(python_omol)
 
 
 @pytest.mark.parametrize(
@@ -460,6 +566,179 @@ def test_make_connections_reconnects_current_donor_for_python_and_cpp() -> None:
     assert _pybel_stage_signature(cpp_omol) == _pybel_stage_signature(omol)
 
 
+@pytest.mark.parametrize(
+    ("seed", "positions", "expected_donor"),
+    [
+        # P and N have equal priority. The first atom wins even when N is closer.
+        ("[PH2].[NH3].[CH3]", [-1.80, 1.45, 0.0], 1),
+        ("[NH3].[PH2].[CH3]", [1.45, -1.80, 0.0], 1),
+        # P has priority over O even when O is first and closer.
+        ("[OH].[PH2].[CH3]", [1.40, -1.80, 0.0], 2),
+    ],
+)
+def test_make_connections_competing_donors(seed, positions, expected_donor):
+    from molgr import _core
+
+    for backend in ("python", "cpp"):
+        mol = pybel.readstring("smi", seed)
+        for idx, x in enumerate(positions, 1):
+            mol.OBMol.GetAtom(idx).SetVector(x, 0, 0)
+        if backend == "python":
+            make_connections(mol)
+        else:
+            _core.dev.stages.preprocess.make_connections_ptr(_get_ptr(mol.OBMol), 0.15)
+        carbon = mol.OBMol.GetAtom(3)
+        assert [bond.GetNbrAtomIdx(carbon) for bond in ob.OBAtomBondIter(carbon)] == [
+            expected_donor
+        ]
+
+
+@pytest.mark.parametrize(
+    ("seed", "distance", "should_connect"),
+    [
+        ("[PH]C=[CH]", 1.82, True),
+        ("[PH]C[CH]", 1.86, True),
+        ("[PH]C=[CH]", 2.20, False),
+        ("[PH]C=C", 1.82, False),
+        ("[PH2]C=[CH]", 1.82, False),
+        ("[PH]C=[N]", 1.82, True),
+        ("[PH]C=[N]", 2.20, False),
+        ("[PH]C[N]", 1.82, False),
+    ],
+)
+def test_make_connections_phosphorus_single_bond(seed, distance, should_connect):
+    from molgr import _core
+
+    for backend in ("python", "cpp"):
+        mol = pybel.readstring("smi", seed)
+        mol.OBMol.GetAtom(1).SetVector(0, 0, 0)
+        mol.OBMol.GetAtom(2).SetVector(1.20, 1.35, 0)
+        mol.OBMol.GetAtom(3).SetVector(distance, 0, 0)
+        assert mol.OBMol.GetBond(1, 3) is None
+        if backend == "python":
+            _, changed = make_connections(mol)
+        else:
+            changed = _core.dev.stages.preprocess.make_connections_ptr(_get_ptr(mol.OBMol), 0.15)
+        assert changed == should_connect
+        bond = mol.OBMol.GetBond(1, 3)
+        assert (bond.GetBondOrder() if bond else None) == (1 if should_connect else None)
+
+
+@pytest.mark.parametrize(
+    ("seed", "partner_idx", "distance", "remove"),
+    [
+        ("[Si](F)(F)(F)[C]=O", 5, 2.24, True),
+        ("[Si](F)(F)(F)[C]=O", 5, 1.90, False),
+        ("[Si](F)(F)(F)[C]=S", 5, 2.24, False),
+        ("[Si](F)(F)(F)C=O", 5, 2.24, False),  # C has another H
+        ("[P](F)(F)(F)[P](F)(F)F", 5, 2.59, True),
+        ("[P](F)(F)(F)[P](F)(F)F", 5, 2.24, False),
+        ("[P](F)(F)(F)[P](F)F", 5, 2.59, False),
+        ("[Si](F)(F)(F)[Si](F)(F)F", 5, 2.64, False),
+    ],
+)
+def test_make_connections_long_seed_bonds(seed, partner_idx, distance, remove):
+    from molgr import _core
+
+    for backend in ("python", "cpp"):
+        mol = pybel.readstring("smi", seed)
+        mol.OBMol.GetAtom(1).SetVector(0, 0, 0)
+        mol.OBMol.GetAtom(partner_idx).SetVector(distance, 0, 0)
+        assert mol.OBMol.GetBond(1, partner_idx).GetBondOrder() == 1
+        if backend == "python":
+            _, changed = make_connections(mol)
+        else:
+            changed = _core.dev.stages.preprocess.make_connections_ptr(_get_ptr(mol.OBMol), 0.15)
+        assert changed == remove
+        assert (mol.OBMol.GetBond(1, partner_idx) is None) == remove
+
+
+def test_make_connections_rechecks_shared_phosphorus_after_deletion():
+    from molgr import _core
+
+    for backend in ("python", "cpp"):
+        mol = pybel.readstring("smi", "[P](F)(F)(F)[P](F)(F)[P](F)(F)F")
+        for idx, x in [(1, -2.59), (5, 0.0), (8, 2.59)]:
+            mol.OBMol.GetAtom(idx).SetVector(x, 0, 0)
+        if backend == "python":
+            _, changed = make_connections(mol)
+        else:
+            changed = _core.dev.stages.preprocess.make_connections_ptr(_get_ptr(mol.OBMol), 0.15)
+        assert changed
+        assert mol.OBMol.GetAtom(5).GetExplicitDegree() == 3
+        assert sum(mol.OBMol.GetBond(5, idx) is not None for idx in (1, 8)) == 1
+
+
+@pytest.mark.parametrize(
+    ("axial_neighbor", "candidate", "axial_distance", "position", "expected"),
+    [
+        ("C", "[CH3]", 2.00, (0, 0, 2.02), True),
+        ("O", "[OH]", 1.74, (0, 0, 1.76), True),
+        ("C", "[CH3]", 2.00, (1.20, 0, 1.60), False),  # outside the vacant site
+        ("C", "[CH3]", 1.85, (0, 0, 2.02), False),  # unlike the existing P–C length
+        ("F", "[OH]", 1.74, (0, 0, 1.76), False),  # no P–O bond for comparison
+        ("C", "[CH3]", 2.12, (0, 0, 2.14), False),  # beyond the P–C distance limit
+        ("C", "[CH2]", 2.00, (0, 0, 2.02), False),  # candidate has the wrong valence
+    ],
+)
+def test_make_connections_octahedral_phosphorus(
+    axial_neighbor, candidate, axial_distance, position, expected
+):
+    from molgr import _core
+
+    for backend in ("python", "cpp"):
+        mol = pybel.readstring("smi", f"[P](F)(F)(F)(F){axial_neighbor}.{candidate}")
+        coordinates = [
+            (0, 0, 0),
+            (1.7, 0, 0),
+            (-1.7, 0, 0),
+            (0, 1.7, 0),
+            (0, -1.7, 0),
+            (0, 0, -axial_distance),
+            position,
+        ]
+        for idx, xyz in enumerate(coordinates, 1):
+            mol.OBMol.GetAtom(idx).SetVector(*xyz)
+        if backend == "python":
+            _, changed = make_connections(mol)
+        else:
+            changed = _core.dev.stages.preprocess.make_connections_ptr(_get_ptr(mol.OBMol), 0.15)
+        assert changed == expected
+        bond = mol.OBMol.GetBond(1, 7)
+        assert (bond.GetBondOrder() if bond else None) == (1 if expected else None)
+
+
+@pytest.mark.parametrize(
+    ("seed", "distances", "expected_partners"),
+    [
+        ("[OH].[CH3]", [1.44], [2]),
+        ("[OH].[CH3]", [1.70], []),
+        ("[OH].[CH2]", [1.44], []),
+        ("[SeH3].[OH]", [1.81], [2]),
+        ("[SeH4].[OH]", [1.81], []),
+        ("[SeH3].[CH3]", [1.81], []),
+        # Fill iodine valences four and five in successive passes, nearest first.
+        ("[IH4].[OH].[OH].[OH]", [2.16, 2.10, 2.13], [3, 4]),
+        ("[IH4].[CH3]", [2.10], []),
+    ],
+)
+def test_make_connections_oxygen_partners(seed, distances, expected_partners):
+    from molgr import _core
+
+    for backend in ("python", "cpp"):
+        mol = pybel.readstring("smi", seed)
+        for idx, distance in enumerate([0.0, *distances], 1):
+            mol.OBMol.GetAtom(idx).SetVector(distance, 0, 0)
+        if backend == "python":
+            _, changed = make_connections(mol)
+        else:
+            changed = _core.dev.stages.preprocess.make_connections_ptr(_get_ptr(mol.OBMol), 0.15)
+        assert changed == bool(expected_partners)
+        bonds = list(ob.OBAtomBondIter(mol.OBMol.GetAtom(1)))
+        assert sorted(b.GetNbrAtomIdx(mol.OBMol.GetAtom(1)) for b in bonds) == expected_partners
+        assert all(b.GetBondOrder() == 1 for b in bonds)
+
+
 @pytest.mark.parametrize("atomic_num", [16, 15, 33, 9, 17, 35, 53])
 @pytest.mark.parametrize("bond_order", [2, 3])
 def test_pre_clean_collapses_hyper_pi_bonds_for_python_and_cpp(
@@ -476,6 +755,11 @@ def test_pre_clean_collapses_hyper_pi_bonds_for_python_and_cpp(
         carbon = obmol.NewAtom()
         carbon.SetAtomicNum(6)
         obmol.AddBond(hyper_pi_atom.GetIdx(), carbon.GetIdx(), bond_order)
+        # Substituted C=X keeps the general cleanup contract. Isolated CO/CS
+        # has its own closed-shell precursor and is tested separately.
+        hydrogen = obmol.NewAtom()
+        hydrogen.SetAtomicNum(1)
+        obmol.AddBond(carbon.GetIdx(), hydrogen.GetIdx(), 1)
         obmol.EndModify()
         return pybel.Molecule(obmol)
 
@@ -489,6 +773,19 @@ def test_pre_clean_collapses_hyper_pi_bonds_for_python_and_cpp(
     assert cpp_hit == python_hit
     assert python_omol.OBMol.GetBond(1, 2).GetBondOrder() == 1
     assert _pybel_stage_signature(cpp_omol) == _pybel_stage_signature(python_omol)
+
+
+@pytest.mark.parametrize("seed", ["[Si](F)(F)(F)(F)F", "[Si](C)(O)(O)(O)O"])
+def test_pre_clean_retains_five_single_bonds_to_silicon(seed: str) -> None:
+    from molgr import _core
+
+    python_mol = pybel.readstring("smi", seed)
+    cpp_mol = pybel.readstring("smi", seed)
+    pre_clean(python_mol)
+    _core.dev.stages.preprocess.pre_clean_ptr(_get_ptr(cpp_mol.OBMol))
+    for mol in (python_mol, cpp_mol):
+        assert mol.OBMol.GetAtom(1).GetFormalCharge() == 0
+        assert [bond.GetBondOrder() for bond in ob.OBAtomBondIter(mol.OBMol.GetAtom(1))] == [1] * 5
 
 
 def test_pre_clean_normalizes_aromatic_sulfur_oxygen_for_python_and_cpp() -> None:
@@ -784,8 +1081,8 @@ def test_active_electron_occupancy_does_not_read_openbabel_hybridization(
     )
 
 
-@pytest.mark.parametrize(("atomic_num", "neighbor_count"), [(6, 2), (7, 1), (15, 1)])
-def test_assign_charge_radical_defers_carbene_nitrene_and_phosphinidene_occupancy(
+@pytest.mark.parametrize(("atomic_num", "neighbor_count"), [(6, 2), (7, 1), (14, 2), (15, 1)])
+def test_assign_charge_radical_defers_two_electron_center_occupancy(
     atomic_num: int,
     neighbor_count: int,
 ) -> None:
@@ -817,6 +1114,7 @@ def test_assign_charge_radical_defers_carbene_nitrene_and_phosphinidene_occupanc
         ("C", "C 0 0 0\nH 1.08 0 0\nH -0.54 0.935 0"),
         ("N", "N 0 0 0\nH 1.02 0 0"),
         ("P", "P 0 0 0\nH 1.42 0 0"),
+        ("Si", "Si 0 0 0\nH 1.48 0 0\nH -0.74 1.282 0"),
     ],
 )
 @pytest.mark.parametrize(
@@ -877,6 +1175,34 @@ def test_clean_carbene_neighbor_unsaturated_consumes_unresolved_center_for_pytho
     assert _core.dev.stages.clean.clean_carbene_neighbor_unsaturated_ptr(_get_ptr(cpp_omol.OBMol))
     assert _pybel_stage_signature(cpp_omol) == _pybel_stage_signature(python_omol)
     assert not has_unresolved_two_electron_center(cpp_omol.OBMol.GetAtom(1))
+
+
+def test_carbene_cleanup_requeries_paths_exposed_by_a_previous_move() -> None:
+    def make_omol() -> pybel.Molecule:
+        mol = ob.OBMol()
+        mol.BeginModify()
+        for _ in range(4):
+            mol.NewAtom().SetAtomicNum(6)
+        for begin, end, order in ((1, 2, 1), (2, 3, 1), (3, 4, 2)):
+            mol.AddBond(begin, end, order)
+        mol.EndModify()
+        for index in (1, 2):
+            set_unresolved_two_electron_center(mol.GetAtom(index), True)
+        return pybel.Molecule(mol)
+
+    python_omol, hit = clean_carbene_neighbor_unsaturated(make_omol())
+    assert hit
+    # Resolving 2-3=4 exposes 1-2=3, which was absent from the first match list.
+    assert [b.GetBondOrder() for b in ob.OBMolBondIter(python_omol.OBMol)] == [2, 1, 1]
+    assert [get_unpaired_electron_count(a.OBAtom) for a in python_omol] == [1, 1, 1, 1]
+    assert not any(has_unresolved_two_electron_center(a.OBAtom) for a in python_omol)
+    assert not clean_carbene_neighbor_unsaturated(python_omol)[1]
+
+    from molgr import _core
+
+    cpp_omol = make_omol()
+    assert _core.dev.stages.clean.clean_carbene_neighbor_unsaturated_ptr(_get_ptr(cpp_omol.OBMol))
+    assert _pybel_stage_signature(cpp_omol) == _pybel_stage_signature(python_omol)
 
 
 def test_eliminate_possible_cp_like_radical_anion_converts_excess_cyclopentadienyl_radical_for_python_and_cpp() -> (
@@ -2664,7 +2990,8 @@ def test_clean_1_6_radicals_respects_global_electron_budget() -> None:
     assert _pybel_stage_signature(omol) == before
 
 
-def test_enumerate_neighbor_radical_seeds_resolves_neighbor_radicals() -> None:
+@pytest.mark.parametrize("length", [1.35, 1.48])
+def test_enumerate_neighbor_radical_seeds_resolves_neighbor_radicals(length: float) -> None:
     def make_omol() -> pybel.Molecule:
         obmol = ob.OBMol()
         obmol.BeginModify()
@@ -2673,6 +3000,8 @@ def test_enumerate_neighbor_radical_seeds_resolves_neighbor_radicals() -> None:
             atom.SetAtomicNum(8)
             atom.SetFormalCharge(0)
             set_unpaired_electron_count(atom, 1)
+        obmol.GetAtom(1).SetVector(0, 0, 0)
+        obmol.GetAtom(2).SetVector(length, 0, 0)
         obmol.AddBond(1, 2, 1)
         obmol.EndModify()
         return pybel.Molecule(obmol)
@@ -2687,6 +3016,32 @@ def test_enumerate_neighbor_radical_seeds_resolves_neighbor_radicals() -> None:
 
     candidates = neighbor_radical_module.enumerate_neighbor_radical_seeds(state)
 
+    from molgr import _core  # type: ignore
+
+    xyz_block = f"2\nOO\nO 0 0 0\nO {length} 0 0\n"
+    cpp_candidates = _core.dev.pipeline.reconstruct_without_metals.debug_neighbor_radical_seeds(
+        xyz_block,
+        0,
+        0,
+    )
+    if length >= 1.40:
+        # Both backends defer the same elongated O2 seed without losing electrons.
+        assert len(candidates) == len(cpp_candidates) == 1
+        assert candidates[0].metadata["neighbor_radical_resolution"] == "none"
+        assert cpp_candidates[0]["neighbor_radical_resolution"] == "none"
+        assert _pybel_stage_signature(candidates[0].omol) == _pybel_stage_signature(state.omol)
+        assert (
+            neighbor_radical_module.enumerate_neighbor_radical_seeds(state, exact_discrepancy=1)
+            == []
+        )
+        assert (
+            _core.dev.pipeline.reconstruct_without_metals.debug_neighbor_radical_seeds(
+                xyz_block, 0, 0, 1
+            )
+            == []
+        )
+        return
+
     assert len(candidates) == 3
     assert [candidate.metadata["neighbor_radical_resolution"] for candidate in candidates] == [
         "bond_order",
@@ -2699,18 +3054,6 @@ def test_enumerate_neighbor_radical_seeds_resolves_neighbor_radicals() -> None:
         (((1, -1, 0), (2, 1, 0)), ((1, 2, 1),)),
     ]
 
-    from molgr import _core  # type: ignore
-
-    xyz_block = """2
-OO
-O 0.0 0.0 0.0
-O 1.48 0.0 0.0
-    """
-    cpp_candidates = _core.dev.pipeline.reconstruct_without_metals.debug_neighbor_radical_seeds(
-        xyz_block,
-        0,
-        0,
-    )
     assert [candidate["neighbor_radical_resolution"] for candidate in cpp_candidates] == [
         "bond_order",
         "charge_separation",
@@ -3195,7 +3538,9 @@ def test_no_metal_resonance_selection_prefers_aromatic_topology_before_force_fie
     assert result.omol.write("can").strip() == aromatic_candidate.omol.write("can").strip()
     assert result.metadata["organic_aromatic_atom_count"] == 6
     assert result.metadata["organic_aromatic_stability_score"] == pytest.approx(1.0)
-    assert result.metadata["organic_topology_selection_key"][:7] == (
+    assert result.metadata["organic_topology_selection_key"][:9] == (
+        0,
+        0,
         0,
         -6,
         -1,
@@ -3278,32 +3623,36 @@ def test_no_metal_resonance_selection_scores_conjugation_and_charge_separately(
     assert result.metadata["organic_formal_charge_absolute_sum"] == 2
     assert result.metadata["organic_conjugation_charge_penalty"] == pytest.approx(1.0)
     assert result.omol.write("can").strip() == lower_force_field_candidate.omol.write("can").strip()
-    assert charge_separated_candidate.metadata["organic_max_conjugated_component_size"] == (
-        lower_force_field_candidate.metadata["organic_max_conjugated_component_size"] + 1
+    # Neutral O lone pairs participate without an artificial oxonium charge.
+    assert (
+        charge_separated_candidate.metadata["organic_max_conjugated_component_size"]
+        == (lower_force_field_candidate.metadata["organic_max_conjugated_component_size"])
     )
-    assert charge_separated_candidate.metadata["organic_conjugated_atom_count"] == (
-        lower_force_field_candidate.metadata["organic_conjugated_atom_count"] + 1
+    assert (
+        charge_separated_candidate.metadata["organic_conjugated_atom_count"]
+        == (lower_force_field_candidate.metadata["organic_conjugated_atom_count"])
     )
-    assert charge_separated_candidate.metadata["organic_conjugated_bond_count"] == (
-        lower_force_field_candidate.metadata["organic_conjugated_bond_count"] + 1
+    assert (
+        charge_separated_candidate.metadata["organic_conjugated_bond_count"]
+        == (lower_force_field_candidate.metadata["organic_conjugated_bond_count"])
     )
     assert charge_separated_candidate.metadata["organic_conjugation_charge_penalty"] == (
         lower_force_field_candidate.metadata["organic_conjugation_charge_penalty"] + 1.0
     )
     assert (
         lower_force_field_candidate.metadata["organic_adjusted_max_conjugated_component_size"]
-        == charge_separated_candidate.metadata["organic_adjusted_max_conjugated_component_size"]
+        == charge_separated_candidate.metadata["organic_adjusted_max_conjugated_component_size"] + 1
     )
     assert (
         lower_force_field_candidate.metadata["organic_adjusted_conjugated_atom_count"]
-        == charge_separated_candidate.metadata["organic_adjusted_conjugated_atom_count"]
+        == charge_separated_candidate.metadata["organic_adjusted_conjugated_atom_count"] + 1
     )
     assert (
         lower_force_field_candidate.metadata["organic_adjusted_conjugated_bond_count"]
-        == charge_separated_candidate.metadata["organic_adjusted_conjugated_bond_count"]
+        == charge_separated_candidate.metadata["organic_adjusted_conjugated_bond_count"] + 1
     )
-    assert lower_force_field_candidate.metadata["organic_topology_selection_key"][0] == 2
-    assert charge_separated_candidate.metadata["organic_topology_selection_key"][0] == 4
+    assert lower_force_field_candidate.metadata["organic_topology_selection_key"][1] == 2
+    assert charge_separated_candidate.metadata["organic_topology_selection_key"][1] == 4
     assert (
         lower_force_field_candidate.metadata["organic_topology_selection_key"]
         < charge_separated_candidate.metadata["organic_topology_selection_key"]
@@ -3380,3 +3729,346 @@ def test_no_metal_cached_pipeline_uses_config_in_key_and_execution(
     assert second is base_state
     assert third is base_state
     assert seen_configs == [config_a, config_b]
+
+
+@pytest.mark.parametrize("length,height,expected", [(1.40, 0.0, 1), (1.46, 0.0, 0), (1.40, 0.8, 0)])
+def test_azinium_preference_requires_compact_planar_geometry(length, height, expected):
+    import math
+
+    from molgr.fallback.utils.bond_geometry import azinium_geometry_conflict_count
+
+    mol = pybel.readstring("smi", "CN1C=C[CH-]C=C1").OBMol
+    ids = list(mol.GetSSSR()[0]._path)
+    for i, idx in enumerate(ids):
+        angle = i * math.pi / 3
+        mol.GetAtom(idx).SetVector(
+            length * math.cos(angle), length * math.sin(angle), height if i == 0 else 0
+        )
+    assert azinium_geometry_conflict_count(mol) == expected
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [
+        ("substituted", True),
+        ("isolated_no", False),
+        ("hydroxyl", False),
+        ("closed_shell", False),
+        ("double_bond", False),
+    ],
+)
+def test_unclosed_n_o_seed_scope_preserves_terminal_no_and_hydroxyl(mode, expected):
+    mol = ob.OBMol()
+    nitrogen, oxygen = mol.NewAtom(), mol.NewAtom()
+    nitrogen.SetAtomicNum(7)
+    oxygen.SetAtomicNum(8)
+    for atom in (nitrogen, oxygen):
+        atom.SetImplicitHCount(0)
+        set_unpaired_electron_count(atom, 0 if mode == "closed_shell" else 1)
+    mol.AddBond(1, 2, 2 if mode == "double_bond" else 1)
+    if mode != "isolated_no":
+        carbon = mol.NewAtom()
+        carbon.SetAtomicNum(6)
+        mol.AddBond(1, carbon.GetIdx(), 1)
+    if mode == "hydroxyl":
+        hydrogen = mol.NewAtom()
+        hydrogen.SetAtomicNum(1)
+        mol.AddBond(2, hydrogen.GetIdx(), 1)
+    assert neighbor_radical_module.has_substituted_n_o_radical_pair(pybel.Molecule(mol)) == expected
+
+
+def test_bent_allene_guard_preserves_linear_and_non_ring_centers():
+    from molgr.fallback.utils.bond_geometry import would_form_bent_ring_allene
+
+    mol = pybel.readstring("smi", "C1=CCCCC1").OBMol
+    center, double_neighbor, partner = (mol.GetAtom(i) for i in (1, 2, 6))
+    center.SetVector(0, 0, 0)
+    double_neighbor.SetVector(1, 0, 0)
+    partner.SetVector(-0.5, 0.866, 0)
+    assert would_form_bent_ring_allene(center, partner)
+    partner.SetVector(-1, 0, 0)
+    assert not would_form_bent_ring_allene(center, partner)
+    chain = pybel.readstring("smi", "C=CC").OBMol
+    assert not would_form_bent_ring_allene(chain.GetAtom(2), chain.GetAtom(3))
+
+
+@pytest.mark.parametrize(
+    "atomic_num,valence,can_donate",
+    [
+        (7, 3, True),
+        (8, 2, True),
+        (15, 3, True),
+        (15, 5, False),
+        (16, 2, True),
+        (16, 4, True),
+        (16, 6, False),
+    ],
+)
+def test_carbene_donor_requires_remaining_valence_electrons(atomic_num, valence, can_donate):
+    """Neutral hypervalent atoms must not invent an additional donor pair."""
+    from molgr import _core
+
+    def make_molecule():
+        mol = ob.OBMol()
+        carbon = mol.NewAtom()
+        carbon.SetAtomicNum(6)
+        donor = mol.NewAtom()
+        donor.SetAtomicNum(atomic_num)
+        mol.AddBond(1, 2, 1)
+        for parent in [1] + [2] * (valence - 1):
+            hydrogen = mol.NewAtom()
+            hydrogen.SetAtomicNum(1)
+            mol.AddBond(parent, hydrogen.GetIdx(), 1)
+        result = pybel.Molecule(mol)
+        fresh_omol_charge_radical(result)
+        assert has_unresolved_two_electron_center(carbon)
+        # Exercise the donor rule on neutral closed-shell Lewis states,
+        # independently of fresh's preferred sulfur charge normalization.
+        donor.SetFormalCharge(0)
+        assert donor.GetFormalCharge() == 0
+        assert get_unpaired_electron_count(donor) == 0
+        return result
+
+    python_mol = make_molecule()
+    before = _pybel_stage_signature(python_mol)
+    python_mol, charge, hit = eliminate_carbene_neighbor_heteroatom(python_mol, 0)
+    cpp_mol = make_molecule()
+    cpp_charge, cpp_hit = _core.dev.stages.eliminate.eliminate_carbene_neighbor_heteroatom_ptr(
+        _get_ptr(cpp_mol.OBMol), 0
+    )
+    assert hit == cpp_hit == can_donate
+    assert charge == cpp_charge == 0
+    assert _pybel_stage_signature(python_mol) == _pybel_stage_signature(cpp_mol)
+    if can_donate:
+        assert python_mol.OBMol.GetBond(1, 2).GetBondOrder() == 2
+        assert python_mol.OBMol.GetAtom(1).GetFormalCharge() == -1
+        assert python_mol.OBMol.GetAtom(2).GetFormalCharge() == 1
+        Chem.SanitizeMol(pybel_to_rdmol(python_mol))
+    else:
+        assert _pybel_stage_signature(python_mol) == before
+        assert has_unresolved_two_electron_center(python_mol.OBMol.GetAtom(1))
+
+
+@pytest.mark.parametrize("chalcogen", [8, 16], ids=["CO", "CS"])
+@pytest.mark.parametrize("seed_order", [1, 2, 3])
+def test_isolated_co_cs_share_closed_shell_donor_path(chalcogen, seed_order):
+    """Seed bond perception must not decide whether neutral CO/CS can close."""
+    from molgr import _core
+
+    def make_molecule():
+        mol = ob.OBMol()
+        for number in [6, chalcogen]:
+            mol.NewAtom().SetAtomicNum(number)
+        mol.AddBond(1, 2, seed_order)
+        return pybel.Molecule(mol)
+
+    python_mol = make_molecule()
+    cpp_mol = make_molecule()
+    pre_clean(python_mol)
+    _core.dev.stages.preprocess.pre_clean_ptr(_get_ptr(cpp_mol.OBMol))
+    assert python_mol.OBMol.GetBond(1, 2).GetBondOrder() == 2
+    assert _pybel_stage_signature(python_mol) == _pybel_stage_signature(cpp_mol)
+    assert not pre_clean(python_mol)[1]
+    assert not _core.dev.stages.preprocess.pre_clean_ptr(_get_ptr(cpp_mol.OBMol))
+    fresh_omol_charge_radical(python_mol)
+    _core.dev.stages.fresh.fresh_omol_charge_radical_ptr(_get_ptr(cpp_mol.OBMol))
+    python_mol, charge, hit = eliminate_carbene_neighbor_heteroatom(python_mol, 0)
+    cpp_charge, cpp_hit = _core.dev.stages.eliminate.eliminate_carbene_neighbor_heteroatom_ptr(
+        _get_ptr(cpp_mol.OBMol), 0
+    )
+    assert hit and cpp_hit and charge == cpp_charge == 0
+    assert _pybel_stage_signature(python_mol) == _pybel_stage_signature(cpp_mol)
+    result = pybel_to_rdmol(python_mol)
+    assert result.GetNumAtoms() == 2
+    assert Chem.GetFormalCharge(result) == 0
+    assert [a.GetFormalCharge() for a in result.GetAtoms()] == [-1, 1]
+    assert sum(a.GetNumRadicalElectrons() for a in result.GetAtoms()) == 0
+    assert result.GetBondBetweenAtoms(0, 1).GetBondType() == Chem.BondType.TRIPLE
+    assert all(a.GetNumImplicitHs() == 0 for a in result.GetAtoms())
+
+
+def _phosphoranide_geometry(kind="seesaw", *, count=1, family="cf"):
+    """Four explicit ligand neighbors with independently prescribed geometry."""
+    import math
+
+    mol = ob.OBMol()
+    for fragment in range(count):
+        p = mol.NewAtom()
+        p.SetAtomicNum(15)
+        p.SetFormalCharge(1)
+        p.SetImplicitHCount(0)
+        offset = 10.0 * fragment
+        p.SetVector(offset, 0.0, 0.0)
+        half = math.radians(50)
+        vectors = [
+            (0.0, 0.0, 1.7),
+            (0.0, 0.0, -1.7),
+            (1.7 * math.cos(half), 1.7 * math.sin(half), 0.0),
+            (1.7 * math.cos(half), -1.7 * math.sin(half), 0.0),
+        ]
+        if kind == "tetrahedral":
+            scale = 1.7 / math.sqrt(3)
+            vectors = [
+                (scale * x, scale * y, scale * z)
+                for x, y, z in [(1, 1, 1), (1, -1, -1), (-1, 1, -1), (-1, -1, 1)]
+            ]
+        elif kind in ("axial_164", "axial_166"):
+            angle = math.radians(int(kind.split("_")[1]))
+            vectors[1] = (1.7 * math.sin(angle), 0.0, 1.7 * math.cos(angle))
+        elif kind == "zero_length":
+            vectors[0] = (0.0, 0.0, 0.0)
+        elif kind == "nonfinite":
+            vectors[0] = (float("nan"), 0.0, 1.7)
+        elif kind == "long_bond":
+            vectors[0] = (0.0, 0.0, 2.0)
+        elif kind == "equatorial_150":
+            angle = math.radians(75)
+            vectors[2:] = [
+                (1.7 * math.cos(angle), sign * 1.7 * math.sin(angle), 0.0) for sign in (1, -1)
+            ]
+        for i, vector in enumerate(vectors):
+            n = mol.NewAtom()
+            elements = [9, 9, 9, 9] if family == "cf" else [8, 8, 7, 7]
+            if kind == "no_axial_pair":
+                elements = [6, 6, 9, 9] if family == "cf" else [7, 7, 8, 8]
+            elif kind == "all_nitrogen":
+                elements = [7] * 4
+            elif kind == "mixed_axial":
+                elements[1] = 6 if family == "cf" else 7
+            elif kind == "mixed_neighbors":
+                elements[0] = 8 if family == "cf" else 9
+            n.SetAtomicNum(elements[i])
+            n.SetImplicitHCount(0)
+            n.SetVector(vector[0] + offset, vector[1], vector[2])
+            mol.AddBond(p.GetIdx(), n.GetIdx(), 2 if kind == "multiple_bond" and i == 0 else 1)
+        if kind == "implicit_h":
+            p.SetImplicitHCount(1)
+    return pybel.Molecule(mol)
+
+
+@pytest.mark.parametrize(
+    "kind,allowed",
+    [
+        ("seesaw", True),
+        ("mixed_axial", None),
+        ("all_nitrogen", True),
+        ("axial_166", True),
+        ("axial_164", False),
+        ("tetrahedral", False),
+        ("zero_length", False),
+        ("nonfinite", False),
+        ("long_bond", False),
+        ("equatorial_150", False),
+        ("no_axial_pair", False),
+        ("mixed_neighbors", False),
+        ("multiple_bond", False),
+        ("implicit_h", False),
+    ],
+)
+@pytest.mark.parametrize("family", ["cf", "on"])
+def test_phosphoranide_geometry_and_refresh_parity(kind, allowed, family):
+    from molgr import _core
+    from molgr.fallback.utils.bond_geometry import allows_seesaw_phosphoranide
+
+    if kind == "mixed_axial":
+        allowed = family == "cf"
+    python_mol = _phosphoranide_geometry(kind, family=family)
+    p = python_mol.OBMol.GetAtom(1)
+    assert allows_seesaw_phosphoranide(p) == allowed
+    # Recognition must not overwrite the ordinary cation hypothesis.
+    assign_charge_radical_for_atom(p)
+    if kind not in ("multiple_bond", "implicit_h"):
+        assert p.GetFormalCharge() == 1
+    # An explicitly explored anion survives only within the admitted scope.
+    p.SetFormalCharge(-1)
+    set_unpaired_electron_count(p, 2)
+    set_lone_pair_count(p, 1)
+    set_unresolved_two_electron_center(p, True)
+    cpp_mol = pybel.Molecule(ob.OBMol(python_mol.OBMol))
+    python_hit = assign_charge_radical_for_atom(p)
+    cpp_hit = _core.dev.stages.fresh.assign_charge_radical_for_atom_ptr(_get_ptr(cpp_mol.OBMol), 1)
+    assert cpp_hit == python_hit
+    assert _pybel_stage_signature(cpp_mol) == _pybel_stage_signature(python_mol)
+    if allowed:
+        assert p.GetFormalCharge() == -1
+        assert get_unpaired_electron_count(p) == get_lone_pair_count(p) == 0
+        assert not has_unresolved_two_electron_center(p)
+    elif kind not in ("multiple_bond", "implicit_h"):
+        assert p.GetFormalCharge() == 1
+
+
+@pytest.mark.parametrize("count,expected", [(1, 2), (2, 4), (9, 256)])
+@pytest.mark.parametrize("family", ["cf", "on"])
+def test_geometry_electronic_seeds_preserve_charge_budget_and_original(count, expected, family):
+    omol = _phosphoranide_geometry(count=count, family=family)
+    state = ReconstructionState(omol, -2 * count, -count, 0)
+    before = _pybel_stage_signature(omol)
+    seeds = no_metal_preparation_module.expand_geometry_electronic_seeds(state)
+    assert len(seeds) == expected and seeds[0] is state
+    assert _pybel_stage_signature(omol) == before
+    assert len({tuple(a.OBAtom.GetFormalCharge() for a in s.omol) for s in seeds}) == expected
+    for seed in seeds:
+        assert seed.given_charge + sum(a.OBAtom.GetFormalCharge() for a in seed.omol) == -count
+        assert seed.total_radical_electrons == 0
+    if count <= 2:
+        assert any(s.given_charge == 0 for s in seeds)
+
+
+@pytest.mark.parametrize("charge", [-1, 1])
+@pytest.mark.parametrize("backend", ["python", "cpp"])
+def test_phosphoranide_exploration_respects_global_charge(charge, backend):
+    from molgr.interface import xyz_to_rdmol
+
+    omol = _phosphoranide_geometry()
+    xyz = omol.write("xyz")
+    result = xyz_to_rdmol(xyz, total_charge=charge, spin_multiplicity=1, backend=backend)
+    assert result.GetNumAtoms() == 5 and result.GetNumBonds() == 4
+    assert Chem.GetFormalCharge(result) == charge
+    assert result.GetAtomWithIdx(0).GetFormalCharge() == charge
+    assert all(a.GetNumRadicalElectrons() == 0 and a.GetNoImplicit() for a in result.GetAtoms())
+    assert all(b.GetBondType() == Chem.BondType.SINGLE for b in result.GetBonds())
+
+
+def test_cpp_phosphoranide_diagnostic_includes_production_branch():
+    from molgr import _core
+
+    xyz = _phosphoranide_geometry().write("xyz")
+    summaries = _core.dev.pipeline.reconstruct_without_metals.debug_resonance_candidate_summaries(
+        xyz, -1, 0, config=MolGRConfig()
+    )
+    assert summaries
+    assert any("[P-]" in summary["smiles"] for summary in summaries)
+
+
+@pytest.mark.parametrize("reverse_atoms", [False, True])
+@pytest.mark.parametrize("transform", [False, True])
+@pytest.mark.parametrize("family", ["cf", "on"])
+def test_phosphoranide_geometry_is_frame_and_atom_order_independent(
+    reverse_atoms, transform, family
+):
+    from molgr import _core
+    from molgr.fallback.utils.bond_geometry import allows_seesaw_phosphoranide
+
+    source = _phosphoranide_geometry(family=family).OBMol
+    for idx in (4, 5):
+        carbon = source.GetAtom(idx)
+        carbon.SetAtomicNum(6 if family == "cf" else 7)
+        length = 1.93 if family == "cf" else 1.75
+        carbon.SetVector(carbon.GetX() * length / 1.7, carbon.GetY() * length / 1.7, 0.0)
+    mol = ob.OBMol()
+    mapping = {}
+    for idx in range(5, 0, -1) if reverse_atoms else range(1, 6):
+        old = source.GetAtom(idx)
+        atom = mol.NewAtom()
+        atom.SetAtomicNum(old.GetAtomicNum())
+        atom.SetImplicitHCount(0)
+        x, y, z = old.GetX(), old.GetY(), old.GetZ()
+        atom.SetVector(-z + 12.0, y - 3.0, x + 5.0) if transform else atom.SetVector(x, y, z)
+        mapping[idx] = atom.GetIdx()
+    for idx in range(2, 6):
+        mol.AddBond(mapping[1], mapping[idx], 1)
+    p = mol.GetAtom(mapping[1])
+    assert allows_seesaw_phosphoranide(p)
+    p.SetFormalCharge(-1)
+    _core.dev.stages.fresh.assign_charge_radical_for_atom_ptr(_get_ptr(mol), p.GetIdx())
+    assert p.GetFormalCharge() == -1

@@ -77,6 +77,7 @@ add_library(molgr STATIC
     src/cpp/src/state.cpp
     src/cpp/src/utils/consts.cpp
     src/cpp/src/utils/utils.cpp
+    src/cpp/src/utils/coordination_seeds.cpp
     src/cpp/src/utils/conversions.cpp
     src/cpp/src/utils/stereo.cpp
     src/cpp/src/utils/equivalence.cpp

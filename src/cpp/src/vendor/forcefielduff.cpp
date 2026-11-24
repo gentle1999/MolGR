@@ -28,6 +28,7 @@ GNU General Public License for more details.
 #include "molgr/vendor/openbabel_copy.h"
 #include "molgr/vendor/openbabel_threading.h"
 
+#include <array>
 #include <cctype>
 #include <cstdlib>
 #include <filesystem>
@@ -63,8 +64,10 @@ namespace
   constexpr std::size_t kMolgrUffAtomTypeAssignmentCacheMaxSize = 4096;
 
 #if defined(_WIN32)
+  /// Provide an address in the loaded extension for Windows module-path lookup.
   void MolgrUffModuleAnchor() {}
 
+  /// @return Path to data/UFF.prm beside the loaded extension, or an empty path if lookup fails.
   std::filesystem::path MolgrInstalledUffParamPath()
   {
     HMODULE module = nullptr;
@@ -86,6 +89,10 @@ namespace
   }
 #endif
 
+  /// Parse an entire numeric parameter using locale-independent decimal syntax.
+  /// @param text Input text to examine.
+  /// @param value Destination for the parsed floating-point value.
+  /// @return True if parsing succeeded and the output was populated.
   bool ParseClassicDouble(const std::string &text, double *value)
   {
     std::istringstream stream(text);
@@ -94,14 +101,17 @@ namespace
     return stream && stream.eof();
   }
 
+  /// Atom-typing pattern and its assigned UFF atom type from the parameter table.
   struct MolgrUffAtomTypeRule
   {
     std::string smarts;
     std::string atom_type;
   };
 
+  /// Local element, aromaticity, charge and connectivity constraints for a UFF SMARTS atom.
   struct MolgrUffAtomPredicate
   {
+    /// Aromaticity requirement encoded by an atom primitive in a UFF typing rule.
     enum class Aromaticity
     {
       Any,
@@ -118,6 +128,7 @@ namespace
     std::optional<int> hybridization;
   };
 
+  /// Compiled UFF atom predicate and optional adjacent-atom constraint for fast matching.
   struct MolgrCompiledUffAtomTypeRule
   {
     std::string smarts;
@@ -126,6 +137,7 @@ namespace
     std::optional<MolgrUffAtomPredicate> default_bond_neighbor;
   };
 
+  /// Shared UFF atom-typing rules and force constants loaded from the packaged parameter table.
   struct MolgrUffSharedData
   {
     bool loaded = false;
@@ -134,6 +146,11 @@ namespace
     std::vector<MolgrUffAtomTypeRule> atom_type_rules;
   };
 
+  /// Advance the parser by one character only if the expected token is present.
+  /// @param text Input text to examine.
+  /// @param pos Current input position, advanced as tokens are consumed.
+  /// @param expected Character expected at the parser position.
+  /// @return True if the expected character was consumed.
   bool ConsumeChar(const std::string &text, std::size_t &pos, char expected)
   {
     if (pos < text.size() && text[pos] == expected) {
@@ -143,6 +160,10 @@ namespace
     return false;
   }
 
+  /// Read an unsigned decimal integer and advance the parser position on success.
+  /// @param text Input text to examine.
+  /// @param pos Current input position, advanced as tokens are consumed.
+  /// @return Parsed integer, or an empty optional when no integer starts here.
   std::optional<int> ConsumeUnsignedInt(const std::string &text, std::size_t &pos)
   {
     if (pos >= text.size() || !std::isdigit(static_cast<unsigned char>(text[pos]))) {
@@ -156,6 +177,11 @@ namespace
     return value;
   }
 
+  /// Parse an atomic-number SMARTS primitive into the UFF atom predicate.
+  /// @param text Input text to examine.
+  /// @param pos Current input position, advanced as tokens are consumed.
+  /// @param predicate Atom-typing constraints for the specified SMARTS atom.
+  /// @return True when the SMARTS fragment is recognized by the UFF subset parser.
   bool ConsumeAtomicNumberPrimitive(
       const std::string &text,
       std::size_t &pos,
@@ -172,6 +198,11 @@ namespace
     return true;
   }
 
+  /// Parse an element primitive and retain its element and aromaticity restrictions.
+  /// @param text Input text to examine.
+  /// @param pos Current input position, advanced as tokens are consumed.
+  /// @param predicate Atom-typing constraints for the specified SMARTS atom.
+  /// @return True when the SMARTS fragment is recognized by the UFF subset parser.
   bool ConsumeElementPrimitive(
       const std::string &text,
       std::size_t &pos,
@@ -232,6 +263,11 @@ namespace
     }
   }
 
+  /// Parse a formal charge restriction into the atom predicate.
+  /// @param text Input text to examine.
+  /// @param pos Current input position, advanced as tokens are consumed.
+  /// @param predicate Atom-typing constraints for the specified SMARTS atom.
+  /// @return True when the SMARTS fragment is recognized by the UFF subset parser.
   bool ConsumeFormalChargePrimitive(
       const std::string &text,
       std::size_t &pos,
@@ -247,6 +283,11 @@ namespace
     return true;
   }
 
+  /// Consume one supported SMARTS atom primitive and extend the typing predicate.
+  /// @param text Input text to examine.
+  /// @param pos Current input position, advanced as tokens are consumed.
+  /// @param predicate Atom-typing constraints for the specified SMARTS atom.
+  /// @return True when the SMARTS fragment is recognized by the UFF subset parser.
   bool ConsumeAtomPrimitive(
       const std::string &text,
       std::size_t &pos,
@@ -299,6 +340,10 @@ namespace
     }
   }
 
+  /// Parse the constraints within a bracket atom of a UFF typing pattern.
+  /// @param body Text between the brackets of a SMARTS atom.
+  /// @param predicate Atom-typing constraints for the specified SMARTS atom.
+  /// @return True when the SMARTS fragment is recognized by the UFF subset parser.
   bool ConsumePredicateBody(
       const std::string &body,
       MolgrUffAtomPredicate &predicate)
@@ -312,6 +357,11 @@ namespace
     return true;
   }
 
+  /// Parse one SMARTS atom into the restricted predicate used by the UFF typer.
+  /// @param smarts UFF atom-typing SMARTS expression.
+  /// @param pos Current input position, advanced as tokens are consumed.
+  /// @param predicate Atom-typing constraints for the specified SMARTS atom.
+  /// @return True when the SMARTS fragment is recognized by the UFF subset parser.
   bool ParseBracketAtomPredicate(
       const std::string &smarts,
       std::size_t &pos,
@@ -332,6 +382,11 @@ namespace
     return ConsumePredicateBody(body, predicate);
   }
 
+  /// Parse one SMARTS atom into the restricted predicate used by the UFF typer.
+  /// @param smarts UFF atom-typing SMARTS expression.
+  /// @param pos Current input position, advanced as tokens are consumed.
+  /// @param predicate Atom-typing constraints for the specified SMARTS atom.
+  /// @return True when the SMARTS fragment is recognized by the UFF subset parser.
   bool ParseBareAtomPredicate(
       const std::string &smarts,
       std::size_t &pos,
@@ -340,6 +395,11 @@ namespace
     return ConsumeElementPrimitive(smarts, pos, predicate);
   }
 
+  /// Parse one SMARTS atom into the restricted predicate used by the UFF typer.
+  /// @param smarts UFF atom-typing SMARTS expression.
+  /// @param pos Current input position, advanced as tokens are consumed.
+  /// @param predicate Atom-typing constraints for the specified SMARTS atom.
+  /// @return True when the SMARTS fragment is recognized by the UFF subset parser.
   bool ParseAtomPredicate(
       const std::string &smarts,
       std::size_t &pos,
@@ -351,6 +411,9 @@ namespace
     return ParseBareAtomPredicate(smarts, pos, predicate);
   }
 
+  /// Compile a UFF atom-typing rule into local tests where its SMARTS syntax is supported.
+  /// @param rule UFF typing rule to compile or match.
+  /// @return Compiled representation of the rule, including its supported syntax.
   MolgrCompiledUffAtomTypeRule CompileMolgrUffAtomTypeRule(
       const MolgrUffAtomTypeRule &rule)
   {
@@ -377,6 +440,13 @@ namespace
     return compiled;
   }
 
+  /// Look for a simple path of exactly the requested length while avoiding the blocked atom.
+  /// @param current Current atom of the ring-path search.
+  /// @param target_idx Index of the atom to reach.
+  /// @param remaining_edges Number of bonds still required in the path.
+  /// @param blocked_atom_idx Atom index excluded from the ring-path search.
+  /// @param visited Membership flags for vertices on the current path.
+  /// @return True when a simple path with the requested edge count exists.
   bool HasSimplePathWithExactLength(
       OpenBabel::OBAtom &current,
       int target_idx,
@@ -424,6 +494,10 @@ namespace
     return false;
   }
 
+  /// Test ring-size membership directly on connectivity without triggering SSSR perception.
+  /// @param atom Atom whose local chemical environment is examined.
+  /// @param ring_size Number of atoms required in the candidate ring.
+  /// @return True when the atom belongs to a cycle of the requested size.
   bool RingSizeMatchesWithoutLazySssr(OpenBabel::OBAtom &atom, int ring_size)
   {
     OpenBabel::OBMol *mol = atom.GetParent();
@@ -460,6 +534,9 @@ namespace
     return false;
   }
 
+  /// Sum the explicit bond contributions to valence from the existing connectivity.
+  /// @param atom Atom whose local chemical environment is examined.
+  /// @return Explicit valence calculated from incident bonds.
   int ExplicitValenceWithoutLazyPerception(const OpenBabel::OBAtom &atom)
   {
     int valence = 0;
@@ -473,6 +550,9 @@ namespace
     return valence;
   }
 
+  /// Count attached hydrogens using implicit counts and explicit hydrogen neighbors.
+  /// @param atom Atom whose local chemical environment is examined.
+  /// @return Number of explicit and implicit hydrogens attached to the atom.
   int TotalHydrogenCountWithoutLazyPerception(const OpenBabel::OBAtom &atom)
   {
     int hydrogen_count = atom.GetImplicitHCount();
@@ -492,6 +572,9 @@ namespace
       OpenBabel::OBAtom &atom,
       const MolgrUffAtomPredicate &neighbor_predicate);
 
+  /// Check incident bonds for the multiple-bond order used by this UFF atom predicate.
+  /// @param atom Atom whose local chemical environment is examined.
+  /// @return True when an incident bond has the specified multiplicity.
   bool HasDoubleBondToAny(OpenBabel::OBAtom &atom)
   {
     OpenBabel::OBBondIterator bond_iter;
@@ -505,6 +588,9 @@ namespace
     return false;
   }
 
+  /// Check incident bonds for the multiple-bond order used by this UFF atom predicate.
+  /// @param atom Atom whose local chemical environment is examined.
+  /// @return True when an incident bond has the specified multiplicity.
   bool HasTripleBondToAny(OpenBabel::OBAtom &atom)
   {
     OpenBabel::OBBondIterator bond_iter;
@@ -518,6 +604,9 @@ namespace
     return false;
   }
 
+  /// Estimate the hybridization needed by the supported UFF typing rules from local connectivity.
+  /// @param atom Atom whose local chemical environment is examined.
+  /// @return Hybridization class used by the UFF typing subset.
   int MolgrUffSubsetHybridization(OpenBabel::OBAtom &atom)
   {
     const unsigned int perceived_hybridization = atom.GetHyb();
@@ -640,6 +729,10 @@ namespace
     }
   }
 
+  /// Test an atom's local chemical environment against a compiled UFF predicate.
+  /// @param atom Atom whose local chemical environment is examined.
+  /// @param predicate Atom-typing constraints for the specified SMARTS atom.
+  /// @return True when the local SMARTS constraints are satisfied.
   bool AtomMatchesUffPredicate(
       OpenBabel::OBAtom &atom,
       const MolgrUffAtomPredicate &predicate)
@@ -679,6 +772,10 @@ namespace
     return true;
   }
 
+  /// Test for a neighbor matching the predicate across a SMARTS default bond.
+  /// @param atom Atom whose local chemical environment is examined.
+  /// @param neighbor_predicate Atom-typing constraints for the specified SMARTS atom.
+  /// @return True when the local SMARTS constraints are satisfied.
   bool HasNeighborThroughDefaultSmartsBond(
       OpenBabel::OBAtom &atom,
       const MolgrUffAtomPredicate &neighbor_predicate)
@@ -701,6 +798,10 @@ namespace
     return false;
   }
 
+  /// Match the central atom and any neighbor constraint of the compiled typing rule.
+  /// @param atom Atom whose local chemical environment is examined.
+  /// @param rule UFF typing rule to compile or match.
+  /// @return True when the local SMARTS constraints are satisfied.
   bool AtomMatchesUffRule(
       OpenBabel::OBAtom &atom,
       const MolgrCompiledUffAtomTypeRule &rule)
@@ -714,6 +815,8 @@ namespace
     return HasNeighborThroughDefaultSmartsBond(atom, *rule.default_bond_neighbor);
   }
 
+  /// Read and compile atom types and parameter records from the packaged UFF data.
+  /// @return Loaded UFF typing rules and parameter tables.
   MolgrUffSharedData LoadMolgrUffSharedData()
   {
     MolgrUffSharedData data;
@@ -807,29 +910,38 @@ namespace
     return data;
   }
 
+  /// @return Immutable shared UFF parameters and typing rules.
   const MolgrUffSharedData& GetMolgrUffSharedData()
   {
     static const MolgrUffSharedData data = LoadMolgrUffSharedData();
     return data;
   }
 
-  bool GetMolgrCompiledUffAtomTypeRules(
-      const std::vector<MolgrCompiledUffAtomTypeRule> *&compiled_rules)
+  // OBAtom stores atomic numbers in an unsigned byte. Keep parameter-file
+  // order within each element, including wildcard rules at their original rank.
+  using UffRulesByElement = std::array<std::vector<MolgrCompiledUffAtomTypeRule>, 256>;
+
+  /// @return The UFF typing rules indexed by the element of their central atom.
+  const UffRulesByElement &GetUffRulesByElement()
   {
-    static const std::vector<MolgrCompiledUffAtomTypeRule> rules = []()
-    {
-      const auto &shared = GetMolgrUffSharedData();
-      std::vector<MolgrCompiledUffAtomTypeRule> compiled;
-      compiled.reserve(shared.atom_type_rules.size());
-      for (const auto &rule : shared.atom_type_rules) {
-        compiled.push_back(CompileMolgrUffAtomTypeRule(rule));
+    static const UffRulesByElement rules = [] {
+      UffRulesByElement indexed;
+      for (const auto &rule : GetMolgrUffSharedData().atom_type_rules) {
+        auto compiled = CompileMolgrUffAtomTypeRule(rule);
+        const int element = compiled.atom.atomic_num;
+        if (element < 0) {
+          for (auto &bucket : indexed)
+            bucket.push_back(compiled);
+        } else if (static_cast<std::size_t>(element) < indexed.size()) {
+          indexed[element].push_back(std::move(compiled));
+        }
       }
-      return compiled;
+      return indexed;
     }();
-    compiled_rules = &rules;
-    return compiled_rules != nullptr && !compiled_rules->empty();
+    return rules;
   }
 
+  /// @return The bounded cache of atom-order-preserving UFF type assignments.
   molgr::utils::StringLruCache<std::vector<std::string>>& MolgrUffAtomTypeAssignmentCache()
   {
     static molgr::utils::StringLruCache<std::vector<std::string>> cache(
@@ -837,6 +949,9 @@ namespace
     return cache;
   }
 
+  /// Collect the assigned UFF atom type of each atom in molecular order.
+  /// @param mol Molecular graph on which the operation acts.
+  /// @return UFF type strings in molecular atom order.
   std::vector<std::string> CaptureMolgrUffAtomTypes(OpenBabel::OBMol &mol)
   {
     std::vector<std::string> atom_types;
@@ -847,6 +962,10 @@ namespace
     return atom_types;
   }
 
+  /// Restore cached UFF atom types on a molecule with the corresponding atom ordering.
+  /// @param mol Molecular graph on which the operation acts.
+  /// @param atom_types UFF atom-type names in molecular atom order.
+  /// @return True when the assignment could be applied to all atoms.
   bool ApplyMolgrUffAtomTypes(
       OpenBabel::OBMol &mol,
       const std::vector<std::string> &atom_types)
@@ -1652,6 +1771,11 @@ namespace OpenBabel {
     return true;
   }
 
+  /// Estimate the UFF equilibrium distance from the endpoint parameters and effective bond order.
+  /// @param i First endpoint UFF parameter record.
+  /// @param j Second endpoint UFF parameter record.
+  /// @param bondorder Bond multiplicity under consideration.
+  /// @return Estimated equilibrium bond length in angstroms.
   double CalculateBondDistance(OBFFParameter *i, OBFFParameter *j, double bondorder)
   {
     double ri, rj;
@@ -1713,6 +1837,10 @@ namespace OpenBabel {
     return true;
   }
 
+  /// Determine the UFF coordination class from the atom environment and its parameter record.
+  /// @param b Central atom being typed.
+  /// @param ipar Preferred central-atom coordination from its UFF parameter entry.
+  /// @return Coordination class used to select the UFF angle potential.
   int GetCoordination(OBAtom *b, int ipar)
   {
     int coordination;
@@ -1811,17 +1939,20 @@ namespace OpenBabel {
     std::vector<double> atom_vdw_well_depths(atom_count + 1, 0.0);
     std::vector<unsigned char> vdw_excluded((atom_count + 1) * (atom_count + 1), 0);
 
+    /// Map the two one-based atom indices to a slot in the nonbonded-pair exclusion table.
     const auto pair_offset = [atom_count](unsigned int lhs, unsigned int rhs)
     {
       return static_cast<std::size_t>(lhs) * (atom_count + 1) + rhs;
     };
 
+    /// Flag this atom pair in both directions so it cannot contribute a van der Waals term.
     const auto mark_vdw_excluded = [&](unsigned int lhs, unsigned int rhs)
     {
       vdw_excluded[pair_offset(lhs, rhs)] = 1;
       vdw_excluded[pair_offset(rhs, lhs)] = 1;
     };
 
+    /// Choose the effective UFF bond order used for this aromatic, amide or localized bond.
     const auto normalized_bond_order = [](OBBond *bond_ptr)
     {
       double normalized = bond_ptr->GetBondOrder();
@@ -1832,6 +1963,7 @@ namespace OpenBabel {
       return normalized;
     };
 
+    /// Combine the cached endpoint parameters for one nonbonded pair.
     const auto setup_cached_vdw_calculation =
       [&](OBAtom *atom_a, OBAtom *atom_b, MolgrFFVDWCalculationUFF &cached_vdwcalc)
       {
@@ -2756,16 +2888,13 @@ namespace OpenBabel {
       }
     }
 
-    const std::vector<MolgrCompiledUffAtomTypeRule> *compiled_rules = nullptr;
-    if (!GetMolgrCompiledUffAtomTypeRules(compiled_rules) || compiled_rules == nullptr) {
+    if (GetMolgrUffSharedData().atom_type_rules.empty())
       return false;
-    }
-
-    for (const auto &rule : *compiled_rules) {
-      FOR_ATOMS_OF_MOL(atom_iter, _mol) {
-        if (AtomMatchesUffRule(*atom_iter, rule)) {
-          atom_iter->SetType(rule.atom_type.c_str());
-        }
+    const auto &rules = GetUffRulesByElement();
+    FOR_ATOMS_OF_MOL(atom, _mol) {
+      for (const auto &rule : rules[atom->GetAtomicNum()]) {
+        if (AtomMatchesUffRule(*atom, rule))
+          atom->SetType(rule.atom_type.c_str());
       }
     }
 

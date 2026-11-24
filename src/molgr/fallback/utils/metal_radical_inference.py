@@ -11,6 +11,7 @@ from openbabel import openbabel as ob
 from molgr.config import CONFIG, MetalRadicalInferenceConfig, MetalScoringConfig, MolGRConfig
 from molgr.fallback.utils import consts
 from molgr.fallback.utils.dataclasses import FDSP
+from molgr.fallback.utils.ob_graph import mol_atoms
 from molgr.utils.coordination import coordination_distance_cutoff
 
 
@@ -213,8 +214,7 @@ def _collect_coordination_environment(
 ) -> Tuple[_DonorSample, ...]:
     parent = cast(ob.OBMol, metal_atom.GetParent())
     donors: List[_DonorSample] = []
-    for neighbor in ob.OBMolAtomIter(parent):
-        neighbor = cast(ob.OBAtom, neighbor)
+    for neighbor in mol_atoms(parent):
         if neighbor.GetIdx() == metal_atom.GetIdx():
             continue
         if neighbor.IsMetal():

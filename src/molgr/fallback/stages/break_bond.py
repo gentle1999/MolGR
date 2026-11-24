@@ -13,6 +13,7 @@ from molgr.fallback.utils.electrons import (
     has_unresolved_two_electron_center,
     set_unpaired_electron_count,
 )
+from molgr.fallback.utils.ob_graph import mol_atoms, mol_bonds
 
 
 def _bond_breaking_electron_budget(obmol: ob.OBMol) -> int:
@@ -20,7 +21,7 @@ def _bond_breaking_electron_budget(obmol: ob.OBMol) -> int:
 
     return sum(
         get_unpaired_electron_count(atom) + (2 if has_unresolved_two_electron_center(atom) else 0)
-        for atom in ob.OBMolAtomIter(obmol)
+        for atom in mol_atoms(obmol)
     )
 
 
@@ -91,10 +92,31 @@ def break_one_bond(
     formal charge, an explicit heterolytic/one-electron heuristic. Deferred
     two-electron centers count toward the stopping budget without being classified
     or consumed; active lone pairs do not count toward that budget.
+
+    Recover overbonded N/P cations before reducing neutral multiple bonds.
+    This can satisfy the electron deficit without breaking an intact carbonyl.
+    For an all-single-bond XYZ graph, require geometric evidence of stretching
+    before deleting a sigma bond. An electronic target alone must not split a
+    compact C-H bond into an isolated hydride and a carbon anion.
     """
 
     obmol = cast(ob.OBMol, omol.OBMol)
     hit = False
+    while res := smarts.BREAK_ONE_BOND_CATION.findall(omol):
+        if _bond_breaking_electron_budget(obmol) >= abs(given_charge) + given_radical:
+            return omol, given_charge, hit
+        idxs = res.pop(0)
+        bond2 = cast(ob.OBBond, obmol.GetBond(idxs[0], idxs[1]))
+        bond2.SetBondOrder(bond2.GetBondOrder() - 1)
+        # SMARTS identifies the charged endpoint; bond storage orientation is
+        # unrelated to the direction of this charge-transfer rule.
+        begin_atom2 = cast(ob.OBAtom, obmol.GetAtom(idxs[0]))
+        end_atom2 = cast(ob.OBAtom, obmol.GetAtom(idxs[1]))
+        set_unpaired_electron_count(end_atom2, get_unpaired_electron_count(end_atom2) + 1)
+        begin_atom2.SetFormalCharge(int(begin_atom2.GetFormalCharge() - 1))
+        given_charge += 1
+        hit = True
+
     while res := smarts.BREAK_ONE_BOND_MULTIPLE.findall(omol):
         if _bond_breaking_electron_budget(obmol) >= abs(given_charge) + given_radical:
             return omol, given_charge, hit
@@ -105,19 +127,6 @@ def break_one_bond(
         end_atom = cast(ob.OBAtom, bond.GetEndAtom())
         set_unpaired_electron_count(begin_atom, get_unpaired_electron_count(begin_atom) + 1)
         set_unpaired_electron_count(end_atom, get_unpaired_electron_count(end_atom) + 1)
-        hit = True
-
-    while res := smarts.BREAK_ONE_BOND_CATION.findall(omol):
-        if _bond_breaking_electron_budget(obmol) >= abs(given_charge) + given_radical:
-            return omol, given_charge, hit
-        idxs = res.pop(0)
-        bond2 = cast(ob.OBBond, obmol.GetBond(idxs[0], idxs[1]))
-        bond2.SetBondOrder(bond2.GetBondOrder() - 1)
-        begin_atom2 = cast(ob.OBAtom, bond2.GetBeginAtom())
-        end_atom2 = cast(ob.OBAtom, bond2.GetEndAtom())
-        set_unpaired_electron_count(end_atom2, get_unpaired_electron_count(end_atom2) + 1)
-        begin_atom2.SetFormalCharge(int(begin_atom2.GetFormalCharge() - 1))
-        given_charge += 1
         hit = True
 
     res = list(smarts.BREAK_ONE_BOND_AROMATIC.findall(omol))
@@ -136,12 +145,27 @@ def break_one_bond(
             hit = True
             break
 
-    if all(cast(ob.OBBond, bond).GetBondOrder() == 1 for bond in ob.OBMolBondIter(obmol)):
-        single_bonds = list(ob.OBMolBondIter(obmol))
+    if all(bond.GetBondOrder() == 1 for bond in mol_bonds(obmol)):
+        single_bonds = list(mol_bonds(obmol))
+        if obmol.GetDimension() == 3:
+            # Compare excess length relative to both atomic radii, so a normal
+            # bond between large atoms is not preferred over a stretched C-H.
+            def excess_length(bond: ob.OBBond) -> float:
+                return (
+                    bond.GetLength()
+                    - ob.GetCovalentRad(bond.GetBeginAtom().GetAtomicNum())
+                    - ob.GetCovalentRad(bond.GetEndAtom().GetAtomicNum())
+                )
+
+            single_bonds = sorted(
+                (bond for bond in single_bonds if excess_length(bond) > 0.20),
+                key=excess_length,
+                reverse=True,
+            )
         if single_bonds:
             if _bond_breaking_electron_budget(obmol) >= abs(given_charge) + given_radical:
                 return omol, given_charge, hit
-            single_bond = cast(ob.OBBond, single_bonds[0])
+            single_bond = single_bonds[0]
             single_begin_atom = cast(ob.OBAtom, single_bond.GetBeginAtom())
             single_end_atom = cast(ob.OBAtom, single_bond.GetEndAtom())
             set_unpaired_electron_count(

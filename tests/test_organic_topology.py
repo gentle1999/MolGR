@@ -63,12 +63,15 @@ def test_cumulated_double_bonds_do_not_join_orthogonal_pi_systems() -> None:
     assert agodeg_metrics.conjugated_atom_count == 10
     assert agodeg_metrics.conjugated_bond_count == 10
     assert agodeg_metrics.max_conjugated_component_size == 10
-    assert adinor_w2_metrics.conjugated_atom_count == 4
-    assert adinor_w2_metrics.conjugated_bond_count == 3
-    assert adinor_w2_metrics.max_conjugated_component_size == 4
-    assert adinor_w4_metrics.conjugated_atom_count == 5
-    assert adinor_w4_metrics.conjugated_bond_count == 4
-    assert adinor_w4_metrics.max_conjugated_component_size == 5
+    # The ester O supplies a Lewis pair in both representations. It extends
+    # the ester-side system without joining the orthogonal terminal C=C.
+    assert adinor_w2_metrics.conjugated_atom_count == 5
+    assert adinor_w2_metrics.conjugated_bond_count == 4
+    assert adinor_w2_metrics.max_conjugated_component_size == 5
+    assert 0 not in adinor_w2_metrics.conjugated_atom_indices
+    assert adinor_w4_metrics.conjugated_atom_count == 6
+    assert adinor_w4_metrics.conjugated_bond_count == 5
+    assert adinor_w4_metrics.max_conjugated_component_size == 6
 
 
 def test_diene_conjugation_requires_outer_substituents_to_be_coplanar() -> None:
@@ -198,6 +201,74 @@ def test_allylic_ion_gets_conjugation_reward_in_python_and_cpp(smiles: str) -> N
     assert cpp_metrics["max_conjugated_component_size"] == 3
 
 
+@pytest.mark.parametrize(
+    "smiles,expected_atoms,expected_bonds",
+    [
+        ("Oc1ccccc1", 7, 7),
+        ("Nc1ccccc1", 7, 7),
+        ("C=CO", 3, 2),
+        ("COC=C", 3, 2),
+        ("CC(=O)N", 3, 2),
+        ("C=CCO", 0, 0),  # Saturated carbon interrupts the path.
+        ("C=C[N+](C)(C)C", 0, 0),  # Ammonium has no Lewis pair.
+        ("C=CP(C)C", 0, 0),  # A pyramidal P pair is not an sp2 donor.
+    ],
+)
+def test_neutral_lewis_conjugation_preserves_topological_boundaries(
+    smiles: str, expected_atoms: int, expected_bonds: int
+) -> None:
+    from molgr import _core
+
+    molecule = _require_pybel().readstring("smi", smiles)
+    molecule.addh()
+    before = molecule.write("smi")
+    python_metrics = compute_organic_topology_metrics(molecule)
+    cpp_metrics = _core.dev.utils.compute_organic_topology_metrics_ptr(int(molecule.OBMol.this))
+    assert python_metrics.conjugated_atom_count == expected_atoms
+    assert python_metrics.conjugated_bond_count == expected_bonds
+    assert cpp_metrics["conjugated_atom_count"] == expected_atoms
+    assert cpp_metrics["conjugated_bond_count"] == expected_bonds
+    assert molecule.write("smi") == before
+
+
+@pytest.mark.parametrize("terminal", ["O", "S"])
+def test_exocyclic_multiple_bond_remains_conjugated_with_aromatic_ring(terminal: str) -> None:
+    from molgr import _core
+
+    molecule = _require_pybel().readstring("smi", f"{terminal}=c1cccc[nH]1")
+    molecule.addh()
+    python_metrics = compute_organic_topology_metrics(molecule)
+    cpp_metrics = _core.dev.utils.compute_organic_topology_metrics_ptr(int(molecule.OBMol.this))
+    assert python_metrics.aromatic_atom_count == 6
+    assert python_metrics.conjugated_atom_count == 7
+    assert python_metrics.conjugated_bond_count == 7
+    assert cpp_metrics["conjugated_atom_count"] == 7
+    assert cpp_metrics["conjugated_bond_count"] == 7
+
+
+@pytest.mark.parametrize("scale", [0.4, 1.0, 3.0])
+@pytest.mark.parametrize("twisted", [False, True])
+def test_lone_pair_donation_respects_orbital_plane(twisted: bool, scale: float) -> None:
+    from openbabel import openbabel as ob
+
+    from molgr import _core
+
+    molecule = _require_pybel().readstring("smi", "C=CN")
+    molecule.addh()
+    positions = [(2.05, 1.1, 0.0), (1.4, 0.0, 0.0), (0.0, 0.0, 0.0)]
+    for i, position in enumerate(positions, 1):
+        molecule.OBMol.GetAtom(i).SetVector(*(scale * value for value in position))
+    nitrogen = molecule.OBMol.GetAtom(3)
+    hydrogens = [atom for atom in ob.OBAtomAtomIter(nitrogen) if atom.GetAtomicNum() == 1]
+    for sign, atom in zip((-1, 1), hydrogens):
+        position = (-0.5, 0.0, sign * 0.8) if twisted else (-0.5, sign * 0.8, 0.0)
+        atom.SetVector(*(scale * value for value in position))
+    python_metrics = compute_organic_topology_metrics(molecule)
+    cpp_metrics = _core.dev.utils.compute_organic_topology_metrics_ptr(int(molecule.OBMol.this))
+    assert python_metrics.conjugated_atom_count == (0 if twisted else 3)
+    assert cpp_metrics["conjugated_atom_count"] == python_metrics.conjugated_atom_count
+
+
 @pytest.mark.parametrize("electron_state", ["radical", "lone_pair", "unresolved"])
 def test_explicit_allylic_electron_center_extends_conjugation(
     electron_state: str,
@@ -244,13 +315,18 @@ def test_saturated_charged_center_does_not_extend_conjugation() -> None:
     assert cpp_metrics["conjugated_bond_count"] == 0
 
 
-def test_explicit_saturated_sp2_lone_pair_center_extends_conjugation() -> None:
+@pytest.mark.parametrize("active_pairs", [0, 1])
+@pytest.mark.parametrize("explicit_h", [False, True])
+def test_neutral_sp2_lewis_pair_extends_conjugation_independently_of_search_pairs(
+    active_pairs: int, explicit_h: bool
+) -> None:
     pybel = _require_pybel()
     vinylamine = pybel.readstring("smi", "C=CN")
+    if explicit_h:
+        vinylamine.addh()
     nitrogen = vinylamine.OBMol.GetAtom(3)
     assert nitrogen.GetTotalValence() == 3
-    assert compute_organic_topology_metrics(vinylamine).conjugated_atom_count == 0
-    set_lone_pair_count(nitrogen, 1)
+    set_lone_pair_count(nitrogen, active_pairs)
 
     python_metrics = compute_organic_topology_metrics(vinylamine)
 
@@ -570,3 +646,24 @@ def test_au_nhc_zwitterion_variant_keeps_conjugation_component() -> None:
         aromatic_zwitterion_metrics.conjugated_atom_count
         >= charge_separated_metrics.conjugated_atom_count
     )
+
+
+@pytest.mark.parametrize(
+    ("smiles", "components"),
+    [
+        ("C=CC=C", ((0, 1, 2, 3),)),
+        ("C=CC=C.C=CC=C", ((0, 1, 2, 3), (4, 5, 6, 7))),
+        ("C=CC=CC(C)(C)C=CC=C", ((0, 1, 2, 3), (7, 8, 9, 10))),
+        ("C=CC=C[Si](C)(C)C=CC=C", ((0, 1, 2, 3), (7, 8, 9, 10))),
+        ("C=CC=C=CC=C", ((0, 1, 2, 3), (3, 4, 5, 6))),
+    ],
+)
+def test_conjugated_components_preserve_sigma_and_orthogonal_pi_boundaries(smiles, components):
+    from molgr import _core
+
+    mol = _require_pybel().readstring("smi", smiles)
+    python = compute_organic_topology_metrics(mol)
+    cpp = _core.dev.utils.compute_organic_topology_metrics_ptr(int(mol.OBMol.this))
+    assert python.conjugated_atom_components == components
+    assert tuple(tuple(c) for c in cpp["conjugated_atom_components"]) == components
+    assert python.max_conjugated_component_size == max(map(len, components))

@@ -1,4 +1,5 @@
 #include "molgr/utils/no_metals/selection.h"
+#include "molgr/utils/bond_geometry.h"
 
 #include "molgr/utils/electrons.h"
 #include "molgr/utils/organic_topology.h"
@@ -17,6 +18,10 @@ namespace molgr
         {
             namespace
             {
+                /// Encode atom and bond labels for deterministic selection among otherwise tied ligand
+                /// graphs.
+                /// @param mol Ligand graph supplying the atom labels, coordinates and bond orders.
+                /// @return Deterministic atom and bond ordering key.
                 NoMetalGraphTieBreakKey GraphTieBreakKey(const OpenBabel::OBMol &mol)
                 {
                     NoMetalGraphTieBreakKey key;
@@ -61,6 +66,9 @@ namespace molgr
                     return key;
                 }
 
+                /// Measure charge separation on the ligand, counting both ends of each formal ion pair.
+                /// @param mol Ligand graph supplying the atom labels, coordinates and bond orders.
+                /// @return Sum of the absolute values of the atom formal charges.
                 int FormalChargeAbsoluteSum(const OpenBabel::OBMol &mol)
                 {
                     int formal_charge_absolute_sum = 0;
@@ -76,6 +84,9 @@ namespace molgr
                     return formal_charge_absolute_sum;
                 }
 
+                /// Count explicit unpaired electrons above the requested ligand radical budget.
+                /// @param candidate Candidate electronic assignment being evaluated.
+                /// @return Number of unpaired electrons in excess of the target.
                 int ExcessRadicalLabels(const molgr::state::ReconstructionState &candidate)
                 {
                     int radical_sum = 0;
@@ -126,6 +137,25 @@ namespace molgr
                 return score;
             }
 
+            std::tuple<int,int,int> NoMetalCandidateGeometryKey(
+                molgr::state::ReconstructionState &candidate)
+            {
+                int long_carbonyl_count = 0;
+                auto &mol = const_cast<OpenBabel::OBMol &>(candidate.Mol());
+                FOR_BONDS_OF_MOL(bond, mol)
+                {
+                    if (bond->GetBondOrder() == 2 && molgr::bond_geometry::IsElongatedCarbonylPair(
+                            *bond->GetBeginAtom(), *bond->GetEndAtom()))
+                        ++long_carbonyl_count;
+                }
+                candidate.metadata["organic_long_carbonyl_multiple_bond_count"] = long_carbonyl_count;
+                const int azinium_count = molgr::bond_geometry::AziniumGeometryConflictCount(mol);
+                candidate.metadata["organic_azinium_geometry_conflict_count"] = azinium_count;
+                const int quinodiimine_count = molgr::bond_geometry::ShortQuinodiimineGeometryConflictCount(mol);
+                candidate.metadata["organic_short_quinodiimine_geometry_conflict_count"] = quinodiimine_count;
+                return {azinium_count + quinodiimine_count, FormalChargeAbsoluteSum(mol), long_carbonyl_count};
+            }
+
             NoMetalTopologySelectionKey NoMetalCandidateTopologySelectionKey(
                 molgr::state::ReconstructionState &candidate,
                 const molgr::config::MolGRConfig &config)
@@ -151,8 +181,12 @@ namespace molgr
                     adjusted_conjugated_atom_count;
                 candidate.metadata["organic_adjusted_conjugated_bond_count"] =
                     adjusted_conjugated_bond_count;
+                const auto [geometry, absolute_charge, long_carbonyl_count] =
+                    NoMetalCandidateGeometryKey(candidate);
                 return {
-                    formal_charge_absolute_sum,
+                    geometry,
+                    absolute_charge,
+                    long_carbonyl_count,
                     -metrics.aromatic_atom_count,
                     -metrics.aromatic_ring_count,
                     -metrics.aromatic_stability_score,
@@ -162,8 +196,8 @@ namespace molgr
                 };
             }
 
-            std::tuple<int, int, int, double, double, double, double, int, int, double>
-            NoMetalCandidateSelectionKey(
+            std::tuple<int, int, int, int, int, double, double, double, double, int, int>
+            NoMetalCandidateStructuralKey(
                 molgr::state::ReconstructionState &candidate,
                 const molgr::config::MolGRConfig &config)
             {
@@ -176,7 +210,6 @@ namespace molgr
                             std::get_if<int>(&hyperconjugation_it->second) != nullptr
                         ? *std::get_if<int>(&hyperconjugation_it->second)
                         : 0;
-                const double score = ScoreReconstructionCandidate(candidate, config);
                 return {
                     std::get<0>(topology_key),
                     std::get<1>(topology_key),
@@ -185,10 +218,20 @@ namespace molgr
                     std::get<4>(topology_key),
                     std::get<5>(topology_key),
                     std::get<6>(topology_key),
+                    std::get<7>(topology_key),
+                    std::get<8>(topology_key),
                     excess_radical_labels,
                     -hyperconjugation_score,
-                    score,
                 };
+            }
+
+            std::tuple<int, int, int, int, int, double, double, double, double, int, int, double>
+            NoMetalCandidateSelectionKey(
+                molgr::state::ReconstructionState &candidate,
+                const molgr::config::MolGRConfig &config)
+            {
+                const auto prefix = NoMetalCandidateStructuralKey(candidate, config);
+                return std::tuple_cat(prefix, std::make_tuple(ScoreReconstructionCandidate(candidate,config)));
             }
 
             NoMetalGraphTieBreakKey NoMetalCandidateGraphTieBreakKey(

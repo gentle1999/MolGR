@@ -9,6 +9,7 @@ from openbabel import pybel
 
 from molgr.fallback.utils.dataclasses import MetalAtomPosition
 from molgr.fallback.utils.electrons import get_unpaired_electron_count
+from molgr.fallback.utils.ob_graph import mol_atoms, mol_bonds
 from molgr.fallback.utils.tools import typed_lru_cache
 
 
@@ -45,8 +46,7 @@ def _quantized_coordinate(value: float) -> int:
 def _build_score_key(omol: pybel.Molecule) -> ForceFieldScoreKey:
     obmol = cast(ob.OBMol, omol.OBMol)
     atom_keys: list[ForceFieldAtomKey] = []
-    for atom in ob.OBMolAtomIter(obmol):
-        obatom = cast(ob.OBAtom, atom)
+    for obatom in mol_atoms(obmol):
         atom_keys.append(
             (
                 int(obatom.GetAtomicNum()),
@@ -61,8 +61,7 @@ def _build_score_key(omol: pybel.Molecule) -> ForceFieldScoreKey:
         )
 
     bond_keys: list[ForceFieldBondKey] = []
-    for bond in ob.OBMolBondIter(obmol):
-        obbond = cast(ob.OBBond, bond)
+    for obbond in mol_bonds(obmol):
         begin_idx = int(cast(ob.OBAtom, obbond.GetBeginAtom()).GetIdx())
         end_idx = int(cast(ob.OBAtom, obbond.GetEndAtom()).GetIdx())
         if begin_idx > end_idx:
@@ -75,8 +74,7 @@ def _build_score_key(omol: pybel.Molecule) -> ForceFieldScoreKey:
 
 def _build_force_field_setup_key(obmol: ob.OBMol) -> ForceFieldSetupKey:
     atom_keys: list[ForceFieldSetupAtomKey] = []
-    for atom in ob.OBMolAtomIter(obmol):
-        obatom = cast(ob.OBAtom, atom)
+    for obatom in mol_atoms(obmol):
         atom_keys.append(
             (
                 int(obatom.GetAtomicNum()),
@@ -89,8 +87,7 @@ def _build_force_field_setup_key(obmol: ob.OBMol) -> ForceFieldSetupKey:
         )
 
     bond_keys: list[ForceFieldBondKey] = []
-    for bond in ob.OBMolBondIter(obmol):
-        obbond = cast(ob.OBBond, bond)
+    for obbond in mol_bonds(obmol):
         begin_idx = int(cast(ob.OBAtom, obbond.GetBeginAtom()).GetIdx())
         end_idx = int(cast(ob.OBAtom, obbond.GetEndAtom()).GetIdx())
         if begin_idx > end_idx:
@@ -103,13 +100,11 @@ def _build_force_field_setup_key(obmol: ob.OBMol) -> ForceFieldSetupKey:
 
 def _build_openbabel_setup_key(obmol: ob.OBMol) -> OpenBabelSetupKey:
     atom_keys: list[OpenBabelSetupAtomKey] = []
-    for atom in ob.OBMolAtomIter(obmol):
-        obatom = cast(ob.OBAtom, atom)
+    for obatom in mol_atoms(obmol):
         atom_keys.append((int(obatom.GetAtomicNum()), int(obatom.GetExplicitDegree())))
 
     bond_keys: list[OpenBabelSetupBondKey] = []
-    for bond in ob.OBMolBondIter(obmol):
-        obbond = cast(ob.OBBond, bond)
+    for obbond in mol_bonds(obmol):
         begin_atom = cast(ob.OBAtom, obbond.GetBeginAtom())
         end_atom = cast(ob.OBAtom, obbond.GetEndAtom())
         bond_keys.append(
@@ -210,16 +205,12 @@ class ForceFieldEvaluation:
 
 def _contains_metal_atoms(omol: pybel.Molecule) -> bool:
     obmol = cast(ob.OBMol, omol.OBMol)
-    return any(cast(ob.OBAtom, atom).IsMetal() for atom in ob.OBMolAtomIter(obmol))
+    return any(atom.IsMetal() for atom in mol_atoms(obmol))
 
 
 def _strip_metal_atoms(omol: pybel.Molecule) -> pybel.Molecule:
     obmol = ob.OBMol(cast(ob.OBMol, omol.OBMol))
-    metal_indices = [
-        cast(int, cast(ob.OBAtom, atom).GetIdx())
-        for atom in ob.OBMolAtomIter(obmol)
-        if cast(ob.OBAtom, atom).IsMetal()
-    ]
+    metal_indices = [cast(int, atom.GetIdx()) for atom in mol_atoms(obmol) if atom.IsMetal()]
     if not metal_indices:
         return pybel.Molecule(obmol)
     obmol.BeginModify()
@@ -234,7 +225,7 @@ def _strip_metal_atoms(omol: pybel.Molecule) -> pybel.Molecule:
 
 
 def _count_heavy_atoms(obmol: ob.OBMol) -> int:
-    return sum(1 for atom in ob.OBMolAtomIter(obmol) if cast(ob.OBAtom, atom).GetAtomicNum() != 1)
+    return sum(1 for atom in mol_atoms(obmol) if atom.GetAtomicNum() != 1)
 
 
 def _force_field_energy_to_kj_mol(raw_energy: float, raw_unit: str) -> float:
@@ -276,7 +267,7 @@ def _build_force_field_evaluation(context: OmolForceFieldContext) -> ForceFieldE
     atom_count = int(working_obmol.NumAtoms())
     heavy_atom_count = _count_heavy_atoms(working_obmol)
 
-    force_field = ob.OBForceField.FindForceField(_FIXED_FORCE_FIELD)
+    force_field = cast("ob.OBForceField | None", ob.OBForceField.FindForceField(_FIXED_FORCE_FIELD))
     if not force_field:
         raise ValueError("Could not evaluate force-field energy with fixed 'uff': unavailable")
     candidate_obmol = ob.OBMol(working_obmol)

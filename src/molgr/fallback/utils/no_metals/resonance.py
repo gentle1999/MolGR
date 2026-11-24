@@ -29,6 +29,7 @@ from molgr.fallback.utils.electrons import (
     set_unpaired_electron_count,
     set_unresolved_two_electron_center,
 )
+from molgr.fallback.utils.ob_graph import mol_atoms, mol_bonds
 
 from .selection import _annotate_no_metal_candidate_topology, _score_reconstruction_candidate
 
@@ -71,6 +72,8 @@ def _clone_omol(omol: pybel.Molecule) -> pybel.Molecule:
 
 @dataclass
 class _RawResonanceCandidate:
+    """A ligand graph before validation, with indices back to its seed and traversal order."""
+
     seed: ReconstructionState
     seed_index: int
     resonance_index: int
@@ -80,6 +83,8 @@ class _RawResonanceCandidate:
 
 @dataclass
 class _ResonanceSearchSession:
+    """Track raw and processed ligand states across seeds so shared resonances can reuse search work."""
+
     seen_raw_states: set[tuple[object, int]] = field(default_factory=set)
     labels_by_state: dict[tuple[object, int], list[tuple[int, int]]] = field(default_factory=dict)
     seen_processed_states: set[tuple[str, int]] = field(default_factory=set)
@@ -118,11 +123,10 @@ def build_resonance_seed_pool(
 
 def _boron_neighbor_radical_bonds(omol: pybel.Molecule) -> list[tuple[int, int]]:
     pairs = []
-    for bond_iter in ob.OBMolBondIter(cast(ob.OBMol, omol.OBMol)):
-        bond = cast(ob.OBBond, bond_iter)
+    for bond in mol_bonds(cast(ob.OBMol, omol.OBMol)):
         if bond.GetBondOrder() != 2 or bond.IsAromatic():
             continue
-        boron, neighbor = bond.GetBeginAtom(), bond.GetEndAtom()
+        boron, neighbor = cast(ob.OBAtom, bond.GetBeginAtom()), cast(ob.OBAtom, bond.GetEndAtom())
         if boron.GetAtomicNum() != 5 or boron.GetFormalCharge() != -1:
             boron, neighbor = neighbor, boron
         if (
@@ -153,13 +157,15 @@ def _reduce_boron_neighbor_bond(
     mol = cast(ob.OBMol, omol.OBMol)
     if (
         given_charge <= 0
-        or sum(get_unpaired_electron_count(cast(ob.OBAtom, a)) for a in ob.OBMolAtomIter(mol))
-        >= total_radical_electrons
+        or sum(get_unpaired_electron_count(a) for a in mol_atoms(mol)) >= total_radical_electrons
         or (boron_idx, neighbor_idx) not in _boron_neighbor_radical_bonds(omol)
     ):
         return omol, given_charge, False
-    boron, neighbor = mol.GetAtom(boron_idx), mol.GetAtom(neighbor_idx)
-    bond = mol.GetBond(boron_idx, neighbor_idx)
+    boron, neighbor = (
+        cast(ob.OBAtom, mol.GetAtom(boron_idx)),
+        cast(ob.OBAtom, mol.GetAtom(neighbor_idx)),
+    )
+    bond = cast(ob.OBBond, mol.GetBond(boron_idx, neighbor_idx))
 
     def restore() -> None:
         bond.SetBondOrder(2)
@@ -212,8 +218,8 @@ def expand_boron_neighbor_radical_seeds(
             continue
         if (
             sum(
-                get_unpaired_electron_count(cast(ob.OBAtom, atom))
-                for atom in ob.OBMolAtomIter(cast(ob.OBMol, state.omol.OBMol))
+                get_unpaired_electron_count(atom)
+                for atom in mol_atoms(cast(ob.OBMol, state.omol.OBMol))
             )
             >= state.total_radical_electrons
         ):
@@ -385,9 +391,9 @@ def search_resonance_candidates(
                 full_normalization_stage,
             )
         unresolved_indices = [
-            atom.idx
-            for atom in machine.omol.atoms
-            if has_unresolved_two_electron_center(atom.OBAtom)
+            int(atom.GetIdx())
+            for atom in mol_atoms(cast(ob.OBMol, machine.omol.OBMol))
+            if has_unresolved_two_electron_center(atom)
         ]
         processed_key = (
             resonance_utils.build_processed_resonance_key(machine.omol),

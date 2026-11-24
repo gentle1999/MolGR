@@ -19,6 +19,10 @@ namespace molgr::pipeline::reconstruct_batch
 {
     namespace
     {
+        /// Check charge and radical targets before scheduling reconstruction and record the failure reason.
+        /// @param request One molecular geometry and its electronic targets.
+        /// @param diagnostics Destination for the failure code and reason when validation fails.
+        /// @return True for a consistent electronic target. Failure details are written to diagnostics.
         bool ValidateElectronicTarget(
             const ReconstructionBatchRequest &request,
             molgr::diagnostics::ReconstructionDiagnostics *diagnostics)
@@ -74,6 +78,10 @@ namespace molgr::pipeline::reconstruct_batch
             return true;
         }
 
+        /// Derive the configuration for one batch worker, accounting for outer batch parallelism.
+        /// @param config Settings for the current reconstruction or scoring operation.
+        /// @param worker_count Maximum workers participating in this operation.
+        /// @return Per-worker configuration with the applicable inner parallelism limits.
         molgr::config::MolGRConfig BatchWorkerConfig(
             const molgr::config::MolGRConfig &config,
             std::size_t worker_count)
@@ -95,6 +103,12 @@ namespace molgr::pipeline::reconstruct_batch
 
     struct ReconstructionBatchIterator::Impl
     {
+        /// Initialize the bounded scheduler and its ordered or completion-order result queue.
+        /// @param requests_in Requests in original input order.
+        /// @param config Settings for the current reconstruction or scoring operation.
+        /// @param max_workers Maximum workers participating in this operation.
+        /// @param queue_size_in Bound on outstanding batch results.
+        /// @param ordered_in Whether to yield results in input order.
         Impl(
             std::vector<ReconstructionBatchRequest> requests_in,
             const molgr::config::MolGRConfig &config,
@@ -131,6 +145,7 @@ namespace molgr::pipeline::reconstruct_batch
             ScheduleAvailableLocked();
         }
 
+        /// Close the scheduler and wait for outstanding work before destroying shared state.
         ~Impl()
         {
             if (molgr::IsCurrentProcess())
@@ -139,6 +154,9 @@ namespace molgr::pipeline::reconstruct_batch
             }
         }
 
+        /// Reconstruct one indexed request and package its graph or failure diagnostics.
+        /// @param index Zero-based request index in the input batch.
+        /// @return Indexed molecular result or its reconstruction diagnostics.
         ReconstructionBatchResult Process(std::size_t index)
         {
             ReconstructionBatchResult result;
@@ -187,6 +205,8 @@ namespace molgr::pipeline::reconstruct_batch
             return result;
         }
 
+        /// Record the first fatal worker error while holding the scheduler mutex.
+        /// @param exception Worker exception to propagate to the consuming thread.
         void SetFatalExceptionLocked(std::exception_ptr exception)
         {
             if (!fatal_exception)
@@ -197,6 +217,7 @@ namespace molgr::pipeline::reconstruct_batch
             result_cv.notify_all();
         }
 
+        /// Dispatch requests while queue capacity and worker slots remain available, with the mutex held.
         void ScheduleAvailableLocked()
         {
             auto &executor = molgr::utils::parallel::detail::ParallelExecutor::Instance();
@@ -232,6 +253,8 @@ namespace molgr::pipeline::reconstruct_batch
             }
         }
 
+        /// Publish a worker result and wake the iterator or schedule more work.
+        /// @param result Completed result to enqueue for the consumer.
         void Complete(ReconstructionBatchResult result)
         {
             std::lock_guard<std::mutex> lock(mutex);
@@ -258,6 +281,8 @@ namespace molgr::pipeline::reconstruct_batch
             workers_done_cv.notify_all();
         }
 
+        /// Publish a fatal worker exception and wake waiting consumers.
+        /// @param exception Worker exception to propagate to the consuming thread.
         void CompleteFatal(std::exception_ptr exception)
         {
             std::lock_guard<std::mutex> lock(mutex);
@@ -269,6 +294,8 @@ namespace molgr::pipeline::reconstruct_batch
             workers_done_cv.notify_all();
         }
 
+        /// Return the next available result, or an empty optional at the end of the batch.
+        /// @return Next indexed result, or an empty optional when exhausted.
         std::optional<ReconstructionBatchResult> Next()
         {
             std::unique_lock<std::mutex> lock(mutex);
@@ -311,6 +338,7 @@ namespace molgr::pipeline::reconstruct_batch
             }
         }
 
+        /// Stop dispatching requests and wait until active workers release the iterator's state.
         void Close()
         {
             std::unique_lock<std::mutex> lock(mutex);

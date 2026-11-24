@@ -9,6 +9,12 @@ from openbabel import openbabel as ob
 from openbabel import pybel
 
 from molgr.fallback.utils import consts, smarts
+from molgr.fallback.utils.bond_geometry import (
+    nitrogen_nitrogen_order_allowed,
+    nitrogen_oxygen_order_allowed,
+    phosphorus_carbon_order_allowed,
+    restores_azinium_ring,
+)
 from molgr.fallback.utils.electrons import (
     get_lone_pair_count,
     get_unpaired_electron_count,
@@ -17,10 +23,13 @@ from molgr.fallback.utils.electrons import (
     set_unpaired_electron_count,
     set_unresolved_two_electron_center,
 )
+from molgr.fallback.utils.ob_graph import atom_neighbors, mol_atoms
 
 
 @dataclass(frozen=True)
 class _ChargeAssignmentAction:
+    """A candidate charge edit and the unpaired electrons it consumes or creates."""
+
     atom_idx: int
     formal_charge: int
     spin_consumed: int
@@ -34,6 +43,8 @@ class _ChargeAssignmentAction:
 
 @dataclass(frozen=True)
 class _NegativeChargeAssignmentPattern:
+    """A ranked local environment eligible to receive a unit of negative charge."""
+
     smarts: pybel.Smarts
     tier: int
     target_idx: int = 0
@@ -174,13 +185,9 @@ def _positive_charge_assignment_actions(
     as an atomic ``+2`` action. Active lone pairs remain excluded.
     """
 
-    real_radicals = sum(
-        get_unpaired_electron_count(cast(ob.OBAtom, atom)) for atom in ob.OBMolAtomIter(obmol)
-    )
+    real_radicals = sum(get_unpaired_electron_count(atom) for atom in mol_atoms(obmol))
     unresolved_electrons = sum(
-        1
-        for atom in ob.OBMolAtomIter(obmol)
-        if has_unresolved_two_electron_center(cast(ob.OBAtom, atom))
+        1 for atom in mol_atoms(obmol) if has_unresolved_two_electron_center(atom)
     )
     tier5_allowed = abs(given_charge - 1) <= real_radicals + unresolved_electrons * 2 - 1
 
@@ -288,7 +295,7 @@ def _positive_charge_assignment_actions(
                     consume_unresolved_center=False,
                     charge_delta=-1,
                     score_key=(
-                        5,
+                        4 if restores_azinium_ring(charge_atom, radical_atom) else 5,
                         abs(given_charge - 1),
                         max(given_charge - 1, 0),
                         _atom_idx(radical_atom),
@@ -299,8 +306,7 @@ def _positive_charge_assignment_actions(
                 )
             )
 
-    for match_order, atom_iter in enumerate(ob.OBMolAtomIter(obmol)):
-        atom = cast(ob.OBAtom, atom_iter)
+    for match_order, atom in enumerate(mol_atoms(obmol)):
         if (
             given_charge > 0
             and atom.GetFormalCharge() == 0
@@ -322,6 +328,7 @@ def _negative_charge_assignment_actions(
     obmol: ob.OBMol,
     given_charge: int,
     total_radical_electrons: int | None = None,
+    metal_distances: tuple[int, ...] = (),
 ) -> list[_ChargeAssignmentAction]:
     """Rank anion actions from radicals or a pure unresolved 2e center.
 
@@ -414,14 +421,10 @@ def _negative_charge_assignment_actions(
     if given_charge < 0:
         can_create_radical = (
             total_radical_electrons is not None
-            and sum(
-                get_unpaired_electron_count(cast(ob.OBAtom, atom))
-                for atom in ob.OBMolAtomIter(obmol)
-            )
+            and sum(get_unpaired_electron_count(atom) for atom in mol_atoms(obmol))
             < total_radical_electrons
         )
-        for match_order, atom_iter in enumerate(ob.OBMolAtomIter(obmol)):
-            atom = cast(ob.OBAtom, atom_iter)
+        for match_order, atom in enumerate(mol_atoms(obmol)):
             if can_create_radical and _is_closed_shell_trivalent_boron(atom):
                 atom_idx = _atom_idx(atom)
                 charge_after = given_charge + 1
@@ -452,11 +455,16 @@ def _negative_charge_assignment_actions(
                 )
             append_unresolved_action(atom, match_order=match_order)
 
+    if metal_distances and len(actions) > 1:
+        # Chemistry and budget occupy the first four fields; atom and match order follow.
+        return sorted(
+            actions, key=lambda a: (*a.score_key[:4], metal_distances[a.atom_idx], *a.score_key[4:])
+        )
     return sorted(actions, key=lambda action: action.score_key)
 
 
 def eliminate_high_positive_charge_atoms(
-    omol: pybel.Molecule, given_charge: int
+    omol: pybel.Molecule, given_charge: int, metal_distances: tuple[int, ...] = ()
 ) -> tuple[pybel.Molecule, int, bool]:
     """Neutralize positive centers from their most electronegative neighbors.
 
@@ -478,8 +486,7 @@ def eliminate_high_positive_charge_atoms(
     for center_idx in sorted(neighbors_by_center):
         center = cast(ob.OBAtom, obmol.GetAtom(center_idx))
         remaining_positive_charge = center.GetFormalCharge() + sum(
-            min(0, cast(ob.OBAtom, neighbor).GetFormalCharge())
-            for neighbor in ob.OBAtomAtomIter(center)
+            min(0, neighbor.GetFormalCharge()) for neighbor in atom_neighbors(center)
         )
         if remaining_positive_charge <= 0:
             continue
@@ -488,6 +495,7 @@ def eliminate_high_positive_charge_atoms(
             neighbors_by_center[center_idx],
             key=lambda idx: (
                 -float(ob.GetElectroNeg(cast(ob.OBAtom, obmol.GetAtom(idx)).GetAtomicNum())),
+                metal_distances[idx] if metal_distances else 0,
                 idx,
             ),
         )
@@ -498,10 +506,10 @@ def eliminate_high_positive_charge_atoms(
             neighbor_has_pending_electrons = any(
                 adjacent.GetIdx() != center_idx
                 and (
-                    get_unpaired_electron_count(cast(ob.OBAtom, adjacent)) > 0
-                    or has_unresolved_two_electron_center(cast(ob.OBAtom, adjacent))
+                    get_unpaired_electron_count(adjacent) > 0
+                    or has_unresolved_two_electron_center(adjacent)
                 )
-                for adjacent in ob.OBAtomAtomIter(neighbor)
+                for adjacent in atom_neighbors(neighbor)
             )
             if (
                 neighbor.GetFormalCharge() != 0
@@ -518,7 +526,36 @@ def eliminate_high_positive_charge_atoms(
     return omol, given_charge, hit
 
 
-def eliminate_carboxyl(omol: pybel.Molecule, given_charge: int) -> tuple[pybel.Molecule, int, bool]:
+def _interchangeable_carboxyl_oxygens(
+    carbon: ob.OBAtom, radical_oxygen: ob.OBAtom, carbonyl_oxygen: ob.OBAtom
+) -> bool:
+    """Check whether initial bond perception could equally put C=O on either oxygen."""
+    first = carbon.GetDistance(radical_oxygen)
+    second = carbon.GetDistance(carbonyl_oxygen)
+    return (
+        carbon.GetExplicitDegree() == 3
+        and carbon.GetFormalCharge() == 0
+        and any(a.GetAtomicNum() in (1, 6) for a in atom_neighbors(carbon))
+        and carbonyl_oxygen.GetFormalCharge() == 0
+        and not get_unpaired_electron_count(carbonyl_oxygen)
+        and not get_unpaired_electron_count(carbon)
+        and all(
+            a.GetExplicitDegree() == 1 and not a.GetImplicitHCount()
+            for a in (radical_oxygen, carbonyl_oxygen)
+        )
+        and all(
+            not get_lone_pair_count(a) and not has_unresolved_two_electron_center(a)
+            for a in (radical_oxygen, carbon, carbonyl_oxygen)
+        )
+        and 1.20 <= first <= 1.34
+        and 1.20 <= second <= 1.34
+        and abs(first - second) <= 0.03
+    )
+
+
+def eliminate_carboxyl(
+    omol: pybel.Molecule, given_charge: int, metal_distances: tuple[int, ...] = ()
+) -> tuple[pybel.Molecule, int, bool]:
     """Convert a carboxyl-like oxygen monoradical into an ``O-`` center.
 
     This one-electron localization requires and consumes exactly one real
@@ -533,8 +570,18 @@ def eliminate_carboxyl(omol: pybel.Molecule, given_charge: int) -> tuple[pybel.M
         atom_1 = cast(ob.OBAtom, obmol.GetAtom(idxs[0]))
         if get_unpaired_electron_count(atom_1) != 1:
             continue
+        target = atom_1
+        if metal_distances and metal_distances[idxs[2]] < metal_distances[idxs[0]]:
+            carbon, other = (
+                cast(ob.OBAtom, obmol.GetAtom(idxs[1])),
+                cast(ob.OBAtom, obmol.GetAtom(idxs[2])),
+            )
+            if _interchangeable_carboxyl_oxygens(carbon, atom_1, other):
+                carbon.GetBond(atom_1).SetBondOrder(2)
+                carbon.GetBond(other).SetBondOrder(1)
+                target = other
         set_unpaired_electron_count(atom_1, 0)
-        atom_1.SetFormalCharge(atom_1.GetFormalCharge() - 1)
+        target.SetFormalCharge(-1)
         given_charge += 1
         hit = True
     return omol, given_charge, hit
@@ -558,22 +605,26 @@ def eliminate_carbene_neighbor_heteroatom(
         return has_unresolved_two_electron_center(obatom)
 
     hit = False
-    for atom in omol.atoms:
-        obatom = cast(ob.OBAtom, atom.OBAtom)
+    for obatom in mol_atoms(cast(ob.OBMol, omol.OBMol)):
         if possible_carbene_atom_checker(obatom):
             if any(
-                get_unpaired_electron_count(cast(ob.OBAtom, neighbor)) == 1
-                for neighbor in ob.OBAtomAtomIter(obatom)
+                get_unpaired_electron_count(neighbor) == 1 for neighbor in atom_neighbors(obatom)
             ):
                 continue
-            for neighbor in ob.OBAtomAtomIter(obatom):
+            for neighbor in atom_neighbors(obatom):
                 if (
-                    cast(ob.OBAtom, neighbor).GetAtomicNum() in consts.HETEROATOM
-                    and cast(ob.OBAtom, neighbor).GetFormalCharge() == 0
-                    and get_unpaired_electron_count(cast(ob.OBAtom, neighbor)) == 0
-                    and not has_unresolved_two_electron_center(cast(ob.OBAtom, neighbor))
+                    neighbor.GetAtomicNum() in consts.HETEROATOM
+                    and neighbor.GetFormalCharge() == 0
+                    and get_unpaired_electron_count(neighbor) == 0
+                    and not has_unresolved_two_electron_center(neighbor)
+                    # A zero active-pair count does not establish a conventional
+                    # donor pair. Neutral five-bond P, for example, has none.
+                    and consts.NON_METAL_DICT[neighbor.GetAtomicNum()].num_outer_electrons
+                    - neighbor.GetFormalCharge()
+                    - neighbor.GetTotalValence()
+                    >= 2
                 ):
-                    donor = cast(ob.OBAtom, neighbor)
+                    donor = neighbor
                     bond = cast(ob.OBBond, obatom.GetBond(donor))
                     bond.SetBondOrder(bond.GetBondOrder() + 1)
                     set_lone_pair_count(obatom, 0)
@@ -596,7 +647,10 @@ def eliminate_NNN(
     In the negative branch each terminal N must supply one classified
     two-electron state: an unresolved marker, two real unpaired electrons, or
     one active lone pair. The middle N must supply exactly one real unpaired
-    electron. The positive branch also requires one middle-N monoradical.
+    electron. The positive branch also requires one middle-N monoradical and
+    a nonnegative remaining charge budget. With a negative budget, leave that
+    radical available for anionic localization instead of creating a cation
+    that would force unrelated bond cleavage during recovery.
     Missing or mixed labels reject the rule before any state is changed.
     """
 
@@ -658,7 +712,7 @@ def eliminate_NNN(
             given_charge += 1
             hit = True
     else:
-        while res := smarts.ELIM_NNN_POSITIVE.findall(omol):
+        while given_charge >= 0 and (res := smarts.ELIM_NNN_POSITIVE.findall(omol)):
             idxs = cast(List[Tuple[int, int, int]], res.pop(0))
             atom1 = cast(ob.OBAtom, obmol.GetAtom(idxs[0]))
             atom2 = cast(ob.OBAtom, obmol.GetAtom(idxs[1]))
@@ -713,6 +767,7 @@ def eliminate_possible_cp_like_radical_anion(
     omol: pybel.Molecule,
     given_charge: int,
     total_radical_electrons: int,
+    metal_distances: tuple[int, ...] = (),
 ) -> tuple[pybel.Molecule, int, bool]:
     """Localize an excess cyclopentadienyl-like radical as an aromatic anion.
 
@@ -726,10 +781,7 @@ def eliminate_possible_cp_like_radical_anion(
 
     def available_unpaired_electrons() -> int:
         return (
-            sum(
-                get_unpaired_electron_count(cast(ob.OBAtom, atom))
-                for atom in ob.OBMolAtomIter(obmol)
-            )
+            sum(get_unpaired_electron_count(atom) for atom in mol_atoms(obmol))
             - total_radical_electrons
             - abs(given_charge)
         )
@@ -737,12 +789,22 @@ def eliminate_possible_cp_like_radical_anion(
     while res := smarts.ELIM_NEGATIVE_CP.findall(omol):
         if available_unpaired_electrons() < 1:
             break
-        idxs = cast(Tuple[int, int, int, int, int], res.pop(0))
+        idxs = res[0]
         atom = cast(ob.OBAtom, obmol.GetAtom(idxs[4]))
         if atom.GetFormalCharge() != 0:
             break
         if get_unpaired_electron_count(atom) != 1:
             break
+        if metal_distances and len(res) > 1:
+            alternatives = (cast(ob.OBAtom, obmol.GetAtom(match[4])) for match in res)
+            atom = min(
+                (
+                    a
+                    for a in alternatives
+                    if a.GetFormalCharge() == 0 and get_unpaired_electron_count(a) == 1
+                ),
+                key=lambda a: metal_distances[a.GetIdx()],
+            )
         set_unpaired_electron_count(atom, 0)
         atom.SetFormalCharge(-1)
         given_charge += 1
@@ -771,7 +833,12 @@ def eliminate_positive_charges(
         )
         if not actions:
             break
-        action = actions[0]
+        action = next(
+            (action for action in actions if _positive_charge_geometry_allowed(obmol, action)),
+            None,
+        )
+        if action is None:
+            break
         if not _apply_charge_assignment_action(obmol, action):
             break
         given_charge += action.charge_delta
@@ -779,10 +846,41 @@ def eliminate_positive_charges(
     return omol, given_charge, hit
 
 
+def _positive_charge_geometry_allowed(obmol: ob.OBMol, action: _ChargeAssignmentAction) -> bool:
+    """Skip N--N/N--O donations already excluded by final geometry validation.
+
+    Probe the resulting charge and electron labels on a copy, because these
+    screens distinguish resolved cumulenes from radicals and deferred centers.
+    A rejected first action must leave the other ranked choices available.
+    """
+    if action.bond_idx is None or action.charge_atom_idx is None:
+        return True
+    pair = sorted(
+        obmol.GetAtom(i).GetAtomicNum() for i in (action.atom_idx, action.charge_atom_idx)
+    )
+    if pair not in ([7, 7], [7, 8], [6, 15]):
+        return True
+    trial = ob.OBMol(obmol)
+    if not _apply_charge_assignment_action(trial, action):
+        return False
+    bond = cast(ob.OBBond, trial.GetBond(action.atom_idx, action.charge_atom_idx))
+    atoms_and_order = (
+        cast(ob.OBAtom, bond.GetBeginAtom()),
+        cast(ob.OBAtom, bond.GetEndAtom()),
+        bond.GetBondOrder(),
+    )
+    return (
+        nitrogen_nitrogen_order_allowed(*atoms_and_order)
+        and nitrogen_oxygen_order_allowed(*atoms_and_order)
+        and phosphorus_carbon_order_allowed(*atoms_and_order)
+    )
+
+
 def eliminate_negative_charges(
     omol: pybel.Molecule,
     given_charge: int,
     total_radical_electrons: int | None = None,
+    metal_distances: tuple[int, ...] = (),
 ) -> tuple[pybel.Molecule, int, bool]:
     """Consume classified electron sources into negative formal charge.
 
@@ -801,15 +899,12 @@ def eliminate_negative_charges(
 
     while given_charge <= 0:
         if total_radical_electrons is not None and given_charge == 0:
-            real_unpaired = sum(
-                get_unpaired_electron_count(cast(ob.OBAtom, atom))
-                for atom in ob.OBMolAtomIter(obmol)
-            )
+            real_unpaired = sum(get_unpaired_electron_count(atom) for atom in mol_atoms(obmol))
             if real_unpaired <= total_radical_electrons:
                 break
 
         actions = _negative_charge_assignment_actions(
-            omol, obmol, given_charge, total_radical_electrons
+            omol, obmol, given_charge, total_radical_electrons, metal_distances
         )
         if not actions:
             break

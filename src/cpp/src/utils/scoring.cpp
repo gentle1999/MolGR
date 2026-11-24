@@ -19,11 +19,19 @@
 
 namespace
 {
+    /// Access a molecule through Open Babel's non-const inspection API.
+    /// @param mol Molecular graph supplying the coordinates, connectivity and atom labels.
+    /// @return Borrowed mutable reference to the same molecule.
     OpenBabel::OBMol &MutableMol(const OpenBabel::OBMol &mol)
     {
         return const_cast<OpenBabel::OBMol &>(mol);
     }
 
+    /// Estimate the distance-dependent interaction between the ligand charge and metal valence.
+    /// @param metal_valence Valence assigned to the atom or metal.
+    /// @param ligand_charge Signed formal charge used for this electronic assignment.
+    /// @param dist_sq Squared metal-to-ligand distance in square angstroms.
+    /// @return Contribution of this interaction or topology term to the reconstruction score.
     double CalculateChargeInteractionPenalty(int metal_valence, int ligand_charge, double dist_sq)
     {
         if (dist_sq <= 0.0)
@@ -41,6 +49,12 @@ namespace
         return 0.0;
     }
 
+    /// Estimate the atom's charge penalty from its element, valence and spin assignment.
+    /// @param atomic_num Atomic number of the element.
+    /// @param charge Signed formal charge used for this electronic assignment.
+    /// @param total_valence Atom valence after accounting for its bonds.
+    /// @param spin_multiplicity Spin multiplicity supplied for the electronic assignment.
+    /// @return Contribution of this interaction or topology term to the reconstruction score.
     double CalculateChargePenaltyFromData(
         int atomic_num,
         int charge,
@@ -73,6 +87,11 @@ namespace
         return std::abs(charge) * std::max(0.0, 4.0 - en) * 3.0;
     }
 
+    /// Estimate the cost of localized unpaired electrons on this atom.
+    /// @param atomic_num Atomic number of the element.
+    /// @param radical_num Unpaired-electron assignment at the site.
+    /// @param heavy_degree Number of nonhydrogen neighbors of the atom.
+    /// @return Contribution of this interaction or topology term to the reconstruction score.
     double CalculateRadicalPenaltyFromData(int atomic_num, int radical_num, int heavy_degree)
     {
         if (radical_num == 0)
@@ -86,6 +105,9 @@ namespace
         return (3.0 - static_cast<double>(heavy_degree)) * 1.5;
     }
 
+    /// Evaluate the charge interaction between the endpoints of a covalent bond.
+    /// @param bond Bond whose endpoints and order define the local environment.
+    /// @return Contribution of this interaction or topology term to the reconstruction score.
     double CalculateCoulombicPenalty(const OpenBabel::OBBond &bond)
     {
         const int q1 = bond.GetBeginAtom()->GetFormalCharge();
@@ -101,6 +123,9 @@ namespace
         return -0.5;
     }
 
+    /// Score the difference between the available valence and the assigned bond orders.
+    /// @param mol Molecular graph supplying the coordinates, connectivity and atom labels.
+    /// @return Contribution of this interaction or topology term to the reconstruction score.
     double CalcRemainBondOrderReward(const OpenBabel::OBMol &mol)
     {
         OpenBabel::OBMol &mutable_mol = MutableMol(mol);
@@ -126,6 +151,9 @@ namespace
         return (remain_valence - bond_order_sum * 2.0) * 5.0;
     }
 
+    /// Return the symmetry contribution from repeated metal electronic assignments.
+    /// @param metal_states Proposed valence and unpaired-electron assignments for the metals.
+    /// @return Contribution of this interaction or topology term to the reconstruction score.
     double MetalStateSymmetryPenalty(const std::vector<molgr::MetalAtomPosition> &metal_states)
     {
         std::unordered_set<std::string> unique_states;
@@ -368,6 +396,9 @@ namespace molgr
             return penalty;
         }
 
+        /// Accumulate element-specific penalties for unfavorable heteroatom environments.
+        /// @param mol Molecular graph supplying the coordinates, connectivity and atom labels.
+        /// @return Contribution of this interaction or topology term to the reconstruction score.
         static double CalculateHeteroatomPenalty(const OpenBabel::OBMol &mol)
         {
             OpenBabel::OBMol &mutable_mol = MutableMol(mol);
@@ -384,6 +415,9 @@ namespace molgr
             return penalty;
         }
 
+        /// Return the reward for matching conjugated ligand motifs.
+        /// @param mol Molecular graph supplying the coordinates, connectivity and atom labels.
+        /// @return Contribution of this interaction or topology term to the reconstruction score.
         static double CalculateConjugationReward(const OpenBabel::OBMol &mol)
         {
             auto matches = molgr::smarts::FindAll(

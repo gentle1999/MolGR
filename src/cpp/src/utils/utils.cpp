@@ -23,6 +23,8 @@ namespace molgr
     namespace utils
     {
 
+        /// @param v Cartesian vector whose length is measured.
+        /// @return The squared Euclidean length of the displacement vector.
         inline double LengthSq(const OpenBabel::vector3 &v)
         {
             return OpenBabel::dot(v, v);

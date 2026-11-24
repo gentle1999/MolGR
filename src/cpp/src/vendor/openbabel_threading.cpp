@@ -25,6 +25,8 @@
 
 namespace
 {
+    /// @param mol Molecular graph on which the operation acts.
+    /// @return The Open Babel molecular charge used during native bond perception.
     int NativeTotalCharge(OpenBabel::OBMol &mol)
     {
         std::lock_guard<std::recursive_mutex> lock(
@@ -32,27 +34,41 @@ namespace
         return mol.GetTotalCharge();
     }
 
+    /// Atom and covalent radius used in the z-sorted connectivity sweep.
     struct AtomDistanceEntry
     {
         OpenBabel::OBAtom *atom = nullptr;
         double radius = 0.0;
     };
 
+    /// Order atoms by their Cartesian z coordinate to restrict the bond-neighbor search.
+    /// @param lhs First entry to compare.
+    /// @param rhs Second entry to compare.
+    /// @return True when the left atom has the smaller z coordinate.
     bool SortAtomByZ(const AtomDistanceEntry &lhs, const AtomDistanceEntry &rhs)
     {
         return lhs.atom->GetZ() < rhs.atom->GetZ();
     }
 
+    /// @param value Scalar to square.
+    /// @return The square of the supplied scalar for distance comparisons.
     double Squared(double value)
     {
         return value * value;
     }
 
+    /// @param lhs First scalar in the numerical comparison.
+    /// @param rhs Second scalar in the numerical comparison.
+    /// @param tolerance Maximum absolute difference allowed in this comparison.
+    /// @return True when the absolute difference is smaller than the tolerance.
     bool IsApprox(double lhs, double rhs, double tolerance)
     {
         return std::fabs(lhs - rhs) < tolerance;
     }
 
+    /// @param elem Atomic number of the element.
+    /// @param hyb Assigned atom hybridization.
+    /// @return The covalent radius in angstroms after the hybridization correction.
     double CorrectedBondRadius(unsigned int elem, unsigned int hyb)
     {
         const double radius = OpenBabel::OBElements::GetCovalentRad(elem);
@@ -67,6 +83,10 @@ namespace
         return radius;
     }
 
+    /// Check whether the neighbor element is allowed by the seed-bonding rule for this atom.
+    /// @param atom Atom whose local chemical environment is examined.
+    /// @param neighbor Other atom of the proposed covalent bond.
+    /// @return True if the proposed seed connection is permitted.
     bool CanAddBondToNeighbor(OpenBabel::OBAtom &atom, OpenBabel::OBAtom &neighbor)
     {
         if (atom.GetExplicitValence() == 5 &&
@@ -78,6 +98,9 @@ namespace
         return true;
     }
 
+    /// Collect the bonds incident on this atom in adjacency order.
+    /// @param atom Atom whose local chemical environment is examined.
+    /// @return Incident bonds borrowed from the molecule.
     std::vector<OpenBabel::OBBond *> AtomBonds(OpenBabel::OBAtom &atom)
     {
         std::vector<OpenBabel::OBBond *> bonds;
@@ -91,6 +114,13 @@ namespace
         return bonds;
     }
 
+    /// Visit the connected graph to identify ring closures and mark ring members.
+    /// @param root Root atom of the current ring traversal.
+    /// @param atom_visit_depth Atom-indexed depths recorded during traversal.
+    /// @param bond_visited Flags recording the bonds already traversed.
+    /// @param closure_count Running number of independent ring closures.
+    /// @param root_depth Depth at which to begin traversing this component.
+    /// @return Depth propagated to the parent traversal frame.
     int FindRingsLocal(
         OpenBabel::OBAtom *root,
         std::vector<int> &atom_visit_depth,
@@ -98,6 +128,7 @@ namespace
         unsigned int &closure_count,
         int root_depth)
     {
+        /// Explicit depth-first traversal frame for ring perception.
         struct Frame
         {
             OpenBabel::OBAtom *atom = nullptr;
@@ -198,6 +229,9 @@ namespace
         return child_result;
     }
 
+    /// Mark atoms and bonds on cycles and return the number of ring closures.
+    /// @param mol Molecular graph on which the operation acts.
+    /// @return Number of independent ring closures.
     unsigned int FindRingAtomsAndBondsLocal(OpenBabel::OBMol &mol)
     {
         mol.SetRingAtomsAndBondsPerceived();
@@ -238,6 +272,9 @@ namespace
         return closure_count;
     }
 
+    /// Return the cycle rank needed to build the smallest set of smallest rings.
+    /// @param mol Molecular graph on which the operation acts.
+    /// @return Number of independent ring closures.
     unsigned int DetermineFrerejacqueLocal(OpenBabel::OBMol &mol)
     {
         if (!mol.HasClosureBondsPerceived())
@@ -256,12 +293,16 @@ namespace
         return closure_count;
     }
 
+    /// @param mol Molecular graph on which the operation acts.
+    /// @return The molecule's stored SSSR ring data if already present.
     OpenBabel::OBRingData *GetSssrRingData(OpenBabel::OBMol &mol)
     {
         OpenBabel::OBGenericData *existing = mol.GetData("SSSR");
         return dynamic_cast<OpenBabel::OBRingData *>(existing);
     }
 
+    /// Populate the molecule's smallest set of smallest rings when needed.
+    /// @param mol Molecular graph on which the operation acts.
     void EnsureSSSRLocal(OpenBabel::OBMol &mol)
     {
         if (mol.HasSSSRPerceived() && GetSssrRingData(mol) != nullptr)
@@ -318,6 +359,68 @@ namespace
         mol.SetData(ring_data);
     }
 
+    /// @param atom Atom whose local chemical environment is examined.
+    /// @return The element- and environment-specific neighbor limit for coordinate-derived seed bonds.
+    unsigned int SeedNeighborLimit(OpenBabel::OBAtom &atom)
+    {
+        // XYZ has no formal charges yet. Neutral-element limits alone would
+        // discard oxonium/donor-adduct O and four-coordinate arsenic before
+        // the electronic reconstruction can assign their charges.
+        const auto limit = OpenBabel::OBElements::GetMaxBonds(atom.GetAtomicNum());
+        if (!((atom.GetAtomicNum() == OpenBabel::OBElements::Oxygen &&
+               atom.GetExplicitDegree() == 3) ||
+              (atom.GetAtomicNum() == OpenBabel::OBElements::Arsenic &&
+               atom.GetExplicitDegree() == 4)))
+        {
+            return limit;
+        }
+        const auto bonds = AtomBonds(atom);
+        if (atom.GetAtomicNum() == OpenBabel::OBElements::Oxygen && bonds.size() == 3)
+        {
+            const bool short_heavy_contacts = std::all_of(
+                bonds.begin(), bonds.end(), [&atom](OpenBabel::OBBond *bond)
+                {
+                    auto *neighbor = bond->GetNbrAtom(&atom);
+                    const double radii =
+                        OpenBabel::OBElements::GetCovalentRad(atom.GetAtomicNum()) +
+                        OpenBabel::OBElements::GetCovalentRad(neighbor->GetAtomicNum());
+                    return neighbor->GetAtomicNum() != OpenBabel::OBElements::Hydrogen &&
+                           !neighbor->IsMetal() && bond->GetLength() <= radii + 0.20;
+                });
+            if (short_heavy_contacts)
+            {
+                return 3;
+            }
+        }
+        if (atom.GetAtomicNum() == OpenBabel::OBElements::Arsenic && bonds.size() == 4 &&
+            std::all_of(bonds.begin(), bonds.end(), [&atom](OpenBabel::OBBond *bond)
+            { return bond->GetNbrAtom(&atom)->GetAtomicNum() == OpenBabel::OBElements::Oxygen; }))
+        {
+            return 4;
+        }
+        return limit;
+    }
+
+    /// Check for an incident bond making an angle below 45 degrees with the candidate bond.
+    /// @param atom Atom whose local chemical environment is examined.
+    /// @param bond Bond whose endpoints and order define the local environment.
+    /// @param bonds Bond records involved in the local operation.
+    /// @return True when another incident bond subtends an angle below 45 degrees.
+    bool ParticipatesInSmallAngle(
+        OpenBabel::OBAtom &atom,
+        OpenBabel::OBBond &bond,
+        const std::vector<OpenBabel::OBBond *> &bonds)
+    {
+        auto *neighbor = bond.GetNbrAtom(&atom);
+        return std::any_of(bonds.begin(), bonds.end(), [&](OpenBabel::OBBond *other)
+        {
+            return other != &bond && neighbor->GetAngle(&atom, other->GetNbrAtom(&atom)) < 45.0;
+        });
+    }
+
+    /// Remove implausible new connections while respecting the graph's original bond counts.
+    /// @param mol Molecular graph on which the operation acts.
+    /// @param initial_bond_counts Incident bond counts before adding distance-based connections.
     void RemoveExcessLocalBonds(OpenBabel::OBMol &mol, const std::vector<int> &initial_bond_counts)
     {
         bool removed = true;
@@ -329,7 +432,7 @@ namespace
                 OpenBabel::OBAtom &atom = *atom_iter;
                 const bool over_valence =
                     atom.GetExplicitValence() >
-                    OpenBabel::OBElements::GetMaxBonds(atom.GetAtomicNum());
+                    SeedNeighborLimit(atom);
                 const bool too_small_angle =
                     atom.GetExplicitDegree() >= 2 && atom.SmallestBondAngle() < 45.0;
                 if (!over_valence && !too_small_angle)
@@ -365,12 +468,18 @@ namespace
                 }
                 if (bond_to_delete == nullptr)
                 {
-                    bond_to_delete = bonds[static_cast<std::size_t>(first_new_bond_index)];
-                    double max_length = bond_to_delete->GetLength();
-                    for (std::size_t idx = static_cast<std::size_t>(first_new_bond_index) + 1;
+                    double max_length = -1.0;
+                    for (std::size_t idx = static_cast<std::size_t>(first_new_bond_index);
                          idx < bonds.size();
                          ++idx)
                     {
+                        // An acute neighbor pair must not delete an unrelated
+                        // longer bond. Keep the existing longest-bond rule for
+                        // over-valence, and for bonds involved in acute angles.
+                        if (!over_valence && !ParticipatesInSmallAngle(atom, *bonds[idx], bonds))
+                        {
+                            continue;
+                        }
                         const double length = bonds[idx]->GetLength();
                         if (length > max_length)
                         {
@@ -390,6 +499,8 @@ namespace
         }
     }
 
+    /// Estimate atom hybridizations from local coordination and bond angles.
+    /// @param mol Molecular graph on which the operation acts.
     void EstimateHybridizationsFromGeometry(OpenBabel::OBMol &mol)
     {
         FOR_ATOMS_OF_MOL(atom_iter, mol)
@@ -422,6 +533,8 @@ namespace
         mol.SetHybridizationPerceived();
     }
 
+    /// Assign sp2 hybridization to eligible atoms in small planar rings.
+    /// @param mol Molecular graph on which the operation acts.
     void MarkPlanarSmallRingsSp2(OpenBabel::OBMol &mol)
     {
         EnsureSSSRLocal(mol);
@@ -479,6 +592,8 @@ namespace
         }
     }
 
+    /// Relax provisional unsaturated hybridizations that lack a supporting neighbor.
+    /// @param mol Molecular graph on which the operation acts.
     void RelaxIsolatedUnsaturatedHybridizations(OpenBabel::OBMol &mol)
     {
         FOR_ATOMS_OF_MOL(atom_iter, mol)
@@ -512,12 +627,14 @@ namespace
         }
     }
 
+    /// SMARTS pattern paired with the bond assignments for a recognized functional group.
     struct FunctionalGroupBondRule
     {
         const char *smarts;
         std::vector<int> assignments;
     };
 
+    /// @return The bond-perception rules for supported functional groups.
     const std::vector<FunctionalGroupBondRule> &FunctionalGroupBondRules()
     {
         static const std::vector<FunctionalGroupBondRule> rules = {
@@ -560,6 +677,7 @@ namespace
         return rules;
     }
 
+    /// @return This thread's compiled functional-group patterns in rule order.
     std::vector<std::unique_ptr<OpenBabel::OBSmartsPattern>> &ThreadLocalFunctionalGroupPatterns()
     {
         // Do not invoke Open Babel SMARTS destructors from TLS teardown.
@@ -586,6 +704,10 @@ namespace
         return *patterns;
     }
 
+    /// Return the unique atom mappings for the pattern in the current molecule.
+    /// @param pattern Substructure pattern to match.
+    /// @param mol Molecular graph on which the operation acts.
+    /// @return Unique matching atom index lists in pattern order.
     std::vector<std::vector<int>> MatchUMapList(
         OpenBabel::OBSmartsPattern &pattern,
         OpenBabel::OBMol &mol)
@@ -597,6 +719,8 @@ namespace
         return pattern.GetUMapList();
     }
 
+    /// Assign bond orders in matched functional groups before general multiple-bond perception.
+    /// @param mol Molecular graph on which the operation acts.
     void AssignFunctionalGroupBondsLocal(OpenBabel::OBMol &mol)
     {
         const auto &rules = FunctionalGroupBondRules();
@@ -779,6 +903,8 @@ namespace
         }
     }
 
+    /// Assign alternating bond orders in eligible planar aromatic rings.
+    /// @param mol Molecular graph on which the operation acts.
     void KekulizePlanarAromaticRings(OpenBabel::OBMol &mol)
     {
         EnsureSSSRLocal(mol);
@@ -842,6 +968,7 @@ namespace
         mol.SetAromaticPerceived(false);
     }
 
+    /// Classification of the external multiple-bond partner used for aromatic electron counting.
     enum class ExocyclicAtom
     {
         NONE,
@@ -849,6 +976,9 @@ namespace
         NONOXYGEN,
     };
 
+    /// Classify the exocyclic partner of the ring atom for aromaticity perception.
+    /// @param atom Atom whose local chemical environment is examined.
+    /// @return Exocyclic partner classification for aromatic electron counting.
     ExocyclicAtom FindExocyclicAtom(OpenBabel::OBAtom *atom)
     {
         OpenBabel::OBBondIterator bond_iter;
@@ -870,6 +1000,9 @@ namespace
         return ExocyclicAtom::NONE;
     }
 
+    /// Check for an exocyclic bond to a formally anionic oxygen.
+    /// @param atom Atom whose local chemical environment is examined.
+    /// @return True if an incident exocyclic bond matches the specified oxygen or heteroatom state.
     bool HasExocyclicBondToOxygenMinus(OpenBabel::OBAtom *atom)
     {
         OpenBabel::OBBondIterator bond_iter;
@@ -891,6 +1024,9 @@ namespace
         return false;
     }
 
+    /// Check for an exocyclic double bond to oxygen.
+    /// @param atom Atom whose local chemical environment is examined.
+    /// @return True if an incident exocyclic bond matches the specified oxygen or heteroatom state.
     bool HasExocyclicDoubleBondToOxygen(OpenBabel::OBAtom *atom)
     {
         OpenBabel::OBBondIterator bond_iter;
@@ -908,6 +1044,9 @@ namespace
         return false;
     }
 
+    /// Check for an exocyclic double bond to a heteroatom.
+    /// @param atom Atom whose local chemical environment is examined.
+    /// @return True if an incident exocyclic bond matches the specified oxygen or heteroatom state.
     bool HasExocyclicDoubleBondToHeteroatom(OpenBabel::OBAtom *atom)
     {
         OpenBabel::OBBondIterator bond_iter;
@@ -929,6 +1068,11 @@ namespace
         return false;
     }
 
+    /// Determine the minimum and maximum pi-electron contribution of a potential aromatic atom.
+    /// @param atom Atom whose local chemical environment is examined.
+    /// @param min_electrons Minimum possible pi-electron contribution (output).
+    /// @param max_electrons Maximum possible pi-electron contribution (output).
+    /// @return True if a pi-electron range could be assigned to the atom.
     bool AssignOpenBabelAromaticityContribution(
         OpenBabel::OBAtom *atom,
         int &min_electrons,
@@ -1174,9 +1318,12 @@ namespace
         return false;
     }
 
+    /// Per-molecule working state for finding aromatic cycles and assigning atom and bond flags.
     class LocalAromaticityState
     {
     public:
+        /// Initialize aromaticity working arrays for the supplied molecular graph.
+        /// @param mol_in Molecular graph on which the operation acts.
         explicit LocalAromaticityState(OpenBabel::OBMol &mol_in)
             : mol(mol_in),
               potential_aromatic(mol.NumAtoms() + 1),
@@ -1186,6 +1333,7 @@ namespace
         {
         }
 
+        /// Find candidate cycles, evaluate their electron counts and assign aromatic flags.
         void Assign()
         {
             FOR_ATOMS_OF_MOL(atom_iter, mol)
@@ -1197,6 +1345,7 @@ namespace
                 bond_iter->SetAromatic(false);
             }
 
+            bool any_potential = false;
             FOR_ATOMS_OF_MOL(atom_iter, mol)
             {
                 const unsigned int idx = atom_iter->GetIdx();
@@ -1204,7 +1353,10 @@ namespace
                     &(*atom_iter),
                     electron_range[idx].first,
                     electron_range[idx].second);
+                any_potential |= potential_aromatic[idx];
             }
+
+            if (!any_potential) return;
 
             FOR_ATOMS_OF_MOL(atom_iter, mol)
             {
@@ -1233,6 +1385,13 @@ namespace
         std::vector<bool> root;
         std::vector<std::pair<int, int>> electron_range;
 
+        /// Traverse a candidate cycle while accumulating the range of possible pi-electron counts.
+        /// @param root_atom Root atom of the current ring traversal.
+        /// @param atom Atom whose local chemical environment is examined.
+        /// @param previous_bond Bond used to reach the current atom.
+        /// @param range Allowed pi-electron count range along the current path.
+        /// @param depth Depth bound or current depth of the ring traversal.
+        /// @return True if this traversal finds a cycle with an allowed aromatic electron count.
         bool TraverseCycle(
             OpenBabel::OBAtom *root_atom,
             OpenBabel::OBAtom *atom,
@@ -1292,6 +1451,9 @@ namespace
             return result;
         }
 
+        /// Test cycles through this atom for a compatible aromatic electron count.
+        /// @param atom Atom whose local chemical environment is examined.
+        /// @param depth Depth bound or current depth of the ring traversal.
         void CheckAromaticity(OpenBabel::OBAtom *atom, int depth)
         {
             OpenBabel::OBBondIterator bond_iter;
@@ -1313,6 +1475,8 @@ namespace
             }
         }
 
+        /// Propagate exclusions through atoms that can no longer lie on an aromatic cycle.
+        /// @param atom Atom whose local chemical environment is examined.
         void PropagatePotentialAromatic(OpenBabel::OBAtom *atom)
         {
             int count = 0;
@@ -1349,11 +1513,13 @@ namespace
             }
         }
 
+        /// Select starting atoms for aromatic cycle searches using the ring membership information.
+        /// @param avoid_inner_ring_atoms Whether root selection should avoid atoms internal to a fused
+        ///     system.
         void SelectRootAtoms(bool avoid_inner_ring_atoms)
         {
             std::vector<OpenBabel::OBBond *> closure_bonds;
             std::vector<int> root_atom_candidates;
-            std::vector<std::vector<OpenBabel::OBRing *>> rings_by_atom;
 
             OpenBabel::OBBondIterator bond_iter;
             for (OpenBabel::OBBond *bond = mol.BeginBond(bond_iter);
@@ -1368,22 +1534,6 @@ namespace
                 if (avoid_inner_ring_atoms)
                 {
                     root_atom_candidates.push_back(static_cast<int>(bond->GetBeginAtomIdx()));
-                }
-            }
-
-            if (avoid_inner_ring_atoms)
-            {
-                rings_by_atom.resize(static_cast<std::size_t>(mol.NumAtoms()) + 1);
-                for (OpenBabel::OBRing *ring : mol.GetSSSR())
-                {
-                    if (ring == nullptr)
-                    {
-                        continue;
-                    }
-                    for (const int atom_idx : ring->_path)
-                    {
-                        rings_by_atom[static_cast<std::size_t>(atom_idx)].push_back(ring);
-                    }
                 }
             }
 
@@ -1423,10 +1573,9 @@ namespace
                     }
 
                     int new_root = -1;
-                    for (OpenBabel::OBRing *ring :
-                         rings_by_atom[static_cast<std::size_t>(root_atom_idx)])
+                    for (OpenBabel::OBRing *ring : mol.GetSSSR())
                     {
-                        if (ring == nullptr)
+                        if (!ring || !ring->IsInRing(root_atom_idx))
                         {
                             continue;
                         }
@@ -1502,6 +1651,7 @@ namespace
             }
         }
 
+        /// Exclude small rings that cannot support the aromaticity assignment.
         void ExcludeSmallRing()
         {
             FOR_ATOMS_OF_MOL(atom_iter, mol)
@@ -1540,6 +1690,8 @@ namespace
         }
     };
 
+    /// Compute aromatic atom and bond flags on the molecule with locally owned traversal state.
+    /// @param mol Molecular graph on which the operation acts.
     void AssignAromaticFlagsLocal(OpenBabel::OBMol &mol)
     {
         if (mol.HasAromaticPerceived())
@@ -1552,6 +1704,9 @@ namespace
         state.Assign();
     }
 
+    /// Order atoms for the remaining multiple-bond assignments using their electronegativities.
+    /// @param mol Molecular graph on which the operation acts.
+    /// @return Atom pointers in the order used for assigning multiple bonds.
     std::vector<OpenBabel::OBAtom *> ElectronegativitySortedAtoms(OpenBabel::OBMol &mol)
     {
         std::vector<std::pair<OpenBabel::OBAtom *, double>> sortable_atoms;
@@ -1597,6 +1752,8 @@ namespace
         return atoms;
     }
 
+    /// Fill remaining multiple bonds where neighbor geometry, valence and electronegativity allow.
+    /// @param mol Molecular graph on which the operation acts.
     void AssignRemainingMultipleBonds(OpenBabel::OBMol &mol)
     {
         const std::vector<OpenBabel::OBAtom *> sorted_atoms = ElectronegativitySortedAtoms(mol);

@@ -22,16 +22,19 @@
 
 namespace py = pybind11;
 
+/// Initialize the extension modules, logging and process guard.
+/// @param m Python module on which to register the native interface.
 PYBIND11_MODULE(_core, m)
 {
     molgr::InitializeProcessGuard();
     m.doc() = R"pbdoc(
         MolGR Core C++ Implementation
         -----------------------------
-        Exposes optimized C++ algorithms for MolOP Graph Reconstruction.
+        Reconstructs molecular graphs from Cartesian coordinates and compares their electronic and stereochemical assignments.
     )pbdoc";
 
-    py::enum_<molgr::LogLevel>(m, "LogLevel")
+    py::enum_<molgr::LogLevel>(m, "LogLevel",
+        "Minimum severity emitted by the native reconstruction logger.")
         .value("DEBUG", molgr::LogLevel::DEBUG)
         .value("INFO", molgr::LogLevel::INFO)
         .value("WARN", molgr::LogLevel::WARN)

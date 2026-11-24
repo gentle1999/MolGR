@@ -38,5 +38,5 @@ def assign_radical_dots_ptr(
 
 def fresh_omol_charge_radical_ptr(mol_ptr: typing.SupportsInt | typing.SupportsIndex) -> bool:
     """
-    Apply fresh.fresh_omol_charge_radical to an existing OBMol.
+    Apply local charge/electron rebuilding independently to every atom.
     """

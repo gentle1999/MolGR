@@ -300,7 +300,6 @@ def test_cpp_acceleration_preset_enables_available_cpp_backend_switches() -> Non
     assert cpp_backend_config["enable_target_bucket_parallelism"] is True
     assert cpp_backend_config["enable_candidate_scoring_parallelism"] is False
     assert cpp_backend_config["enable_uff_atom_typing_cache"] is True
-    assert cpp_backend_config["enable_target_bucket_score_bundle_preheat"] is True
     assert cpp_backend_config["target_bucket_parallel_threshold"] == 1
     assert cpp_backend_config["target_bucket_parallel_max_threads"] is None
     assert cpp_backend_config["candidate_score_parallel_threshold"] == 32
@@ -364,7 +363,6 @@ def test_tmqmg_worker_applies_cpp_backend_config_before_running_methods(
             "enable_target_bucket_parallelism": True,
             "enable_candidate_scoring_parallelism": True,
             "enable_uff_atom_typing_cache": False,
-            "enable_target_bucket_score_bundle_preheat": True,
             "target_bucket_parallel_threshold": 4,
             "target_bucket_parallel_max_threads": 1,
             "candidate_score_parallel_threshold": 1,
@@ -378,7 +376,6 @@ def test_tmqmg_worker_applies_cpp_backend_config_before_running_methods(
     assert seen_configs[0].enable_target_bucket_parallelism is True
     assert seen_configs[0].enable_candidate_scoring_parallelism is True
     assert seen_configs[0].enable_uff_atom_typing_cache is False
-    assert seen_configs[0].enable_target_bucket_score_bundle_preheat is True
     assert seen_configs[0].target_bucket_parallel_threshold == 4
     assert seen_configs[0].target_bucket_parallel_max_threads == 1
 

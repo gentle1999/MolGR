@@ -11,8 +11,11 @@ namespace molgr
 {
     namespace utils
     {
-        // Electron bookkeeping: despite the historical name, clone topology plus
-        // all three MolGR atom electron fields verbatim; do not infer one from another.
+        /// Electron bookkeeping: despite the historical name, clone topology plus
+        /// all three MolGR atom electron fields verbatim; do not infer one from another.
+        /// @param mol Molecular graph supplying the coordinates, connectivity and atom labels.
+        /// @param clone Destination for the copied molecular topology and electron fields.
+        /// @param preserve_implicit_hydrogens Whether the copy retains implicit hydrogen counts.
         static void PopulateMolTopologyOnly(
             const OpenBabel::OBMol &mol,
             OpenBabel::OBMol &clone,
@@ -124,8 +127,8 @@ namespace molgr
                 atom->SetIsotope(atom_data.isotope);
                 atom->SetImplicitHCount(0);
                 atom->SetFormalCharge(atom_data.formal_charge);
-                // Reconstruction's sparse setters omit zero; serialization must
-                // retain a known zero as distinct from an absent annotation.
+                /// Reconstruction's sparse setters omit zero; serialization must
+                /// retain a known zero as distinct from an absent annotation.
                 const auto restore_known_count = [atom](const char *name, int value)
                 {
                     if (value != 0)

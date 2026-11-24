@@ -13,6 +13,7 @@
 
 namespace
 {
+    /// A pending resonance state with its discrepancy, depth and insertion order.
     struct QueueEntry
     {
         int discrepancy = 0;
@@ -22,8 +23,13 @@ namespace
         molgr::reconstruct::ResonanceStateKey state_key;
     };
 
+    /// Prioritize lower discrepancy, then shorter paths and earlier insertion in the resonance queue.
     struct QueueEntryGreater
     {
+        /// Prioritize lower discrepancy, then shorter paths and earlier insertion in the resonance queue.
+        /// @param lhs First entry to compare.
+        /// @param rhs Second entry to compare.
+        /// @return True when the left entry has lower queue priority.
         bool operator()(const QueueEntry &lhs, const QueueEntry &rhs) const
         {
             return std::tie(lhs.discrepancy, lhs.depth, lhs.order) >
