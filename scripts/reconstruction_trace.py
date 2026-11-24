@@ -39,9 +39,9 @@ from molgr.fallback.state import (
     ReconstructionState,
     trace_omol_state_machine,
 )
-from molgr.fallback.utils import consts
+from molgr.fallback.utils import consts, coordination_geometry
 from molgr.fallback.utils import metal_radical_inference as metal_radical_inference_module
-from molgr.fallback.utils.dataclasses import MetalAtomPosition
+from molgr.fallback.utils.dataclasses import MetalAtomPosition, MetalSite
 from molgr.fallback.utils.electrons import (
     get_lone_pair_count,
     get_unpaired_electron_count,
@@ -72,6 +72,7 @@ class TraceInputCase:
     fixture_structure_file: str = ""
     expected_smiles: str = ""
     expected_smiles_options: tuple[str, ...] = ()
+    expected_native_graph: str = ""
     reference_smiles: str = ""
 
 
@@ -101,6 +102,8 @@ _SCORE_DETAIL_PREFIXES = (
     "analysis_",
     "force_field_",
     "metal_",
+    "nitrosyl_",
+    "nitrosonium_",
     "organic_",
     "passes_",
     "selection_",
@@ -132,6 +135,13 @@ _IMPORTANT_SCORE_KEYS = (
     "organic_hyperconjugation_score",
     "organic_hyperconjugation_max_score",
     "organic_hyperconjugation_deficit",
+    "nitrosyl_geometry_penalty",
+    "nitrosyl_geometry_site_count",
+    "nitrosonium_redistribution_exception",
+    "metal_discordance_inner_visible_cationic_donor_count",
+    "metal_discordance_inner_visible_same_sign_charge_penalty",
+    "metal_discordance_high_zinc_valence_count",
+    "metal_aryl_carbenoid_geometry_conflict_count",
     "metal_discordance_inner_visible_diradical_count",
     "metal_discordance_excess_visible_singlet_two_electron_center_count",
     "metal_discordance_bent_cumulated_ring_allene_count",
@@ -211,16 +221,38 @@ _METAL_SELECTION_KEY_FIELDS = (
         "超共轭分数亏损",
         "前述指标相同时，相对同批候选最高超共轭分数的亏损",
     ),
+    (
+        "nitrosyl_geometry_penalty",
+        "NO 几何与电荷分配",
+        "仅短键近线性端位 N 配位 NO；前述指标相同时优先 NO+ 表示",
+    ),
+    (
+        "metal_discordance_high_zinc_valence_count",
+        "Zn 高价态数",
+        "前述结构与电子指标相同时优先常规 Zn 价态；高价候选仍可参与搜索",
+    ),
     ("score", "候选总分", "当前为组合结构的力场分数"),
     ("combination_index", "组合序号", "此前各项完全相同时的稳定排序"),
 )
 
 _RESONANCE_SELECTION_KEY_FIELDS = (
     (
+        "organic_azinium_geometry_conflict_count",
+        "平面吡啶鎓类环还原冲突",
+        "min",
+        "优先保留与紧凑平面六元 C/N 环几何一致的候选",
+    ),
+    (
         "organic_formal_charge_absolute_sum",
         "形式电荷绝对值和",
         "min",
         "优先保留电荷分离程度更低的共振候选",
+    ),
+    (
+        "organic_long_carbonyl_multiple_bond_count",
+        "长 C–O 双键冲突数",
+        "min",
+        "形式电荷绝对值和相同时，优先保留符合拉长醛酮型 C–O 几何的候选",
     ),
     (
         "organic_aromatic_atom_count",
@@ -1075,10 +1107,41 @@ def load_review_fixture_cases(
         )
         if not expected_smiles_options and expected_smiles:
             expected_smiles_options = (expected_smiles,)
+        published = None
+        if fixture_kind in {"published_reference", "published_excluded"}:
+            from benchmarks.dataset_xyz_benchmark import tmqmg as corrected
+            from scripts.tmqmg_fixture_data import fixture, reference_graph
+
+            published = fixture(case_id)
+            source = raw_record.get("source_dataset") or payload.get("source_dataset", {})
+            if (
+                source.get("revision") != corrected.REVISION
+                or source.get("manifest_sha256") != corrected.MANIFEST_SHA256
+            ):
+                raise ValueError(f"Published review source mismatch: {case_id}")
+            expected_kind = (
+                "published_reference" if published["benchmark"] else "published_excluded"
+            )
+            if fixture_kind != expected_kind:
+                raise ValueError(f"Published review eligibility mismatch: {case_id}")
+            if (
+                raw_record.get("total_charge") != published["charge"]
+                or raw_record.get("spin_multiplicity") != published["multiplicity"]
+                or raw_record.get("total_radical_electrons") != published["multiplicity"] - 1
+            ):
+                raise ValueError(f"Published review electronic state mismatch: {case_id}")
+            if published["benchmark"]:
+                reference_graph(case_id)  # Verify native payload before handing it to the trace.
+                if raw_record.get("graph_sha256") != published["graph_sha256"]:
+                    raise ValueError(f"Published review graph mismatch: {case_id}")
+            expected_smiles = ""
+            expected_smiles_options = ()
         cases.append(
             TraceInputCase(
                 id=case_id,
-                xyz_block=_review_fixture_xyz_block(structure_path),
+                xyz_block=published["xyz"]
+                if published
+                else _review_fixture_xyz_block(structure_path),
                 total_charge=int(raw_record.get("total_charge") or 0),
                 total_radical_electrons=int(raw_record.get("total_radical_electrons") or 0),
                 xyz_path=structure_path,
@@ -1087,6 +1150,7 @@ def load_review_fixture_cases(
                 fixture_structure_file=structure_file,
                 expected_smiles=expected_smiles,
                 expected_smiles_options=expected_smiles_options,
+                expected_native_graph=published.get("native_graph", "") if published else "",
             )
         )
 
@@ -4710,6 +4774,7 @@ def _trace_no_metal_reconstruction(
     total_charge: int,
     total_radical_electrons: int,
     *,
+    metal_sites: Sequence[MetalSite] = (),
     render_context: DofRenderContext | None = None,
     case_id: str = "",
     config: MolGRConfig | None = None,
@@ -4725,8 +4790,8 @@ def _trace_no_metal_reconstruction(
         trace["status"] = "invalid_negative_radicals"
         return trace
 
-    seed_state = no_metal_preparation._seed_state(
-        xyz_block,
+    seed_state = no_metal_preparation._seed_state_from_omol(
+        no_metal_preparation._seed_omol_from_xyz(xyz_block, metal_sites),
         total_charge,
         total_radical_electrons,
     )
@@ -4743,6 +4808,7 @@ def _trace_no_metal_reconstruction(
         selected = reconstruct_without_metals._run_no_metal_pipeline_from_state(
             seed_state,
             config=config,
+            metal_sites=metal_sites,
         )
     if selected is None:
         trace["status"] = "no_valid_no_metal_candidate"
@@ -5269,7 +5335,7 @@ def _additional_negative_charge_visibility(
     result["additional_negative_charge_atom_indices"] = additional_indices
 
     resolved_config = CONFIG if config is None else config
-    blocker_arrays = scoring._build_coordination_blocker_arrays(
+    blocker_arrays = coordination_geometry.build_coordination_blocker_arrays(
         selected_obmol,
         metal_scoring_config=resolved_config.metal_scoring,
     )
@@ -5278,9 +5344,9 @@ def _additional_negative_charge_visibility(
     for metal_state in selected.metal_states:
         visible_indices.update(
             int(atom.GetIdx())
-            for atom in scoring._inner_visible_atoms_to_metal(
+            for atom in coordination_geometry.inner_visible_atoms_to_metal(
                 non_metal_atoms,
-                metal_state,
+                metal_state.site,
                 metal_scoring_config=resolved_config.metal_scoring,
                 blocker_arrays=blocker_arrays,
             )
@@ -5445,30 +5511,38 @@ def classify_oxidative_addition_reference_match(
             if not candidates:
                 continue
             prototype = candidates[0]
+            ligand_pool: list[ReconstructionState] = []
             try:
                 no_metal_state = reconstruct_without_metals.xyz_to_omol_no_metal_state(
                     base_state.no_metal_xyz_block,
                     prototype.no_metal_charge_target,
                     prototype.no_metal_radical_target,
                     config=config,
+                    metal_sites=base_state.metal_sites,
+                    candidate_pool=ligand_pool,
                 )
             except (OSError, ValueError):
                 continue
             if no_metal_state is None:
                 continue
-            for candidate in candidates:
-                try:
-                    scored_candidate = scoring._prepare_candidate_with_no_metal_state(
-                        candidate,
-                        no_metal_state,
-                        config=config,
-                    )
-                except ValueError:
-                    continue
-                if cast(Optional[float], scored_candidate.score) is None:
-                    continue
-                scored_candidate.metadata["search_layer_index"] = layer_index
-                current_layer_scored_candidates.append(scored_candidate)
+            scored_bucket: list[MetalCandidateState] = []
+            for ligand in ligand_pool:
+                for candidate in candidates:
+                    try:
+                        scored_candidate = scoring._prepare_candidate_with_no_metal_state(
+                            candidate,
+                            ligand,
+                            config=config,
+                        )
+                    except ValueError:
+                        continue
+                    if cast(Optional[float], scored_candidate.score) is None:
+                        continue
+                    scored_candidate.metadata["search_layer_index"] = layer_index
+                    scored_bucket.append(scored_candidate)
+            current_layer_scored_candidates.extend(
+                scoring.select_ligand_alternatives(scored_bucket, config=config)
+            )
 
         all_scored_candidates.extend(current_layer_scored_candidates)
         if selected_candidate is None and current_layer_scored_candidates:
@@ -5561,6 +5635,7 @@ def _trace_candidates(
                     base_state.no_metal_xyz_block,
                     prototype.no_metal_charge_target,
                     prototype.no_metal_radical_target,
+                    metal_sites=base_state.metal_sites,
                     render_context=render_context,
                     case_id=(
                         f"{case_id}_L{layer_index}_Q{prototype.no_metal_charge_target}"
@@ -5573,12 +5648,15 @@ def _trace_candidates(
                     "status": "trace_error",
                     "error": f"{type(exc).__name__}: {exc}",
                 }
+            ligand_pool: list[ReconstructionState] = []
             try:
                 no_metal_state = reconstruct_without_metals.xyz_to_omol_no_metal_state(
                     base_state.no_metal_xyz_block,
                     prototype.no_metal_charge_target,
                     prototype.no_metal_radical_target,
                     config=config,
+                    metal_sites=base_state.metal_sites,
+                    candidate_pool=ligand_pool,
                 )
             except (OSError, ValueError) as exc:
                 target_summary["status"] = "no_metal_reconstruction_error"
@@ -5609,25 +5687,30 @@ def _trace_candidates(
             if organic_image is not None:
                 target_summary["dof_image"] = organic_image
 
-            for candidate in candidates:
-                try:
-                    scored_candidate = scoring._prepare_candidate_with_no_metal_state(
-                        candidate,
-                        no_metal_state,
-                        config=config,
-                    )
-                except ValueError as exc:
-                    target_summary.setdefault("candidate_errors", []).append(
-                        {
-                            "combination_index": candidate.metadata.get("combination_index"),
-                            "error": str(exc),
-                        }
-                    )
-                    continue
-                if cast(Optional[float], scored_candidate.score) is None:
-                    continue
-                scored_candidate.metadata["search_layer_index"] = layer_index
-                current_layer_scored_candidates.append(scored_candidate)
+            scored_bucket: list[MetalCandidateState] = []
+            for ligand in ligand_pool:
+                for candidate in candidates:
+                    try:
+                        scored_candidate = scoring._prepare_candidate_with_no_metal_state(
+                            candidate,
+                            ligand,
+                            config=config,
+                        )
+                    except ValueError as exc:
+                        target_summary.setdefault("candidate_errors", []).append(
+                            {
+                                "combination_index": candidate.metadata.get("combination_index"),
+                                "error": str(exc),
+                            }
+                        )
+                        continue
+                    if cast(Optional[float], scored_candidate.score) is None:
+                        continue
+                    scored_candidate.metadata["search_layer_index"] = layer_index
+                    scored_bucket.append(scored_candidate)
+            current_layer_scored_candidates.extend(
+                scoring.select_ligand_alternatives(scored_bucket, config=config)
+            )
 
             target_summary["no_metal_score"] = no_metal_state.metadata.get("score")
             target_summary["prepared_candidate_count"] = len(
@@ -5974,6 +6057,32 @@ def _review_fixture_trace_check(
         "equivalence_method": "",
         "equivalence_reason": "",
     }
+    if input_case.fixture_kind == "published_excluded":
+        check["equivalence_reason"] = "excluded_by_published_release"
+        return check
+    if input_case.expected_native_graph:
+        import base64
+        import zlib
+
+        expected = Chem.Mol(zlib.decompress(base64.b64decode(input_case.expected_native_graph)))
+        traced = _mol_from_unsanitized_smiles(trace_smiles) if trace_smiles else None
+        if traced is None:
+            check["equivalent"] = False
+            check["equivalence_reason"] = "trace_has_no_selected_graph"
+        else:
+            equivalent, info = check_equivalence(
+                expected,
+                traced,
+                use_chirality=False,
+                ignore_metal_coordination_bonds=True,
+                max_resonance=100000,
+            )
+            check.update(
+                equivalent=equivalent,
+                equivalence_reason=info.reason,
+                equivalence_method=info.method.value if info.method else "",
+            )
+        return check
     if not expected_smiles_options:
         check["equivalence_reason"] = "fixture_has_no_approved_answer"
         return check

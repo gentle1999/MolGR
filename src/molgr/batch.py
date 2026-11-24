@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any, Iterable, Iterator, Literal, NamedTuple, Sequence, cast
+from typing import Any, Iterable, Iterator, Literal, NamedTuple, Sequence
 
 from rdkit import Chem
 
+from molgr._native_types import NativeBatchResult
 from molgr.config import CONFIG, MolGRConfig
 from molgr.diagnostics import (
     ReconstructionDiagnostics,
@@ -28,7 +29,17 @@ from . import _core as core
 
 @dataclass(frozen=True)
 class ReconstructionBatchRequest:
-    """One XYZ reconstruction request for a batch."""
+    """One XYZ frame and its target electronic state for batch reconstruction.
+
+    Parameters
+    ----------
+    xyz_block : str
+        Full XYZ text with coordinates in angstroms and all hydrogen atoms.
+    total_charge : int, default 0
+        Net charge of the entire frame in units of the elementary charge.
+    spin_multiplicity : int, default 1
+        Total spin multiplicity (2S + 1), as in ``xyz_to_rdmol``.
+    """
 
     xyz_block: str
     total_charge: int = 0
@@ -36,10 +47,20 @@ class ReconstructionBatchRequest:
 
 
 class ReconstructionBatchResult(NamedTuple):
-    """One completed ``(input, result, status)`` batch item.
+    """Outcome of one request from ``iter_xyz_to_rdmol_batch``.
 
-    ``status`` is ``None`` for a successful reconstruction and contains a
-    structured diagnostic for a non-fatal item failure.
+    Attributes
+    ----------
+    input : ReconstructionBatchRequest
+        Normalized request, including the original XYZ text, charge and spin.
+    result : Chem.Mol or None
+        Reconstructed molecule on success. A failed request can contain a
+        marked initial-perception molecule if the failure policy allows it.
+    status : ReconstructionDiagnostics or None
+        None means success. For a failure, inspect ``status.code``,
+        ``status.stage`` and ``status.message``, including when a molecule is present.
+
+    The fields can also be unpacked as ``request, molecule, diagnostics``.
     """
 
     input: ReconstructionBatchRequest
@@ -114,12 +135,13 @@ def _diagnostics_from_suspicious_mol(
 
 
 def _batch_result_from_native(
-    raw: dict[str, Any],
+    raw: NativeBatchResult,
     request: ReconstructionBatchRequest,
     *,
     config: MolGRConfig,
     make_dative_bonds: bool,
     make_stereochemistry: bool,
+    kekulize: bool,
     raise_on_error: bool,
 ) -> ReconstructionBatchResult:
     molecule_data = raw.get("molecule_data")
@@ -151,6 +173,7 @@ def _batch_result_from_native(
             backend="cpp",
             make_dative_bonds=make_dative_bonds,
             make_stereochemistry=make_stereochemistry,
+            kekulize=kekulize,
             config=config,
         )
     except ReconstructionError as exc:
@@ -192,6 +215,7 @@ def _iter_cpp_batch(
     ordered: bool,
     make_dative_bonds: bool,
     make_stereochemistry: bool,
+    kekulize: bool,
     raise_on_error: bool,
 ) -> Iterator[ReconstructionBatchResult]:
     native_requests = [
@@ -206,8 +230,7 @@ def _iter_cpp_batch(
         ordered=ordered,
     )
     try:
-        for raw_value in native_iterator:
-            raw = cast(Any, raw_value)
+        for raw in native_iterator:
             request = requests[int(raw["index"])]
             yield _batch_result_from_native(
                 raw,
@@ -215,6 +238,7 @@ def _iter_cpp_batch(
                 config=config,
                 make_dative_bonds=make_dative_bonds,
                 make_stereochemistry=make_stereochemistry,
+                kekulize=kekulize,
                 raise_on_error=raise_on_error,
             )
     finally:
@@ -227,9 +251,11 @@ def _iter_python_batch(
     config: MolGRConfig,
     make_dative_bonds: bool,
     make_stereochemistry: bool,
+    kekulize: bool,
     raise_on_error: bool,
 ) -> Iterator[ReconstructionBatchResult]:
     for request in requests:
+        diagnostics: ReconstructionDiagnostics | None = None
         try:
             molecule = xyz_to_rdmol(
                 request.xyz_block,
@@ -238,6 +264,7 @@ def _iter_python_batch(
                 backend="python",
                 make_dative_bonds=make_dative_bonds,
                 make_stereochemistry=make_stereochemistry,
+                kekulize=kekulize,
                 config=config,
             )
         except ReconstructionError as exc:
@@ -250,7 +277,6 @@ def _iter_python_batch(
             else:
                 yield ReconstructionBatchResult(request, None, diagnostics)
             continue
-        diagnostics = None
         if molecule.HasProp("_MolGRReconstructionDiagnostics"):
             diagnostics = _diagnostics_from_suspicious_mol(molecule, backend="python")
             if raise_on_error:
@@ -267,17 +293,67 @@ def iter_xyz_to_rdmol_batch(
     ordered: bool = False,
     make_dative_bonds: bool = True,
     make_stereochemistry: bool = True,
+    kekulize: bool = True,
     config: MolGRConfig | None = None,
     raise_on_error: bool = False,
 ) -> Iterator[ReconstructionBatchResult]:
-    """Stream ``(input, result, status)`` triples from a finite batch.
+    r"""Yield an explicit-H molecule and its diagnostics for each XYZ request.
 
-    The C++ backend owns the worker pool and bounded result queue. The Python
-    backend intentionally remains sequential and is provided for parity and
-    reference behavior without creating another Python thread pool. Every
-    triple includes its original request, so ``ordered=False`` does not lose
-    input/result correspondence. The input iterable is normalized once before
-    native scheduling, so generators and other one-shot iterators are valid.
+    Parameters
+    ----------
+    requests : iterable
+        A finite iterable of ReconstructionBatchRequest objects or three-element
+        sequences ``(xyz_block, total_charge, spin_multiplicity)``. Each block
+        contains one frame in angstroms. The iterator collects all requests
+        before scheduling work. Submit large datasets in chunks to bound input
+        memory.
+    backend : {"cpp", "python"}, default "cpp"
+        The C++ backend schedules frames in a native worker pool. The Python
+        backend reconstructs one molecule at a time.
+    max_workers : int, optional
+        Maximum number of concurrent C++ workers. None uses the native
+        configuration. The Python backend accepts None or 1.
+    queue_size : int, default 16
+        Positive capacity setting for the native result queue.
+    ordered : bool, default False
+        With C++, yield in completion order by default or input order when True.
+        Each result carries its request. Python yields in input order.
+    make_dative_bonds : bool, default True
+        Infer additional metal–ligand contacts from the reconstructed graph and
+        geometry, as in ``molgr.interface.xyz_to_rdmol``.
+    make_stereochemistry : bool, default True
+        Assign stereo from each input conformer.
+    kekulize : bool, default True
+        Use localized integer bond orders. False allows RDKit aromatic bonds.
+    config : MolGRConfig, optional
+        None uses ``molgr.CONFIG``. The interface failure policy controls
+        whether a failed item can carry a marked initial-perception graph.
+    raise_on_error : bool, default False
+        Yield reconstruction failures with diagnostics by default. True stops
+        iteration and raises ReconstructionError on an item failure.
+
+    Yields
+    ------
+    ReconstructionBatchResult
+        One ``(input, result, status)`` triple per completed request. Check
+        ``status is None`` before using the molecule as a reconstruction.
+
+    Raises
+    ------
+    ValueError
+        Invalid backend, worker count, queue size or three-element request.
+    ReconstructionError
+        An item failed and ``raise_on_error=True``.
+    RuntimeError
+        Iteration began in a forked child after MolGR was imported in the parent.
+
+    Examples
+    --------
+    >>> from molgr import ReconstructionBatchRequest, iter_xyz_to_rdmol_batch
+    >>> chloride = ReconstructionBatchRequest("1\nchloride\nCl 0 0 0\n", -1, 1)
+    >>> item = next(iter_xyz_to_rdmol_batch([chloride], max_workers=1))
+    >>> item.input == chloride, item.status is None, item.result.GetNumAtoms()
+    (True, True, 1)
     """
 
     ensure_current_process("molgr.iter_xyz_to_rdmol_batch")
@@ -295,6 +371,7 @@ def iter_xyz_to_rdmol_batch(
             config=resolved_config,
             make_dative_bonds=make_dative_bonds,
             make_stereochemistry=make_stereochemistry,
+            kekulize=kekulize,
             raise_on_error=raise_on_error,
         )
         return
@@ -309,6 +386,7 @@ def iter_xyz_to_rdmol_batch(
         ordered=ordered,
         make_dative_bonds=make_dative_bonds,
         make_stereochemistry=make_stereochemistry,
+        kekulize=kekulize,
         raise_on_error=raise_on_error,
     )
 

@@ -1,176 +1,108 @@
-# pyright: reportCallIssue=false
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
+import zlib
 from pathlib import Path
-from typing import Any, Literal
 
 import pytest
 from rdkit import Chem
 
-from molgr.fallback.utils.consts import NON_METAL_DICT
+from benchmarks.dataset_xyz_benchmark import tmqmg as corrected
+from molgr import MolGRConfig
 from molgr.interface import xyz_to_rdmol
 from molgr.utils.equivalence import check_equivalence
 from scripts.reconstruction_trace import load_review_fixture_cases
+from scripts.tmqmg_fixture_data import fixture, reference_graph
 
 
-_FIXTURE_ROOT = Path(__file__).parent / "data" / "reviewed" / "tmqmg"
-_MANIFEST_PATH = _FIXTURE_ROOT / "manifest.json"
+ROOT = Path(__file__).parent / "data/reviewed/tmqmg"
+MANIFEST = ROOT / "manifest.json"
+PAYLOAD = json.loads(MANIFEST.read_text())
+RECORDS = PAYLOAD["fixtures"]
 
 
-def _manifest_records() -> list[dict[str, Any]]:
-    payload = json.loads(_MANIFEST_PATH.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == 1
-    return payload["fixtures"]
+def test_review_fixture_manifest_pins_published_dataset():
+    assert PAYLOAD["schema_version"] == 2
+    assert PAYLOAD["source_dataset"]["revision"] == corrected.REVISION
+    assert PAYLOAD["source_dataset"]["manifest_sha256"] == corrected.MANIFEST_SHA256
+    assert len({record["case_id"] for record in RECORDS}) == len(RECORDS)
 
 
-def test_review_fixture_manifest_pins_source_dataset() -> None:
-    payload = json.loads(_MANIFEST_PATH.read_text(encoding="utf-8"))
-
-    assert payload["source_dataset"] == {
-        "name": "tmQMg",
-        "properties_file": "tmQMg_properties_and_targets.csv",
-        "properties_sha256": "3920c1c8f4ec81bc8e44b8d0256a7da1e36c8805c3c0adfd47e50c46e633f473",
-        "publication_doi": "10.1039/D2DD00129B",
-        "repository": "https://github.com/uiocompcat/tmQMg",
-        "revision": "e1dc9887b8f20a217a1db6ca972d726bcbaab45b",
-        "xyz_file": "tmQMg_xyz.zip",
-        "xyz_sha256": "e0d15a70bcba294717cd9f9792e7fac99ef0c5c61c3a6e08dcc8a8643f53660a",
-    }
-
-
-def _normalize_fixture_answer(mol: Chem.Mol) -> Chem.Mol:
-    """Drop coordination bonds and metal stereochemistry from an answer graph."""
-
-    answer = Chem.RWMol(Chem.Mol(mol))
-    coordination_bonds = [
-        (bond.GetBeginAtomIdx(), bond.GetEndAtomIdx())
-        for bond in answer.GetBonds()
-        if bond.GetBondType() == Chem.BondType.DATIVE
-    ]
-    for begin_idx, end_idx in coordination_bonds:
-        answer.RemoveBond(begin_idx, end_idx)
-    for atom in answer.GetAtoms():
-        if int(atom.GetAtomicNum()) not in NON_METAL_DICT:
-            atom.SetChiralTag(Chem.ChiralType.CHI_UNSPECIFIED)
-
-    normalized = answer.GetMol()
-    normalized.UpdatePropertyCache(strict=False)
-    return normalized
-
-
-def test_review_fixture_manifest_is_complete_and_unique() -> None:
-    records = _manifest_records()
-
-    assert len({record["case_id"] for record in records}) == len(records)
-    assert {record["kind"] for record in records} <= {
-        "accepted_both",
-        "approved_graph",
-        "manual_reference",
-        "reference_graph",
-    }
-    for record in records:
-        assert (_FIXTURE_ROOT / str(record["structure_file"])).is_file()
-        assert int(record["spin_multiplicity"]) == int(record["total_radical_electrons"]) + 1
-        assert {"reviewer", "notes", "updated_at"}.isdisjoint(record)
-
-
-def test_reviewed_approved_sdf_graphs_survive_reconstruction() -> None:
-    records = [
-        record
-        for record in _manifest_records()
-        if record["kind"] in {"accepted_both", "approved_graph"}
-    ]
-
-    failures: list[str] = []
-    for record in records:
-        try:
-            path = _FIXTURE_ROOT / str(record["structure_file"])
-            expected = next(
-                mol
-                for mol in Chem.SDMolSupplier(str(path), sanitize=False, removeHs=False)
-                if mol is not None
-            )
-            if sum(atom.GetAtomicNum() == 5 for atom in expected.GetAtoms()) >= 4:
-                continue
-            total_charge = int(expected.GetProp("TOTAL_CHARGE"))
-            spin_multiplicity = int(expected.GetProp("SPIN_MULTIPLICITY"))
-            expected_answers = [_normalize_fixture_answer(expected)]
-            if record["kind"] == "accepted_both":
-                reference = Chem.MolFromSmiles(str(record["reference_smiles"]), sanitize=False)
-                assert reference is not None
-                reference.UpdatePropertyCache(strict=False)
-                expected_answers.append(_normalize_fixture_answer(reference))
-
-            rebuilt = xyz_to_rdmol(
-                Chem.MolToXYZBlock(expected),
-                total_charge=total_charge,
-                spin_multiplicity=spin_multiplicity,
-                backend="cpp",
-                make_dative_bonds=True,
-                make_stereochemistry=True,
-            )
-            comparisons = [
-                check_equivalence(answer, rebuilt, use_chirality=False)
-                for answer in expected_answers
-            ]
-            if not any(equivalent for equivalent, _info in comparisons):
-                failures.append(
-                    f"{record['case_id']}: "
-                    + "; ".join(info.reason for _equivalent, info in comparisons)
-                )
-        except Exception as exc:  # noqa: BLE001
-            failures.append(f"{record['case_id']}: {type(exc).__name__}: {exc}")
-
-    assert not failures, "\n".join(failures)
-
-
-def test_review_manifest_is_a_live_trace_input_source() -> None:
-    records = _manifest_records()
-    if not records:
-        pytest.skip("no review fixtures")
-    cases = load_review_fixture_cases(_MANIFEST_PATH)
-
-    assert {case.id for case in cases} == {str(record["case_id"]) for record in records}
-    assert all(case.xyz_source == "review_fixture" for case in cases)
-    assert all(case.fixture_kind for case in cases)
-    assert all(case.fixture_structure_file for case in cases)
+@pytest.mark.parametrize("record", RECORDS, ids=lambda r: r["case_id"])
+def test_review_sdf_retains_exact_published_native_graph(record):
+    case = fixture(record["case_id"])
+    assert record["kind"] == "published_reference"
+    assert {"accepted_smiles", "approved_smiles", "review_status"}.isdisjoint(record)
+    mol = next(
+        iter(
+            Chem.SDMolSupplier(str(ROOT / record["structure_file"]), sanitize=False, removeHs=False)
+        )
+    )
+    native = zlib.decompress(base64.b64decode(mol.GetProp("NATIVE_GRAPH_ZLIB_BASE64")))
+    assert hashlib.sha256(native).hexdigest() == record["graph_sha256"] == case["graph_sha256"]
+    assert mol.GetProp("XYZ_SHA256") == case["xyz_sha256"]
+    assert int(mol.GetProp("INPUT_CHARGE")) == record["total_charge"] == case["charge"]
+    assert (
+        int(mol.GetProp("INPUT_MULTIPLICITY"))
+        == record["spin_multiplicity"]
+        == case["multiplicity"]
+    )
 
 
 @pytest.mark.parametrize("backend", ["cpp", "python"])
-def test_reviewed_xyz_smiles_reference_graphs_survive_reconstruction(
-    backend: Literal["cpp", "python"],
-) -> None:
-    records = [
-        record
-        for record in _manifest_records()
-        if record["kind"] in {"manual_reference", "reference_graph"}
-    ]
+@pytest.mark.parametrize("record", RECORDS, ids=lambda r: r["case_id"])
+def test_reviewed_graphs_match_released_target(record, backend):
+    case = fixture(record["case_id"])
+    config = MolGRConfig()
+    config.cpp_backend.max_threads = 1
+    config.cpp_backend.target_bucket_parallel_max_threads = 1
+    rebuilt = xyz_to_rdmol(
+        case["xyz"], case["charge"], case["multiplicity"], backend=backend, config=config
+    )
+    equivalent, info = check_equivalence(
+        reference_graph(record["case_id"]),
+        rebuilt,
+        use_chirality=False,
+        ignore_metal_coordination_bonds=True,
+        max_resonance=100000,
+    )
+    assert equivalent, info.reason
 
-    failures: list[str] = []
-    for record in records:
-        try:
-            smiles_field = (
-                "approved_smiles" if record["kind"] == "manual_reference" else "reference_smiles"
-            )
-            reference = Chem.MolFromSmiles(str(record[smiles_field]), sanitize=False)
-            assert reference is not None
-            reference.UpdatePropertyCache(strict=False)
-            if sum(atom.GetAtomicNum() == 5 for atom in reference.GetAtoms()) >= 4:
-                continue
-            expected_answer = _normalize_fixture_answer(reference)
-            rebuilt = xyz_to_rdmol(
-                (_FIXTURE_ROOT / str(record["structure_file"])).read_text(encoding="utf-8"),
-                total_charge=int(record["total_charge"]),
-                spin_multiplicity=int(record["spin_multiplicity"]),
-                backend=backend,
-                make_dative_bonds=True,
-                make_stereochemistry=True,
-            )
-            equivalent, info = check_equivalence(expected_answer, rebuilt, use_chirality=False)
-            if not equivalent:
-                failures.append(f"{record['case_id']}: {info.reason}")
-        except Exception as exc:  # noqa: BLE001
-            failures.append(f"{record['case_id']}: {type(exc).__name__}: {exc}")
 
-    assert not failures, "\n".join(failures)
+def test_review_manifest_is_a_live_trace_input_source():
+    cases = load_review_fixture_cases(MANIFEST)
+    assert {case.id for case in cases} == {r["case_id"] for r in RECORDS}
+    for case in cases:
+        published = fixture(case.id)
+        assert case.xyz_source == "review_fixture"
+        assert case.fixture_kind == "published_reference"
+        assert (
+            case.xyz_block == published["xyz"]
+        )  # Never regenerate input from rounded SDF coordinates.
+        assert case.expected_native_graph == published["native_graph"]
+        assert (
+            not case.expected_smiles_options
+        )  # One native release target, not old accepted alternatives.
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("total_charge", 999),
+        ("spin_multiplicity", 999),
+        ("kind", "published_excluded"),
+        ("graph_sha256", "wrong"),
+    ],
+)
+def test_trace_rejects_stale_published_review_metadata(tmp_path, field, value):
+    payload = json.loads(MANIFEST.read_text())
+    record = payload["fixtures"][0]
+    payload["fixtures"] = [record]
+    record["structure_file"] = str(ROOT / record["structure_file"])
+    record[field] = value
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match="Published review"):
+        load_review_fixture_cases(path)

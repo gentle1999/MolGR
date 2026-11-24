@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import csv
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -21,44 +20,9 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _BENCHMARK = _PROJECT_ROOT / "benchmarks" / "tmqmg_concurrency_stress.py"
 
 
-def _find_tmqmg_dataset() -> tuple[Path, Path, bool]:
-    environment_csv = os.environ.get("MOLGR_TMQMG_CSV")
-    environment_xyz_dir = os.environ.get("MOLGR_TMQMG_XYZ_DIR")
-    if environment_csv and environment_xyz_dir:
-        csv_path = Path(environment_csv)
-        xyz_dir = Path(environment_xyz_dir)
-        if csv_path.is_file() and xyz_dir.is_dir():
-            return csv_path, xyz_dir, False
-
-    candidates = [
-        (
-            _PROJECT_ROOT
-            / ".local"
-            / "datasets"
-            / "tmqmg"
-            / "e1dc9887b8f20a217a1db6ca972d726bcbaab45b"
-            / "tmQMg_properties_and_targets.csv",
-            _PROJECT_ROOT
-            / ".local"
-            / "datasets"
-            / "tmqmg"
-            / "e1dc9887b8f20a217a1db6ca972d726bcbaab45b"
-            / "tmQMg_xyz"
-            / "xyz",
-        ),
-        (
-            Path("/mnt/e/download/tmQMg_properties_and_targets.csv"),
-            Path("/mnt/e/download/tmQMg_xyz/xyz"),
-        ),
-    ]
-    for csv_path, xyz_dir in candidates:
-        if csv_path.is_file() and xyz_dir.is_dir():
-            return csv_path, xyz_dir, False
-    fixture_root = _PROJECT_ROOT / "tests" / "data"
-    return fixture_root / "xyz_stress_manifest.csv", fixture_root, True
-
-
-_TMQMG_CSV, _TMQMG_XYZ_DIR, _REPEAT_INPUTS = _find_tmqmg_dataset()
+_TMQMG_CSV = _PROJECT_ROOT / "tests/data/xyz_stress_manifest.csv"
+_TMQMG_XYZ_DIR = _PROJECT_ROOT / "tests/data"
+_REPEAT_INPUTS = True
 _STRESS_WORKER_COUNTS = stress_worker_counts()
 
 

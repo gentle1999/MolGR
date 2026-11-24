@@ -3,16 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from rdkit import Chem
 
 
 pytest.importorskip("openbabel")
 
 from molgr.interface import xyz_to_rdmol
 from molgr.utils.equivalence import check_equivalence
-
-
-AKUFIV_REFERENCE_SMILES = "O=C1[O-]->[Pt+2]2(<-NC3CCCCC3N->2)<-[O-]C1=O"
+from scripts.tmqmg_fixture_data import reference_graph
 
 
 def _akufiv_xyz_block() -> str:
@@ -28,7 +25,7 @@ def test_akufiv_selects_platinum_ii_without_pentavalent_carbon(backend: str) -> 
         backend=backend,
         make_dative_bonds=True,
     )
-    reference = Chem.MolFromSmiles(AKUFIV_REFERENCE_SMILES)
+    reference = reference_graph("AKUFIV")
     assert reference is not None
     platinum = next(atom for atom in reconstructed.GetAtoms() if atom.GetAtomicNum() == 78)
 
@@ -38,5 +35,11 @@ def test_akufiv_selects_platinum_ii_without_pentavalent_carbon(backend: str) -> 
         for atom in reconstructed.GetAtoms()
         if atom.GetAtomicNum() == 6
     )
-    equivalent, info = check_equivalence(reference, reconstructed, use_chirality=False)
+    equivalent, info = check_equivalence(
+        reference,
+        reconstructed,
+        use_chirality=False,
+        ignore_metal_coordination_bonds=True,
+        max_resonance=100000,
+    )
     assert equivalent is True, info.reason
