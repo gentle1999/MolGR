@@ -8,13 +8,18 @@ import typing
 
 import molgr._core.utils
 import molgr.config
+from molgr._native_types import NativeBatchResult as _NativeBatchResult
 
 __all__: list[str] = ["ReconstructionBatchIterator", "batch_xyz2omol", "xyz2omol"]
 
-class ReconstructionBatchIterator(typing.Iterator[dict[str, object]]):
-    def __iter__(self) -> ReconstructionBatchIterator: ...
-    def __next__(self) -> dict[str, object]: ...
-    def close(self) -> None: ...
+class ReconstructionBatchIterator(typing.Iterator[_NativeBatchResult]):
+    """Stream indexed reconstruction results from the native workers. Close the iterator to stop outstanding work."""
+    def __iter__(self) -> ReconstructionBatchIterator:
+        """Return this native result iterator."""
+    def __next__(self) -> _NativeBatchResult:
+        """Yield the input index, molecule data and diagnostics for one request."""
+    def close(self) -> None:
+        """Stop scheduling requests and wait for active tasks to finish."""
 
 def xyz2omol(
     xyz_block: str,

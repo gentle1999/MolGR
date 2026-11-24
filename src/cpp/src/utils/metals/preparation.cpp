@@ -6,6 +6,7 @@
 #include "molgr/utils/metal_radical_inference.h"
 #include "molgr/utils/xyz.h"
 
+#include <openbabel/bond.h>
 #include <openbabel/elements.h>
 #include "molgr/compat/openbabel_iter.h"
 
@@ -29,6 +30,8 @@ namespace molgr
                 const int atomic_num = static_cast<int>(obatom.GetAtomicNum());
                 const std::string symbol = OpenBabel::OBElements::GetSymbol(atomic_num);
 
+                /// Retain the input metal position and use neutral, zero-unpaired labels when no state is
+                /// available.
                 const auto default_state = [&]()
                 {
                     return molgr::metal::MetalAtomPosition{
@@ -44,6 +47,7 @@ namespace molgr
 
                 std::vector<int> valences;
                 std::set<int> seen_valences;
+                /// Append each new metal valence once, preserving the preference order of the source list.
                 const auto add_valences = [&](const std::vector<int> &source)
                 {
                     for (const int valence : source)
@@ -204,6 +208,7 @@ namespace molgr
                     return {};
                 }
 
+                molgr::state::MetalPreparationState state;
                 std::vector<OpenBabel::OBAtom *> removable_metal_atoms;
                 std::vector<std::vector<molgr::metal::MetalAtomPosition>> available_states;
                 FOR_ATOMS_OF_MOL(atom_iter, mol)
@@ -213,6 +218,8 @@ namespace molgr
                     {
                         continue;
                     }
+                    state.metal_sites.push_back({static_cast<int>(atom->GetAtomicNum()),
+                        atom->GetX(), atom->GetY(), atom->GetZ()});
                     removable_metal_atoms.push_back(atom);
                     available_states.push_back(BuildMetalStates(*atom, config));
                 }
@@ -222,7 +229,6 @@ namespace molgr
                     mol.DeleteAtom(atom);
                 }
 
-                molgr::state::MetalPreparationState state;
                 state.no_metal_xyz_block = molgr::utils::WriteXyzBlock(mol);
                 state.available_valence_radical_states = std::move(available_states);
                 state.total_charge = total_charge;

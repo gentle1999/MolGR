@@ -91,6 +91,8 @@ add_library(molgr STATIC
     src/cpp/src/vendor/openbabel_threading.cpp
     src/cpp/src/utils/metals/preparation.cpp
     src/cpp/src/utils/metals/scoring.cpp
+    src/cpp/src/utils/metals/conjugated_geometry.cpp
+    src/cpp/src/utils/metals/hydrazido_geometry.cpp
     src/cpp/src/utils/metals/search.cpp
     src/cpp/src/utils/no_metals/neighbor_radicals.cpp
     src/cpp/src/utils/no_metals/preparation.cpp

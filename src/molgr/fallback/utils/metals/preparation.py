@@ -13,6 +13,8 @@ from molgr.fallback.state import MetalPreparationState
 from molgr.fallback.utils import consts, dataclasses
 from molgr.fallback.utils.electrons import set_unpaired_electron_count
 from molgr.fallback.utils.metal_radical_inference import infer_metal_radical_counts
+from molgr.fallback.utils.ob_graph import mol_atoms
+from molgr.fallback.utils.xyz import read_xyz_seed
 
 
 def _build_metal_states(
@@ -137,10 +139,9 @@ def prepare_metal_state(
 ) -> MetalPreparationState:
     """Split the input into a no-metal XYZ block plus per-metal state options."""
 
-    omol = pybel.readstring("xyz", xyz_block)
-    removable_metal_atoms = [
-        cast(ob.OBAtom, atom.OBAtom) for atom in omol.atoms if atom.OBAtom.IsMetal()
-    ]
+    omol = read_xyz_seed(xyz_block)
+    obmol = cast(ob.OBMol, omol.OBMol)
+    removable_metal_atoms = [atom for atom in mol_atoms(obmol) if atom.IsMetal()]
     available_valence_radical_states = tuple(
         tuple(_build_metal_states(obatom, config=config)) for obatom in removable_metal_atoms
     )
@@ -157,8 +158,12 @@ def prepare_metal_state(
             ),
             metadata={"metal_atom_count": 0},
         )
+    metal_sites = tuple(
+        dataclasses.MetalSite(atom.GetAtomicNum(), atom.GetX(), atom.GetY(), atom.GetZ())
+        for atom in removable_metal_atoms
+    )
     for obatom in removable_metal_atoms:
-        omol.OBMol.DeleteAtom(obatom)
+        obmol.DeleteAtom(obatom)
     return MetalPreparationState(
         no_metal_xyz_block=cast(str, omol.write("xyz")),
         available_valence_radical_states=available_valence_radical_states,
@@ -171,6 +176,7 @@ def prepare_metal_state(
             "serialize_no_metal_xyz",
         ),
         metadata={"metal_atom_count": len(removable_metal_atoms)},
+        metal_sites=metal_sites,
     )
 
 
