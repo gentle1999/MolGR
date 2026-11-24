@@ -9,6 +9,8 @@ Coordinates and MolGR's custom electronic annotations are outside ordinary SMILE
 
 from __future__ import annotations
 
+from typing import Dict, List, Optional
+
 from rdkit import Chem
 
 from molgr import _core as core
@@ -18,35 +20,43 @@ from molgr.utils._molecule_stereo import extract_rdkit_stereo
 class SmilesRoundtripError(ValueError):
     """SMILES reading or round-trip graph validation failed."""
 
-    def __init__(self, message: str, *, details: dict | None = None):
+    def __init__(self, message: str, *, details: Optional[Dict[str, object]] = None) -> None:
         super().__init__(message)
         self.details = details or {}
 
 
-def _stereo_data(mol):
+def _stereo_data(mol: Chem.Mol) -> core.utils.MoleculeData:
+    """Project an RDKit graph onto the atom references needed to compare stereo frames."""
     # Only topology and reference frames are needed by the native stereo
     # comparison. Avoid Kekulization, radical inference or stereo cleanup here:
     # they could erase precisely the source information we need to validate.
-    atoms = [
-        (a.GetAtomicNum(), a.GetIsotope(), a.GetFormalCharge(), 0, 0, False, 0)
-        for a in mol.GetAtoms()
-    ]
-    bonds = [
-        (
-            b.GetBeginAtomIdx() + 1,
-            b.GetEndAtomIdx() + 1,
-            2 if b.GetBondType() == Chem.BondType.DOUBLE else 1,
-            False,
-            0,
+    atoms = []
+    for i in range(mol.GetNumAtoms()):
+        atom = mol.GetAtomWithIdx(i)
+        atoms.append(
+            (atom.GetAtomicNum(), atom.GetIsotope(), atom.GetFormalCharge(), 0, 0, False, 0)
         )
-        for b in mol.GetBonds()
-    ]
+    bonds = []
+    for i in range(mol.GetNumBonds()):
+        bond = mol.GetBondWithIdx(i)
+        bonds.append(
+            (
+                bond.GetBeginAtomIdx() + 1,
+                bond.GetEndAtomIdx() + 1,
+                2 if bond.GetBondType() == Chem.BondType.DOUBLE else 1,
+                False,
+                0,
+            )
+        )
     data = core.utils._molecule_data_from_rows(atoms, bonds, None)
     data.stereo, data.stereo_groups = extract_rdkit_stereo(mol)
     return data
 
 
-def _compare_mapped_graph(source, restored, mapping, *, check_stereochemistry=True):
+def _compare_mapped_graph(
+    source: Chem.Mol, restored: Chem.Mol, mapping: List[int], *, check_stereochemistry: bool = True
+) -> None:
+    """Check the round trip under the writer's zero-based source-to-restored atom mapping."""
     if source.GetNumAtoms() != restored.GetNumAtoms():
         raise SmilesRoundtripError("SMILES round trip changed the atom count")
     if source.GetNumBonds() != restored.GetNumBonds():
@@ -108,7 +118,8 @@ def normalize_smiles_hydrogens(rdmol: Chem.Mol) -> None:
     This changes neither bonds nor MolGR's real electron assignments. In particular
     we do not invent two radical electrons to make a singlet carbene print [C].
     """
-    for atom in rdmol.GetAtoms():
+    for i in range(rdmol.GetNumAtoms()):
+        atom = rdmol.GetAtomWithIdx(i)
         atom.SetNoImplicit(True)
         atom.SetProp("smilesSymbol", atom.GetSymbol())
     rdmol.UpdatePropertyCache(strict=False)
@@ -118,18 +129,27 @@ def _retain_explicit_h_model(mol: Chem.Mol) -> Chem.Mol:
     # A subsequent native write may omit brackets on saturated atoms. Restore
     # the no-implicit-H convention only when all H are already atom nodes;
     # do not erase hydrogen counts in arbitrary user-supplied SMILES.
-    if all(atom.GetTotalNumHs() == 0 for atom in mol.GetAtoms()):
+    if all(mol.GetAtomWithIdx(i).GetTotalNumHs() == 0 for i in range(mol.GetNumAtoms())):
         normalize_smiles_hydrogens(mol)
     return mol
 
 
-def _read_smiles(smiles: str, *, prepare_for_writing: bool) -> Chem.Mol:
+def _read_smiles(smiles: str, *, kekulize: bool, prepare_for_writing: bool) -> Chem.Mol:
     params = Chem.SmilesParserParams()
     params.removeHs = False
+    params.sanitize = not kekulize
     try:
         restored = Chem.MolFromSmiles(smiles, params)
         if restored is None:
             raise SmilesRoundtripError("RDKit could not read the SMILES under its native rules")
+        if kekulize:
+            # SmilesParserParams only accepts a boolean. Run the selected
+            # sanitization steps and finish the parser's stereo assignment.
+            flags = Chem.SanitizeFlags
+            ops = flags.SANITIZE_ALL & ~flags.SANITIZE_SETAROMATICITY
+            Chem.SanitizeMol(restored, sanitizeOps=ops)
+            Chem.SetBondStereoFromDirections(restored)
+            Chem.AssignStereochemistry(restored, cleanIt=True, force=True)
         return _retain_explicit_h_model(restored) if prepare_for_writing else restored
     except SmilesRoundtripError:
         raise
@@ -137,33 +157,65 @@ def _read_smiles(smiles: str, *, prepare_for_writing: bool) -> Chem.Mol:
         raise SmilesRoundtripError(f"SMILES reading failed: {exc}") from exc
 
 
-def mol_from_smiles(smiles: str) -> Chem.Mol:
-    """Read with native RDKit sanitization and explicit hydrogen nodes retained.
+def mol_from_smiles(smiles: str, *, kekulize: bool = True) -> Chem.Mol:
+    """Read an RDKit molecule while retaining explicit hydrogen nodes.
 
-    No sanitization rules are bypassed. Valence-limited metal coordination is normalized
-    during bond generation, before writing. For graphs with all H as atom nodes,
-    retain MolGR's NoImplicit/bracket convention for subsequent writes.
-    Failure raises SmilesRoundtripError.
+    Parameters
+    ----------
+    smiles : str
+        SMILES to parse. Hydrogen atoms written as separate nodes are retained.
+    kekulize : bool, default True
+        Retain localized bonds and skip aromaticity reassignment during
+        sanitization. False uses RDKit's native aromatic SMILES reading.
+
+    Returns
+    -------
+    Chem.Mol
+        Parsed graph. For molecules with all H as atom nodes, MolGR restores
+        its no-implicit-H and bracket-writing convention for subsequent writes.
+
+    Raises
+    ------
+    SmilesRoundtripError
+        RDKit could not parse or sanitize the supplied SMILES.
     """
-    return _read_smiles(smiles, prepare_for_writing=True)
+    return _read_smiles(smiles, kekulize=kekulize, prepare_for_writing=True)
 
 
-def validate_smiles_roundtrip(rdmol: Chem.Mol, *, check_stereochemistry: bool = False) -> str:
-    """Return canonical SMILES only if its explicit-H graph survives.
+def validate_smiles_roundtrip(
+    rdmol: Chem.Mol, *, kekulize: bool = True, check_stereochemistry: bool = False
+) -> str:
+    """Write canonical SMILES and verify that RDKit can recover the explicit-H graph.
 
-    Accept an RDKit Mol and use the currently imported RDKit for both writing
-    and native sanitized reading. Success returns the validated SMILES; failure raises
-    SmilesRoundtripError, with mismatch information in its details attribute.
-    This checks the installed version only, not cross-version compatibility.
+    Parameters
+    ----------
+    rdmol : Chem.Mol
+        Source graph, copied for validation. Using the writer's atom order,
+        compare atom labels (including isotope, charge and hydrogen count),
+        connectivity, bond type, aromaticity and dative-bond direction.
+    kekulize : bool, default True
+        Read back localized integer bonds. Use False to validate a source
+        graph carrying RDKit aromatic bond types.
+    check_stereochemistry : bool, default False
+        Also compare mapped stereo records. Enable this when the serialized
+        SMILES must preserve the stereo assigned from the conformer.
 
-    This does not modify the input, substitute a resonance form, change electron
-    assignments, or search for a different SMILES traversal. Radical counts
-    inferred by the SMILES reader are deliberately not compared. The reader
-    uses removeHs=False: removing H is outside MolGR's explicit-H contract.
-    Reading uses unmodified native RDKit sanitization.
-    Set check_stereochemistry=True to additionally diagnose stereo loss in
-    RDKit's writer/reader. Reconstruction instead keeps coordinate-derived
-    stereo on the returned Mol, even when a toolkit version cannot serialize it.
+    Returns
+    -------
+    str
+        Canonical SMILES verified by the installed RDKit version, with
+        explicit hydrogen nodes retained during readback.
+
+    Raises
+    ------
+    SmilesRoundtripError
+        Writing, reading or graph comparison failed. The exception's
+        ``details`` can identify a mismatched field or atom.
+
+    Validation uses the source graph directly and a single SMILES traversal.
+    RDKit can infer radical counts when reading SMILES, so those counts are
+    outside the graph comparison. The input retains its MolGR electron
+    assignments and coordinates.
     """
     source = Chem.Mol(rdmol)
     try:
@@ -187,7 +239,7 @@ def validate_smiles_roundtrip(rdmol: Chem.Mol, *, check_stereochemistry: bool = 
         # This temporary graph is only compared, never written again. Keep the
         # native parser result instead of reapplying bracket/NoImplicit output
         # properties as the public convenience reader does for its callers.
-        restored = _read_smiles(smiles, prepare_for_writing=False)
+        restored = _read_smiles(smiles, kekulize=kekulize, prepare_for_writing=False)
         if sorted(order) != list(range(atom_count)):
             raise SmilesRoundtripError("SMILES writer did not preserve all source atoms")
         mapping = [0] * len(order)

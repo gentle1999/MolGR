@@ -4,7 +4,10 @@ No SMILES roundtrip or coordinate perception is used. Non-tetrahedral
 permutations use the standard SMILES SP/TB/OH numbering, not CIP labels.
 """
 
+from __future__ import annotations
+
 import heapq
+from typing import FrozenSet, List, Optional, Sequence, Set, Tuple
 
 from rdkit import Chem
 
@@ -12,7 +15,18 @@ from molgr import _core as core
 from molgr.fallback.utils.consts import NON_METAL_DICT
 
 
-def extract_rdkit_stereo(mol, *, atoms=None, bonds=None, ignore_metal_coordination=False):
+def extract_rdkit_stereo(
+    mol: Chem.Mol,
+    *,
+    atoms: Optional[Sequence[Chem.Atom]] = None,
+    bonds: Optional[Sequence[Chem.Bond]] = None,
+    ignore_metal_coordination: bool = False,
+) -> Tuple[List[core.utils.StereoData], List[core.utils.StereoGroupData]]:
+    """Read stereo frames and enhanced groups using one-based MoleculeData references.
+
+    Optional atom and bond sequences follow the molecule's index order. Removing
+    coordination omits frames whose metal neighbors would disappear.
+    """
     # Reuse adapter traversal; RDKit's Python GetAtoms/GetBonds iterators check
     # the container size repeatedly for every yielded item.
     if atoms is None:
@@ -25,7 +39,7 @@ def extract_rdkit_stereo(mol, *, atoms=None, bonds=None, ignore_metal_coordinati
         else None
     )
 
-    def ignored(atom):
+    def ignored(atom: Chem.Atom) -> bool:
         # A frame that loses a metal neighbor is not a frame on the covalent
         # projection. Exclude it before enforcing the frame's reference count.
         return metals is not None and (
@@ -42,6 +56,7 @@ def extract_rdkit_stereo(mol, *, atoms=None, bonds=None, ignore_metal_coordinati
         Chem.ChiralType.CHI_OCTAHEDRAL: (kind.Octahedral, None, 6),
     }
     unknown_centers = {b.GetBeginAtomIdx() for b in bonds if b.GetBondDir() == Chem.BondDir.UNKNOWN}
+    configuration: int | None
     for atom in atoms:
         tag = atom.GetChiralTag()
         unknown = atom.GetIdx() in unknown_centers or (
@@ -95,7 +110,7 @@ def extract_rdkit_stereo(mol, *, atoms=None, bonds=None, ignore_metal_coordinati
         ):
             neighbors = [a.GetIdx() for a in side.GetNeighbors() if a.GetIdx() != other]
             first = selected[offset] if len(selected) == 2 else neighbors[0] if neighbors else None
-            if first not in neighbors or len(neighbors) > 2:
+            if first is None or first not in neighbors or len(neighbors) > 2:
                 raise ValueError("Invalid double-bond stereo references")
             remaining = [idx + 1 for idx in neighbors if idx != first]
             refs.extend([first + 1, remaining[0] if remaining else 0])
@@ -122,7 +137,7 @@ def extract_rdkit_stereo(mol, *, atoms=None, bonds=None, ignore_metal_coordinati
     return records, groups
 
 
-def stereo_ordered_bonds(data):
+def stereo_ordered_bonds(data: core.utils.MoleculeData) -> List[core.utils.BondData]:
     """Keep TB/OH neighbor order without rewriting their permutation numbers.
 
     Only their incident edges impose ordering constraints. Tetrahedral and SP
@@ -138,7 +153,7 @@ def stereo_ordered_bonds(data):
     if not records:
         return bonds
     indices = {frozenset((b.begin_atom_idx, b.end_atom_idx)): i for i, b in enumerate(bonds)}
-    successors = [set() for _ in bonds]
+    successors: list[set[int]] = [set() for _ in bonds]
     indegree = [0] * len(bonds)
     for record in records:
         try:
@@ -164,12 +179,14 @@ def stereo_ordered_bonds(data):
     return ordered
 
 
-def _odd_permutation(before, after):
+def _odd_permutation(before: Sequence[int], after: Sequence[int]) -> int:
+    """Return the parity of the reference reordering used to restore tetrahedral winding."""
     permutation = [before.index(ref) for ref in after]
     return sum(a > b for i, a in enumerate(permutation) for b in permutation[i + 1 :]) % 2
 
 
-def _square_pairs(refs, configuration):
+def _square_pairs(refs: Sequence[int], configuration: int) -> Set[FrozenSet[int]]:
+    """Identify the two pairs of trans ligands in a square-planar SMILES permutation."""
     order = {1: (0, 1, 2, 3), 2: (0, 2, 1, 3), 3: (0, 1, 3, 2)}[configuration]
     return {
         frozenset((refs[order[0]], refs[order[2]])),
@@ -177,7 +194,12 @@ def _square_pairs(refs, configuration):
     }
 
 
-def apply_rdkit_stereo(mol, data):
+def apply_rdkit_stereo(mol: Chem.RWMol, data: core.utils.MoleculeData) -> None:
+    """Restore stored stereo frames and enhanced groups on a mutable RDKit graph in place.
+
+    Atom indices must still match the native graph. Trigonal-bipyramidal and
+    octahedral centers also require the bond insertion order returned by stereo_ordered_bonds.
+    """
     kind = core.utils.StereoKind
     for record in data.stereo:
         refs = list(record.refs)
