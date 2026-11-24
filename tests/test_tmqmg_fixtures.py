@@ -21,7 +21,9 @@ from scripts.tmqmg_fixture_data import fixture, reference_graph, regression_refe
 _FIXTURE_ROOT = Path(__file__).parent / "data" / "tmqmg"
 _CONNECTIVITY_EXPECTATIONS = {
     case["id"]: case
-    for case in json.loads((_FIXTURE_ROOT / "fixture_sources.json").read_text())["connectivity"]
+    for case in json.loads((_FIXTURE_ROOT / "fixture_sources.json").read_text(encoding="utf-8"))[
+        "connectivity"
+    ]
 }
 
 
@@ -125,7 +127,9 @@ def test_tmqmg_reviewed_connectivity_and_backend_parity(case: dict[str, str]) ->
 
 _SULFUR_REVIEW_EXPECTATIONS = {
     group: {row["id"]: row for row in rows}
-    for group, rows in json.loads((_FIXTURE_ROOT / "fixture_sources.json").read_text()).items()
+    for group, rows in json.loads(
+        (_FIXTURE_ROOT / "fixture_sources.json").read_text(encoding="utf-8")
+    ).items()
     if group in ("sulfur_electronic_assignment", "electronic_validity")
 }
 
@@ -149,7 +153,7 @@ def sulfur_reconstruction():
     @lru_cache(maxsize=None)
     def rebuild(group, case_id, backend):
         case = cases[group, case_id]
-        xyz = (_FIXTURE_ROOT / group / case["xyz_file"]).read_text()
+        xyz = (_FIXTURE_ROOT / group / case["xyz_file"]).read_text(encoding="utf-8")
         return xyz_to_rdmol(
             xyz, int(case["charge"]), int(case["multiplicity"]), backend=backend, config=config
         )
@@ -167,7 +171,7 @@ def test_sulfur_assignments_match_reference_target_and_local_controls(
     group, case, backend, sulfur_reconstruction
 ):
     expected = _SULFUR_REVIEW_EXPECTATIONS[group][case["case_id"]]
-    xyz = (_FIXTURE_ROOT / group / case["xyz_file"]).read_text()
+    xyz = (_FIXTURE_ROOT / group / case["xyz_file"]).read_text(encoding="utf-8")
     geometry = Chem.MolFromXYZBlock(xyz)
     mol = Chem.Mol(sulfur_reconstruction(group, case["case_id"], backend))
     perceived = Chem.Mol(mol)
@@ -301,12 +305,14 @@ def test_tmqmg_reviewed_gold_assignments_and_backend_parity(case: dict[str, str]
     cid = case["case_id"]
     expectations = {
         row["id"]: row
-        for row in json.loads((_FIXTURE_ROOT / "fixture_sources.json").read_text())[
+        for row in json.loads((_FIXTURE_ROOT / "fixture_sources.json").read_text(encoding="utf-8"))[
             "gold_electronic_assignment"
         ]
     }
     expected = expectations[cid]
-    xyz = (_FIXTURE_ROOT / "gold_electronic_assignment" / case["xyz_file"]).read_text()
+    xyz = (_FIXTURE_ROOT / "gold_electronic_assignment" / case["xyz_file"]).read_text(
+        encoding="utf-8"
+    )
     geometry = Chem.MolFromXYZBlock(xyz)
     config = MolGRConfig()
     config.cpp_backend.max_threads = 1

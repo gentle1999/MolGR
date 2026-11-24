@@ -193,25 +193,27 @@ def read_release(directory, ids, input_indices=()):
 def freeze_fixtures(*, dataset: Path, data_dir: Path = DATA):
     root = data_dir / "tmqmg"
     spec_path = root / "fixture_sources.json"
-    spec = json.loads(spec_path.read_text())
+    spec = json.loads(spec_path.read_text(encoding="utf-8"))
     ids = {row["id"] for rows in spec.values() for row in rows}
     for group in spec:
-        with (root / group / "manifest.csv").open() as stream:
+        with (root / group / "manifest.csv").open(encoding="utf-8", newline="") as stream:
             ids.update(row["case_id"] for row in csv.DictReader(stream))
     mixed_path = data_dir / "reviewed/reconstruction/manifest.json"
-    mixed = json.loads(mixed_path.read_text())
+    mixed = json.loads(mixed_path.read_text(encoding="utf-8"))
     ids.update(r["case_id"] for r in mixed["fixtures"] if r.get("source") == "tmQMg-Corrected")
-    local_manifests = {path: json.loads(path.read_text()) for path in root.rglob("manifest.json")}
+    local_manifests = {
+        path: json.loads(path.read_text(encoding="utf-8")) for path in root.rglob("manifest.json")
+    }
     for payload in local_manifests.values():
         ids.update(row["case_id"] for row in payload.get("fixtures", []))
     xyz_paths = [p for p in data_dir.rglob("*.xyz") if p.stem.isalpha() and p.stem.isupper()]
     ids.update(p.stem for p in xyz_paths)
     review_path = data_dir / "reviewed/tmqmg/manifest.json"
-    review = json.loads(review_path.read_text())
+    review = json.loads(review_path.read_text(encoding="utf-8"))
     ids.update(r["case_id"] for r in review["fixtures"])
     ids.update(DIRECT_CASE_IDS)
     selection_path = root / "published/regression_case_ids.json"
-    regression_ids = json.loads(selection_path.read_text())
+    regression_ids = json.loads(selection_path.read_text(encoding="utf-8"))
     ids.update(regression_ids)
     source = corrected.provenance(dataset)
     records, sdfs = read_release(dataset, ids, SEARCH_INPUT_INDICES)
@@ -253,7 +255,7 @@ def freeze_fixtures(*, dataset: Path, data_dir: Path = DATA):
             path.unlink()
     for group, selections in spec.items():
         path = root / group / "manifest.csv"
-        with path.open() as stream:
+        with path.open(encoding="utf-8", newline="") as stream:
             old = list(csv.DictReader(stream))
         existing_ids = {r["id"] for r in selections}
         for row in old:
@@ -358,7 +360,7 @@ def freeze_fixtures(*, dataset: Path, data_dir: Path = DATA):
     _write_json(selection_path, sorted(case_id for case_id in regression_ids if case_id in records))
     # The stress runner only needs inputs; its reference links must not point to retired graphs.
     stress_path = data_dir / "xyz_stress_manifest.csv"
-    with stress_path.open() as stream:
+    with stress_path.open(encoding="utf-8", newline="") as stream:
         stress = list(csv.DictReader(stream))
     present = {str(p.relative_to(data_dir).as_posix()): p for p in data_dir.rglob("*.xyz")}
     stress = [row for row in stress if row["xyz_file"] in present]

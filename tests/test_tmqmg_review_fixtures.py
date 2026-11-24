@@ -19,7 +19,7 @@ from scripts.tmqmg_fixture_data import fixture, reference_graph
 
 ROOT = Path(__file__).parent / "data/reviewed/tmqmg"
 MANIFEST = ROOT / "manifest.json"
-PAYLOAD = json.loads(MANIFEST.read_text())
+PAYLOAD = json.loads(MANIFEST.read_text(encoding="utf-8"))
 RECORDS = PAYLOAD["fixtures"]
 
 
@@ -97,7 +97,7 @@ def test_review_manifest_is_a_live_trace_input_source():
     ],
 )
 def test_trace_rejects_stale_published_review_metadata(tmp_path, field, value):
-    payload = json.loads(MANIFEST.read_text())
+    payload = json.loads(MANIFEST.read_text(encoding="utf-8"))
     record = payload["fixtures"][0]
     payload["fixtures"] = [record]
     record["structure_file"] = str(ROOT / record["structure_file"])

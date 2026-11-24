@@ -136,7 +136,7 @@ jobs:
         run: sh scripts/ci_disable_proxy.sh
 
       - name: Set up Python ${{ matrix.python-version }} (GitHub)
-        if: ${{ env.ACT != 'true' }}
+        if: ${{ env.ACT != 'true' && !(runner.os == 'Linux' && (matrix.python-version == '3.8' || matrix.python-version == '3.9')) }}
         uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
@@ -157,8 +157,8 @@ jobs:
           PYPI_INDEX_URL: https://mirrors.zju.edu.cn/pypi/web/simple
         run: sh scripts/ci_install_uv.sh
 
-      - name: Set up Python ${{ matrix.python-version }} (act)
-        if: ${{ env.ACT == 'true' }}
+      - name: Install standalone Python ${{ matrix.python-version }}
+        if: ${{ env.ACT == 'true' || (runner.os == 'Linux' && (matrix.python-version == '3.8' || matrix.python-version == '3.9')) }}
         run: uv python install ${{ matrix.python-version }}
 
       - name: Create virtual environment

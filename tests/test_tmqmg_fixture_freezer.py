@@ -97,9 +97,9 @@ def test_historical_candidate_selection_keeps_stable_ids_and_original_ordinals()
 
 
 def test_group_manifests_have_only_published_reference_metadata():
-    spec = json.loads((ROOT / "tmqmg/fixture_sources.json").read_text())
+    spec = json.loads((ROOT / "tmqmg/fixture_sources.json").read_text(encoding="utf-8"))
     for group, selections in spec.items():
-        with (ROOT / "tmqmg" / group / "manifest.csv").open() as stream:
+        with (ROOT / "tmqmg" / group / "manifest.csv").open(encoding="utf-8", newline="") as stream:
             rows = list(csv.DictReader(stream))
         assert [r["case_id"] for r in rows] == [s["id"] for s in selections]
         for row, selection in zip(rows, selections):
@@ -145,7 +145,7 @@ def test_auxiliary_manifests_only_select_retained_eligible_inputs():
         ROOT / "reviewed/reconstruction/manifest.json",
     ]
     for path in manifests:
-        for row in json.loads(path.read_text())["fixtures"]:
+        for row in json.loads(path.read_text(encoding="utf-8"))["fixtures"]:
             if row.get("source") == "molgr_reconstruction":
                 continue  # Independent manual controls, not tmQMg inputs.
             assert data.fixture(row["case_id"])["benchmark"]
@@ -255,7 +255,7 @@ def test_extraction_rejects_corrupted_parts(tiny_release, name):
 def test_extraction_validates_internal_metadata(tiny_release, corruption, message):
     root, manifest, _, _ = tiny_release
     path = root / "inputs.jsonl"
-    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
     if corruption == "state":
         rows[0]["charge"] = 1
     elif corruption == "duplicate":
@@ -317,7 +317,7 @@ def test_regeneration_is_idempotent_and_removes_retired_approval(
     freezer._write_json(
         target / "tmqmg/fixture_sources.json",
         {
-            **json.loads((target / "tmqmg/fixture_sources.json").read_text()),
+            **json.loads((target / "tmqmg/fixture_sources.json").read_text(encoding="utf-8")),
             "excluded": [
                 {"id": "AB", "selection_classification": "old", "selection_reason": "old"}
             ],
@@ -352,25 +352,42 @@ def test_regeneration_is_idempotent_and_removes_retired_approval(
     assert not old.exists()
     assert [
         r["case_id"]
-        for r in json.loads((target / "reviewed/tmqmg/manifest.json").read_text())["fixtures"]
+        for r in json.loads((target / "reviewed/tmqmg/manifest.json").read_text(encoding="utf-8"))[
+            "fixtures"
+        ]
     ] == ["AA"]
-    assert "AB" not in (target / "xyz_stress_manifest.csv").read_text()
+    assert "AB" not in (target / "xyz_stress_manifest.csv").read_text(encoding="utf-8")
     assert not excluded_xyz.exists() and not excluded_sdf.exists()
-    assert set(json.loads((target / "tmqmg/published/cases.json").read_text())["cases"]) == {"AA"}
-    assert json.loads((target / "tmqmg/fixture_sources.json").read_text())["excluded"] == []
-    assert json.loads((target / "tmqmg/excluded/manifest.json").read_text())["fixtures"] == []
+    assert set(
+        json.loads((target / "tmqmg/published/cases.json").read_text(encoding="utf-8"))["cases"]
+    ) == {"AA"}
     assert (
-        json.loads((target / "reviewed/reconstruction/manifest.json").read_text())["fixtures"] == []
+        json.loads((target / "tmqmg/fixture_sources.json").read_text(encoding="utf-8"))["excluded"]
+        == []
     )
-    with (target / "tmqmg/excluded/manifest.csv").open() as stream:
+    assert (
+        json.loads((target / "tmqmg/excluded/manifest.json").read_text(encoding="utf-8"))[
+            "fixtures"
+        ]
+        == []
+    )
+    assert (
+        json.loads((target / "reviewed/reconstruction/manifest.json").read_text(encoding="utf-8"))[
+            "fixtures"
+        ]
+        == []
+    )
+    with (target / "tmqmg/excluded/manifest.csv").open(encoding="utf-8", newline="") as stream:
         assert list(csv.DictReader(stream)) == []
-    assert json.loads((target / "tmqmg/published/regression_case_ids.json").read_text()) == ["AA"]
+    assert json.loads(
+        (target / "tmqmg/published/regression_case_ids.json").read_text(encoding="utf-8")
+    ) == ["AA"]
     assert not list(target.rglob("*.sqlite*"))
 
 
 @pytest.mark.parametrize("corruption", ["source", "manifest", "xyz", "graph", "excluded"])
 def test_offline_loader_rejects_corruption(tmp_path, monkeypatch, corruption):
-    payload = json.loads((data.ROOT / "cases.json").read_text())
+    payload = json.loads((data.ROOT / "cases.json").read_text(encoding="utf-8"))
     payload["cases"] = {"ABELOK": payload["cases"]["ABELOK"]}
     manifest = (data.ROOT / "release-manifest.json").read_bytes()
     if corruption == "source":
