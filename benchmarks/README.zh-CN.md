@@ -10,8 +10,8 @@
 - `smiles_xyz_benchmark`：从 SMILES 输入生成 XYZ case，并比较不同重建方法。
 - `molfile_xyz_benchmark`：读取 `.mol`、`.molfile` 和 `.sdf` 输入，转换为 XYZ case，
   并运行同一套方法注册表。
-- `tmqmg_xyz_benchmark`：对 tmQMg CSV/XYZ 对运行同一套方法注册表，并支持按行号或 id
-  选择子集。
+- `dataset_xyz_benchmark`：统一读取已发布的分子坐标，支持 GEOM、BorylXAT、BDE 和 tmQMg-Corrected。
+  数据来源、准备、运行与汇总统一见[数据集评测说明](dataset_xyz_benchmark/README.zh-CN.md)。
 
 所有 benchmark 入口都使用同一套共享方法注册表：
 
@@ -21,8 +21,9 @@
 - `molgr_fallback`
 - `molgr_cpp`
 - `xyzgraph_cheminf_full`
+- `xyz2mol_tm`
 
-`cell2mol_v2` 和 `xyzgraph_cheminf_full` 是竞品基线。`molgr_fallback` 使用 Python 参考后端，
+`cell2mol_v2`、`xyzgraph_cheminf_full` 和 `xyz2mol_tm` 是对比基线。`molgr_fallback` 使用 Python 参考后端，
 `molgr_cpp` 使用默认 C++ 后端。
 
 ## 环境
@@ -64,35 +65,9 @@ bash scripts/benchmark_env.sh run python benchmarks/molfile_xyz_benchmark/run.py
   --out benchmarks/_runs/molfile-demo
 ```
 
-运行一个带子集筛选的小规模 tmQMg benchmark：
-
-```bash
-bash scripts/benchmark_env.sh run python benchmarks/tmqmg_xyz_benchmark/run.py \
-  --csv /path/to/tmqmg.csv \
-  --xyz-dir /path/to/xyz \
-  --start-row 1 \
-  --end-row 100 \
-  --ids ABC123,DEF456 \
-  --limit 10 \
-  --out benchmarks/_runs/tmqmg-demo
-```
-
-验证后端行为对齐时，tmQMg 只需要比较 MolGR 的两个后端：
-
-```bash
-bash scripts/benchmark_env.sh run python benchmarks/tmqmg_xyz_benchmark/run.py \
-  --csv /path/to/tmqmg.csv \
-  --xyz-dir /path/to/xyz \
-  --limit 1000 \
-  --out benchmarks/_runs/tmqmg-parity \
-  --case-timeout-seconds 1.0 \
-  --cpp-accelerations all \
-  --methods molgr_cpp,molgr_fallback
-```
-
-`tmqmg_xyz_benchmark` 默认使用 `--process-workers 1` 串行运行；C++ 单分子调用仍保留
-内部 target-bucket 并行。对 `molgr_cpp` 指定更大的值时，单个子进程会把 worker 数交给
-native batch 池，避免外部进程和 C++ 线程叠加。批量吞吐仍应按目标机器实测 worker 数。
+已发布数据集统一使用 `python -m benchmarks.dataset_xyz_benchmark.prepare`、
+`.run` 和 `.report`；[完整命令和来源说明](dataset_xyz_benchmark/README.zh-CN.md)只在该目录维护。
+后端对齐时，对同一个输入库分别运行 `--method molgr_cpp` 和 `--method molgr_fallback`。
 
 如果需要连续运行 benchmark 命令，可以把当前 shell 切到 benchmark project：
 
@@ -130,18 +105,12 @@ Molfile/SDF benchmark：
 - 支持 [`../tests/data/sdf/`](../tests/data/sdf/) 下的嵌套 fixture 分类。
 - 每个输入结构会由 RDKit 读取、转换为 XYZ case，并与源分子比较。
 
-共享参数：
-
-- `--limit`：限制 case 数量，便于快速检查。
-- `--out`：输出运行目录。
-- `--methods`：tmQMg 入口可用，用 method id 限制共享方法注册表。
-- `--process-workers`：tmQMg 串行/native batch worker 数；`1` 使用单分子串行路径，
-  C++ 更大取值使用单个 native batch 池。
-- `--cpp-accelerations`：tmQMg 入口可用，选择 C++ 加速 preset。
+SMILES/Molfile 入口的 `--limit` 限制 case 数，`--out` 指定输出目录。
+数据集入口使用准备阶段的 `--limit-molecules` 和运行阶段的 `--method`、`--workers`。
 
 ## 输出
 
-每次运行会在 `--out` 目录下写入两个主文件：
+SMILES/Molfile 入口在 `--out` 目录下写入两个主文件；数据集入口使用上述统一 SQLite/JSON 流程：
 
 - `results.csv`：每个 `(case, method)` 尝试一行，包含状态、预测、等价性结果和计时字段。
 - `summary.csv`：按方法聚合的指标，包括数量和延迟统计。
@@ -157,6 +126,9 @@ Molfile/SDF benchmark：
 - `predicted_smiles`
 - `equivalent`
 - `equivalence_method`
+- `evaluator_decision`
+- `reference_status`
+- `reference_reason`
 - `timing_ms_total`
 - `method_ms`
 - `equivalence_ms`
@@ -166,16 +138,34 @@ Molfile/SDF benchmark：
 
 ## 结果解读
 
-- 使用 `summary.csv` 做方法级比较。
-- 使用 `results.csv` 做逐 case 调试和失败分析。
-- `equivalent` 为 `True` 的行计为成功。
-- 方法报错或 `equivalent` 为 `False` 的行计为失败。
-- 输入 case 准备失败的行计为 skipped。
+`reference_status` 决定准确率分母：`valid` 进入，`excluded` 表示已有证据确认参考错误，`unresolved` 表示参考尚不可判定。参考筛选独立于算法结果。
+
+以 `evaluator_decision` 统计图匹配：`equivalent`、`not_equivalent`、`inconclusive` 分别计为匹配、不匹配、无法判定。API `status` 与其独立；报错后保留的图仍参与比较，确认等价则计入匹配数。没有比较结果的尝试保留在分母中，但不计匹配。
+
+`summary.csv` 中的 `success_count`、`fail_count`、`inconclusive_count` 和 `runtime_failure_count` 划分可用参考；最后一项统计未获得比较判定的尝试。`api_error_count` 单独记录报错数，`matched_with_errors` 记录报错图中的匹配数。`results.csv` 保留逐项错误、判定和计时，便于复核。
 
 ## 可选 `cell2mol_v2` 说明
 
 `cell2mol_v2` 是可选 benchmark 基线。Benchmark 依赖文件指向上游 `cell2mol` 的 `v2`
 Git revision。如果启用或重新分发这个基线，请确认用法符合其许可证条款，包括可能的 GPL 义务。
+
+## 可选 xyz2mol_tm 基线
+
+创建基准环境后，安装固定版本的上游代码：
+
+```bash
+git clone https://github.com/jensengroup/xyz2mol_tm.git .local/third-party/xyz2mol_tm
+git -C .local/third-party/xyz2mol_tm checkout db2734b084045ef895528c7a3d5040d38da23983
+uv pip install --python .venv-benchmark/bin/python --no-deps -e .local/third-party/xyz2mol_tm
+```
+
+该版本的 wheel 打包列表遗漏 Hückel 子包，因此使用 editable 安装。现有基准环境提供 RDKit（含 `rdEHTTools`）、NumPy 和 NetworkX。环境同步若移除了该可选包，需重新安装。克隆代码和原始结果均保存在 Git 忽略的 `.local/` 中。
+
+tmQMg 运行器通过 `--methods xyz2mol_tm` 选择此方法。适配器调用 `get_tmc_mol(xyz_file, overall_charge, with_stereo=False)`，评估其返回的 RDKit 图。该入口不接收多重度；其 SMILES 往返会丢弃坐标，因此保留上游配位键，不添加依赖几何的 MolGR 后处理。临时文件读写和序列化计入耗时。失败保留为错误；仅序列化失败时保留已返回的图。
+
+共享注册表先加载 RDKit 的 Hückel 和 MolStandardize 模块，再加载 MolGR/Open Babel 原生适配器，以避免基准环境 Linux RDKit wheel 中已复现的加载顺序崩溃。已有 Python 进程应先导入注册表，再导入 MolGR；若加载顺序已不安全，适配器会提示改用新进程。上游重建算法未修改。性能运行器记录安装版本、源码哈希及克隆版本。
+
+上游 tmQMg 的原始 SMILES 由 xyz2mol_tm 的 Hückel 方法生成。当前评测仅使用 tmQMg-Corrected 2026-11-23 发布的 72,040 张 Lewis 图及其证据等级和排除规则；原始标签仅作来源记录，不是标准答案。 [tmQMg](https://github.com/uiocompcat/tmQMg#data) · [校正集](dataset_xyz_benchmark/README.zh-CN.md#tmqmg-corrected)
 
 ## 子 Benchmark 文档
 
@@ -183,5 +173,9 @@ Git revision。如果启用或重新分发这个基线，请确认用法符合�
 - [`smiles_xyz_benchmark/README.md`](smiles_xyz_benchmark/README.md)
 - [`molfile_xyz_benchmark/README.zh-CN.md`](molfile_xyz_benchmark/README.zh-CN.md)
 - [`molfile_xyz_benchmark/README.md`](molfile_xyz_benchmark/README.md)
-- [`tmqmg_xyz_benchmark/README.zh-CN.md`](tmqmg_xyz_benchmark/README.zh-CN.md)
-- [`tmqmg_xyz_benchmark/README.md`](tmqmg_xyz_benchmark/README.md)
+- [`dataset_xyz_benchmark/README.zh-CN.md#tmqmg-corrected`](dataset_xyz_benchmark/README.zh-CN.md#tmqmg-corrected)
+- [`dataset_xyz_benchmark/README.md#tmqmg-corrected`](dataset_xyz_benchmark/README.md#tmqmg-corrected)
+
+## 更多原始几何数据集
+
+[GEOM-QM9、GEOM-Drugs、BorylXAT-DB 与待确认的 BDE 来源](dataset_xyz_benchmark/README.zh-CN.md)：全部构象导入、按分子汇总、可续跑多进程及当前数据可用性。小规模流程验证与全量评测分开报告。

@@ -454,3 +454,8 @@ compile_commands.json
 .omm
 .tmp
 image
+
+# External benchmark datasets and generated fixture databases.
+/datasets/tmqmg/
+/datasets/tmqmg-corrected/
+/tests/data/**/*.sqlite*
