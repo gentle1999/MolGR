@@ -27,6 +27,7 @@
 - `molgr_fallback`
 - `molgr_cpp`
 - `xyzgraph_cheminf_full`
+- `xyz2mol_tm`（可选，面向过渡金属配合物）
 
 ## 环境
 

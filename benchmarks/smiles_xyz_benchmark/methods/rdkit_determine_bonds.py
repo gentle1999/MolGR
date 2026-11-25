@@ -26,6 +26,7 @@ class RDKitDetermineBondsMethod(BenchmarkMethod):
     def run(self, case: dict[str, Any]) -> MethodRunOutput:
         timing_ms_breakdown: dict[str, float] = {}
         warnings: list[str] = []
+        failed = False
 
         xyz_block = case.get("xyz_block")
         if not isinstance(xyz_block, str) or not xyz_block.strip():
@@ -60,6 +61,9 @@ class RDKitDetermineBondsMethod(BenchmarkMethod):
         try:
             rdDetermineBonds.DetermineBonds(mol, charge=total_charge)
         except Exception as exc:  # noqa: BLE001
+            # The API mutates mol before raising. Retain that graph for independent
+            # equivalence checking without concealing the reconstruction error.
+            failed = True
             warnings.append(f"DetermineBonds failed: {exc}")
         timing_ms_breakdown["determine_bonds_ms"] = (
             time.perf_counter() - determine_bonds_started
@@ -95,12 +99,13 @@ class RDKitDetermineBondsMethod(BenchmarkMethod):
         try:
             mol, predicted_smiles = finalize_rdmol_with_dative_bonds(mol)
         except Exception as exc:  # noqa: BLE001
+            failed = True
             warnings.append(f"MolToSmiles failed: {exc}")
         timing_ms_breakdown["postprocess_ms"] = (time.perf_counter() - postprocess_started) * 1000.0
 
         error = "; ".join(warnings) if warnings else None
         return MethodRunOutput(
-            status="ok",
+            status="error" if failed else "ok",
             error=error,
             predicted_smiles=predicted_smiles,
             timing_ms_breakdown=timing_ms_breakdown,

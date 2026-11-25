@@ -31,6 +31,7 @@ The benchmark uses the shared method registry from
 - `molgr_fallback`
 - `molgr_cpp`
 - `xyzgraph_cheminf_full`
+- `xyz2mol_tm` (optional, for transition-metal complexes)
 
 ## Environment
 

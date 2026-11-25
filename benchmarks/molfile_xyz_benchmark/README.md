@@ -29,6 +29,7 @@ This benchmark reuses the shared method registry from `smiles_xyz_benchmark`:
 - `molgr_fallback`
 - `molgr_cpp`
 - `xyzgraph_cheminf_full`
+- `xyz2mol_tm` (optional, for transition-metal complexes)
 
 ## Environment
 

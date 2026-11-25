@@ -41,7 +41,7 @@ from openbabel import openbabel as ob
 from openbabel import pybel
 from rdkit import Chem, RDLogger
 
-from benchmarks.tmqmg_xyz_benchmark.comparison_annotations import (
+from benchmarks.reference_quality import (
     load_manual_reference_records,
     reference_validity,
 )
