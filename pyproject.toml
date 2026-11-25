@@ -145,11 +145,19 @@ addopts = "-ra -q --cov=src --cov-report=term-missing"
 testpaths = ["tests"]
 pythonpath = ["src", "."]
 markers = [
+    "exhaustive: additional XYZ inputs in the full fixture regression",
     "stress: resource-intensive native concurrency and memory stress tests",
 ]
 
 
+[tool.coverage.run]
+# Include Python reconstruction executed by spawned fixture workers in pytest-cov.
+concurrency = ["thread", "multiprocessing"]
+source = ["src"]
+
+
 [tool.mypy]
+mypy_path = "$MYPY_CONFIG_FILE_DIR/src"
 warn_return_any = false       # 允许函数返回 Any (这对调用未加类型的第三方库很有用)
 warn_unused_configs = true    # 警告无用的配置
 explicit_package_bases = true # 配合 src 目录结构
@@ -165,6 +173,23 @@ warn_unused_ignores = false # 警告多余的 # type: ignore
 ignore_missing_imports = true
 no_site_packages = true
 exclude = "^(tests/|scripts/|build/|dist/|src/molgr/_core/)"
+
+[[tool.mypy.overrides]]
+module = [
+    "molgr.fallback.utils.bond_geometry",
+    "molgr.fallback.utils.coordination_geometry",
+    "molgr.fallback.utils.coordination_seeds",
+    "molgr.fallback.utils.search_constraints",
+    "molgr.fallback.utils.xyz",
+    "molgr.fallback.utils.ob_graph",
+    "molgr.utils._molecule_stereo",
+    "molgr.utils.equivalence",
+    "molgr.fallback.utils.metals.conjugated_geometry",
+    "molgr.fallback.utils.metals.hydrazido_geometry",
+    "molgr.fallback.utils.metals.local_cc_geometry",
+]
+disallow_untyped_defs = true
+disallow_any_generics = true
 
 [tool.pyright]
 include = ["src"]

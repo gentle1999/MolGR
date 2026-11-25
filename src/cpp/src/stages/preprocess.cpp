@@ -3,7 +3,9 @@
 #include "molgr/stages/internal_helpers.h"
 
 #include "molgr/utils/logger.h"
+#include "molgr/utils/bond_geometry.h"
 #include "molgr/utils/electrons.h"
+#include "molgr/utils/search_constraints.h"
 #include "molgr/utils/smarts.h"
 #include "molgr/utils/utils.h"
 
@@ -13,6 +15,10 @@
 #include "molgr/compat/openbabel_iter.h"
 
 #include <algorithm>
+#include <cmath>
+#include <initializer_list>
+#include <map>
+#include <utility>
 
 namespace molgr
 {
@@ -38,6 +44,32 @@ namespace molgr
         // Reject an impossible budget before mutating any center.
         bool ValidateOmol(OBMol &mol, int total_charge, int total_radical, bool emit_warnings)
         {
+            if (!molgr::search_constraints::Satisfied(mol)) return false;
+            FOR_BONDS_OF_MOL(bond, mol)
+            {
+                // Electron budgets alone also admit spurious C--C quadruple
+                // bonds. Reject orders outside the nonmetal Lewis model.
+                if (bond->GetBondOrder() > 3 &&
+                    GetElementInfo(bond->GetBeginAtom()->GetAtomicNum()) != nullptr &&
+                    GetElementInfo(bond->GetEndAtom()->GetAtomicNum()) != nullptr)
+                    return false;
+                if (!molgr::bond_geometry::PyramidalIminiumGeometryAllowed(*bond->GetBeginAtom(), *bond->GetEndAtom(), bond->GetBondOrder()) ||
+                    !molgr::bond_geometry::BentKeteniminiumGeometryAllowed(*bond->GetBeginAtom(), *bond->GetEndAtom(), bond->GetBondOrder()) ||
+                    !molgr::bond_geometry::NitriliumGeometryAllowed(*bond->GetBeginAtom(), *bond->GetEndAtom(), bond->GetBondOrder()) ||
+                    !molgr::bond_geometry::PhosphorusCarbonOrderAllowed(
+                        *bond->GetBeginAtom(), *bond->GetEndAtom(), bond->GetBondOrder()) ||
+                    !molgr::bond_geometry::SiliconCarbonOrderAllowed(
+                        *bond->GetBeginAtom(), *bond->GetEndAtom(), bond->GetBondOrder()) ||
+                    !molgr::bond_geometry::CarbonOxygenOrderAllowed(
+                        *bond->GetBeginAtom(), *bond->GetEndAtom(), bond->GetBondOrder()) ||
+                    !molgr::bond_geometry::NitrogenOxygenOrderAllowed(
+                        *bond->GetBeginAtom(), *bond->GetEndAtom(), bond->GetBondOrder()) ||
+                    !molgr::bond_geometry::NitrogenNitrogenOrderAllowed(
+                        *bond->GetBeginAtom(), *bond->GetEndAtom(), bond->GetBondOrder()) ||
+                    !molgr::bond_geometry::TwistedRingLinkOrderAllowed(
+                        *bond->GetBeginAtom(), *bond->GetEndAtom(), bond->GetBondOrder()))
+                    return false;
+            }
             int charge_sum = 0;
             int radical_sum = 0;
             std::vector<OpenBabel::OBAtom *> unresolved_atoms;
@@ -117,94 +149,132 @@ namespace molgr
             return true;
         }
 
-        bool MakeConnections(OBMol &mol, double extra_tolerance_angstrom)
+        using ConnectionRule = std::pair<smarts::PatternId, smarts::PatternId>;
+
+        /// Delete one SMARTS-matched bond longer than 1.15 times the summed covalent radii.
+        /// @param mol Molecular graph on which the operation acts.
+        /// @param pattern Substructure pattern to match.
+        /// @return True when the requested edit was applied to the graph.
+        static bool RemoveOneLongSeedBond(OBMol &mol, smarts::PatternId pattern)
         {
-            bool hit = false;
-            while (true)
+            for (const auto &match : smarts::FindAll(mol, pattern))
             {
-                std::vector<int> donate_atoms = GetFlatAtomList(mol, molgr::smarts::PatternId::PREPROCESS_DONATE);
-                std::vector<int> accept_atoms = GetFlatAtomList(mol, molgr::smarts::PatternId::PREPROCESS_ACCEPT);
-                if (donate_atoms.empty() || accept_atoms.empty())
-                {
-                    break;
-                }
+                OBAtom *first = mol.GetAtom(match[0]);
+                OBAtom *second = mol.GetAtom(match[1]);
+                const double radii = OBElements::GetCovalentRad(first->GetAtomicNum()) +
+                                     OBElements::GetCovalentRad(second->GetAtomicNum());
+                if (first->GetDistance(second) > 1.15 * radii)
+                    return mol.DeleteBond(mol.GetBond(first, second));
+            }
+            return false;
+        }
 
-                bool changed = false;
-                for (int donor_idx : donate_atoms)
+        /// Check a prospective sixth P bond for four cis neighbors and one trans neighbor.
+        /// @param mol Molecular graph on which the operation acts.
+        /// @param center Atom or site occupying this position in the local chemical motif.
+        /// @param partner Atom or site occupying this position in the local chemical motif.
+        /// @return True for an accessible sixth position with four cis neighbors and one trans neighbor.
+        static bool FillsOctahedralVacancy(OBMol &mol, OBAtom &center, OBAtom &partner)
+        {
+            const double distance = center.GetDistance(&partner);
+            int cis = 0, trans = 0;
+            bool similar_bond = false;
+            FOR_NBORS_OF_ATOM(neighbor, &center)
+            {
+                if (mol.GetBond(&center, &*neighbor)->GetBondOrder() != 1)
+                    return false;
+                const double angle = mol.GetAngle(&partner, &center, &*neighbor);
+                if (70.0 <= angle && angle <= 110.0) ++cis;
+                if (angle >= 160.0) ++trans;
+                if (neighbor->GetAtomicNum() == partner.GetAtomicNum() &&
+                    std::abs(center.GetDistance(&*neighbor) - distance) <= 0.10)
+                    similar_bond = true;
+            }
+            return cis == 4 && trans == 1 && similar_bond;
+        }
+
+        /// Reconnect the first eligible donor to its nearest compatible partner within the covalent cutoff.
+        /// @param mol Molecular graph on which the operation acts.
+        /// @param rules Bond or atom matching rules used at this stage.
+        /// @param extra_tolerance_angstrom Additional distance allowed beyond the covalent cutoff, in
+        ///     angstroms.
+        /// @param geometry_allowed Predicate validating the geometry of a proposed connection.
+        /// @return True when the requested edit was applied to the graph.
+        static bool TryAddOneConnection(OBMol &mol, std::initializer_list<ConnectionRule> rules,
+                                        double extra_tolerance_angstrom,
+                                        bool (*geometry_allowed)(OBMol &, OBAtom &, OBAtom &) = nullptr)
+        {
+            // Each donor matches one rule per group. Atom order gives donors first choice.
+            std::map<int, std::vector<int>> partners_by_donor;
+            for (const auto &[donor_pattern, partner_pattern] : rules)
+            {
+                const auto donors = GetFlatAtomList(mol, donor_pattern);
+                if (donors.empty())
+                    continue;
+                const auto partners = GetFlatAtomList(mol, partner_pattern);
+                for (int donor : donors)
+                    partners_by_donor.emplace(donor, partners);
+            }
+
+            for (auto &[donor_idx, partners] : partners_by_donor)
+            {
+                OBAtom *donor = mol.GetAtom(donor_idx);
+                partners.erase(std::remove(partners.begin(), partners.end(), donor_idx), partners.end());
+                std::sort(partners.begin(), partners.end(), [&](int a, int b)
+                          { return donor->GetDistance(mol.GetAtom(a)) < donor->GetDistance(mol.GetAtom(b)); });
+
+                const double donor_radius = OBElements::GetCovalentRad(donor->GetAtomicNum());
+                for (int partner_idx : partners)
                 {
-                    OBAtom *donor = mol.GetAtom(donor_idx);
-                    if (!donor)
-                    {
+                    OBAtom *partner = mol.GetAtom(partner_idx);
+                    const double partner_radius = OBElements::GetCovalentRad(partner->GetAtomicNum());
+                    if (donor->GetDistance(partner) >= donor_radius + partner_radius + extra_tolerance_angstrom)
                         continue;
-                    }
-
-                    std::vector<std::pair<int, int>> pairs;
-                    for (int acceptor_idx : accept_atoms)
-                    {
-                        OBAtom *acceptor = mol.GetAtom(acceptor_idx);
-                        if (acceptor && acceptor_idx != donor_idx)
-                        {
-                            pairs.push_back({donor_idx, acceptor_idx});
-                        }
-                    }
-
-                    std::sort(pairs.begin(), pairs.end(), [&mol](const auto &a, const auto &b)
-                              {
-                        OBAtom *a1 = mol.GetAtom(a.first);
-                        OBAtom *a2 = mol.GetAtom(a.second);
-                        OBAtom *b1 = mol.GetAtom(b.first);
-                        OBAtom *b2 = mol.GetAtom(b.second);
-                        return a1->GetDistance(a2) < b1->GetDistance(b2); });
-
-                    for (const auto &pair : pairs)
-                    {
-                        int p1 = pair.first;
-                        int p2 = pair.second;
-                        OBAtom *a1 = mol.GetAtom(p1);
-                        OBAtom *a2 = mol.GetAtom(p2);
-                        if (!a1 || !a2)
-                        {
-                            continue;
-                        }
-                        double dist = a1->GetDistance(a2);
-
-                        double r1 = OBElements::GetCovalentRad(a1->GetAtomicNum());
-                        double r2 = OBElements::GetCovalentRad(a2->GetAtomicNum());
-
-                        if (dist >= (r1 + r2) + extra_tolerance_angstrom)
-                        {
-                            continue;
-                        }
-
-                        OBBond *bond = mol.GetBond(a1, a2);
-                        if (!bond)
-                        {
-                            mol.AddBond(p1, p2, 1);
-                            hit = true;
-                            changed = true;
-                            LOG_DEBUG("[MakeConnections] Add Bond " << p1 << "-" << p2);
-                            break;
-                        }
-                        if (bond->GetBondOrder() == 0)
-                        {
-                            bond->SetBondOrder(1);
-                            hit = true;
-                            changed = true;
-                            LOG_DEBUG("[MakeConnections] Set Bond Order 1 " << p1 << "-" << p2);
-                            break;
-                        }
-                    }
-                    if (changed)
-                    {
-                        break;
-                    }
-                }
-                if (!changed)
-                {
-                    break;
+                    OBBond *bond = mol.GetBond(donor, partner);
+                    if (bond && bond->GetBondOrder() != 0)
+                        continue;
+                    if (geometry_allowed && !geometry_allowed(mol, *donor, *partner))
+                        continue;
+                    if (bond)
+                        bond->SetBondOrder(1);
+                    else
+                        mol.AddBond(donor_idx, partner_idx, 1);
+                    LOG_DEBUG("[MakeConnections] Set single bond " << donor_idx << "-" << partner_idx);
+                    return true;
                 }
             }
-            return hit;
+            return false;
+        }
+
+        bool MakeConnections(OBMol &mol, double extra_tolerance_angstrom)
+        {
+            using Id = smarts::PatternId;
+            const std::initializer_list<ConnectionRule> octahedral_phosphorus = {
+                {Id::CONNECTION_P_FIVE_COORDINATE, Id::CONNECTION_P_SIXTH_PARTNER},
+            };
+            const std::initializer_list<ConnectionRule> primary = {
+                {Id::CONNECTION_GENERAL_DONOR, Id::CONNECTION_GENERAL_PARTNER},
+                {Id::CONNECTION_P_V2, Id::CONNECTION_P_PARTNER},
+            };
+            const std::initializer_list<ConnectionRule> secondary = {
+                {Id::CONNECTION_O_V1, Id::CONNECTION_C_V3},
+                {Id::CONNECTION_SE_I_DONOR, Id::CONNECTION_O_PARTNER},
+            };
+
+            bool changed = false;
+            // Rematch after deletion: bonds sharing an endpoint may no longer qualify.
+            for (auto pattern : {Id::LONG_SI_CARBONYL_BOND, Id::LONG_TETRACOORDINATE_P_P_BOND})
+                while (RemoveOneLongSeedBond(mol, pattern))
+                    changed = true;
+
+            // The geometry check permits a further 0.10 Å for the sixth P bond.
+            // Rematch after each addition so both endpoints use their current valences.
+            while (TryAddOneConnection(mol, octahedral_phosphorus, extra_tolerance_angstrom + 0.10,
+                                       FillsOctahedralVacancy) ||
+                   TryAddOneConnection(mol, primary, extra_tolerance_angstrom) ||
+                   TryAddOneConnection(mol, secondary, extra_tolerance_angstrom))
+                changed = true;
+            return changed;
         }
 
         bool PreClean(OBMol &mol)
@@ -226,20 +296,38 @@ namespace molgr
                 }
             }
 
-            while (true)
+            /// Test for an isolated neutral carbon monoxide or monosulfide bond.
+            const auto neutral_carbon_monochalcogenide = [](OBBond &bond)
             {
-                auto matches2 = molgr::smarts::FindAll(
-                    mol,
-                    molgr::smarts::PatternId::PRE_CLEAN_HYPER_PI_BOND);
-                if (matches2.empty())
-                {
-                    break;
-                }
-                const auto &match = matches2.front();
+                auto *a = bond.GetBeginAtom();
+                auto *b = bond.GetEndAtom();
+                /// Select oxygen or sulfur for this two-atom motif.
+                const auto chalcogen = [](int z) { return z == 8 || z == 16; };
+                return ((a->GetAtomicNum() == 6 && chalcogen(b->GetAtomicNum())) ||
+                        (b->GetAtomicNum() == 6 && chalcogen(a->GetAtomicNum()))) &&
+                       a->GetTotalDegree() == 1 && b->GetTotalDegree() == 1 &&
+                       a->GetFormalCharge() == 0 && b->GetFormalCharge() == 0;
+            };
+            // A single pass allows isolated CS to retain the same precursor
+            // as CO without changing cleanup of substituted sulfur motifs.
+            for (const auto &match : molgr::smarts::FindAll(
+                     mol, molgr::smarts::PatternId::PRE_CLEAN_HYPER_PI_BOND))
+            {
                 OBBond *bond = mol.GetBond(match[0], match[1]);
-                if (bond)
+                if (bond && !neutral_carbon_monochalcogenide(*bond))
                 {
                     bond->SetBondOrder(1);
+                    hit = true;
+                }
+            }
+            FOR_BONDS_OF_MOL(bond, mol)
+            {
+                if (neutral_carbon_monochalcogenide(*bond) &&
+                    (bond->GetBondOrder() == 1 || bond->GetBondOrder() == 3))
+                {
+                    // Fresh inference marks C=X as an unresolved center; the
+                    // shared heteroatom donor rule subsequently yields C-#X+.
+                    bond->SetBondOrder(2);
                     hit = true;
                 }
             }
@@ -315,21 +403,6 @@ namespace molgr
                 }
             }
 
-            while (true)
-            {
-                auto matches5 = molgr::smarts::FindAll(mol, molgr::smarts::PatternId::PRE_CLEAN_SI_O_F);
-                if (matches5.empty())
-                {
-                    break;
-                }
-                const auto &match = matches5.front();
-                OBBond *bond = mol.GetBond(match[0], match[1]);
-                if (bond)
-                {
-                    mol.DeleteBond(bond);
-                    hit = true;
-                }
-            }
             return hit;
         }
     }

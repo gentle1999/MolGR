@@ -726,7 +726,7 @@ class _ChargeShiftContext:
         self.transition_edges = 0
         self.schema = self._schema(source)
         self.annotated_indices = _unpaired_annotation_indices(source)
-        adjacency = [[] for _ in source.GetAtoms()]
+        adjacency: list[list[tuple[int, int]]] = [[] for _ in source.GetAtoms()]
         for bond in source.GetBonds():
             a, b, idx = bond.GetBeginAtomIdx(), bond.GetEndAtomIdx(), bond.GetIdx()
             adjacency[a].append((idx, b))
@@ -866,7 +866,7 @@ def _iter_charge_shift_resonance_forms(
         context.complete(mol, None, ())
         return
     state = None
-    neighbors = []
+    neighbors: list[Chem.Mol] | None = []
     for negative in negatives:
         negative_idx = negative.GetIdx()
         default_valence = pt.GetDefaultValence(negative.GetAtomicNum())
@@ -1002,7 +1002,7 @@ def _bidirectional_charge_shift_search(
     limited = [False, False]
 
     def results(hit=None):
-        paths = [[], []]
+        paths: list[list[str]] = [[], []]
         if hit is not None:
             for i in (0, 1):
                 key = hit
@@ -1010,8 +1010,9 @@ def _bidirectional_charge_shift_search(
                     paths[i].append(key)
                     key = parents[i][key]
                 paths[i].reverse()
-        return tuple(
-            _ResonanceForms(
+
+        def result(i: int) -> _ResonanceForms:
+            return _ResonanceForms(
                 tuple(seen[i]),
                 supplier_limit_reached=supplier_limited[i],
                 local_limit_reached=limited[i],
@@ -1019,8 +1020,8 @@ def _bidirectional_charge_shift_search(
                 validation_failed=contexts[i].validation_failed,
                 witness_path=tuple(paths[i]),
             )
-            for i in (0, 1)
-        )
+
+        return result(0), result(1)
 
     common = seen[0].keys() & seen[1].keys()
     if common:
@@ -1210,14 +1211,18 @@ def _paired_resonance_search(
     construction, molecule serialization or parsing is required.
     """
     if max_resonance <= 0:
-        return (_ResonanceForms(local_limit_reached=True),) * 2
+        limited = _ResonanceForms(local_limit_reached=True)
+        return limited, limited
     sources = tuple(_prepare_resonance_source(m, use_chirality=use_chirality) for m in mols)
-    contexts = tuple(
-        context
-        if context.compatible(source)
-        else _ChargeShiftContext(source, use_chirality=use_chirality, cache_limit=2 * max_resonance)
-        for source, context in zip(sources, contexts)
-    )
+
+    def context_for(i: int) -> _ChargeShiftContext:
+        if contexts[i].compatible(sources[i]):
+            return contexts[i]
+        return _ChargeShiftContext(
+            sources[i], use_chirality=use_chirality, cache_limit=2 * max_resonance
+        )
+
+    contexts = context_for(0), context_for(1)
     seeds: list[list[tuple[Chem.Mol, str]]] = [[], []]
     seen = [{contexts[i].key(sources[i]): None} for i in (0, 1)]
     counts = [0, 0]
@@ -1264,11 +1269,13 @@ def _paired_resonance_search(
             if key in seen[1 - i]:
                 return prefix(0), prefix(1)
 
+    for i in (0, 1):
+        seeds[i].insert(0, (sources[i], contexts[i].key(sources[i])))
     return _bidirectional_charge_shift_search(
-        tuple([(sources[i], contexts[i].key(sources[i])), *seeds[i]] for i in (0, 1)),
+        (seeds[0], seeds[1]),
         contexts=contexts,
         local_budget=max_resonance,
-        supplier_limited=tuple(count >= max_resonance for count in counts),
+        supplier_limited=(counts[0] >= max_resonance, counts[1] >= max_resonance),
     )
 
 
@@ -1668,7 +1675,8 @@ def _charge_shift_atom_mapping(left: Chem.Mol, right: Chem.Mol) -> tuple[int, ..
     # Added unmapped hydrogens can be paired by parent map and immutable label.
     # This recovers that correspondence without copying/relabeling topologies.
     def mapped_groups(mol, labels):
-        groups = {}
+        groups: dict[tuple, list[int]] = {}
+        key: tuple
         seen_maps = set()
         for atom, label in zip(mol.GetAtoms(), labels):
             number = atom.GetAtomMapNum()
@@ -1761,7 +1769,7 @@ def _search_charge_shift_region(
     """
     target_charges, target_orders = target
     allowed, to_target = _charge_shift_corridor(adjacency, source[0], target_charges, max_steps)
-    parents = {source: None}
+    parents: dict[tuple, tuple[tuple, tuple[int, int, int, int, int]] | None] = {source: None}
     queue = [(source, 0)]
     pruned = 0
     for state, depth in queue:
@@ -1816,8 +1824,8 @@ def _search_charge_shift_region(
                     parents[child] = (state, move)
                     if child == target:
                         moves = []
-                        while parents[child] is not None:
-                            child, step = parents[child]
+                        while (parent := parents[child]) is not None:
+                            child, step = parent
                             moves.append(step)
                         return tuple(reversed(moves)), len(parents) - 1, pruned
                     queue.append((child, depth + 1))
@@ -1861,7 +1869,7 @@ def _regional_charge_shift_witness(
     target_charges = tuple(right.GetAtomWithIdx(i).GetFormalCharge() for i in mapping)
     changed_atoms = {i for i, (a, b) in enumerate(zip(source_charges, target_charges)) if a != b}
     changed_bonds = {}
-    graph = {}
+    graph: dict[int, list[tuple[int, int]]] = {}
     allowed_types = (Chem.BondType.SINGLE, Chem.BondType.DOUBLE)
     for bond in left.GetBonds():
         a, b, idx = bond.GetBeginAtomIdx(), bond.GetEndAtomIdx(), bond.GetIdx()
@@ -1897,14 +1905,14 @@ def _regional_charge_shift_witness(
     remaining = set(graph)
     regions = []
     while remaining:
-        atoms = [min(remaining)]
-        remaining.remove(atoms[0])
-        for atom in atoms:
-            for _, other in graph[atom]:
-                if other in remaining:
-                    remaining.remove(other)
-                    atoms.append(other)
-        regions.append(tuple(atoms))
+        component = [min(remaining)]
+        remaining.remove(component[0])
+        for atom_index in component:
+            for _, neighbor_index in graph[atom_index]:
+                if neighbor_index in remaining:
+                    remaining.remove(neighbor_index)
+                    component.append(neighbor_index)
+        regions.append(tuple(component))
     steps = []
     used, pruned = 1, 0
     for atoms in regions:
@@ -1963,12 +1971,12 @@ def _regional_charge_shift_witness(
         shifted = context.move(current, state, negative, center, terminal, single_idx, double_idx)
         if shifted is None or not context.compatible(shifted):
             return None
-        atoms, bonds = list(state[0]), list(state[1])
-        atoms[negative] = (0, *atoms[negative][1:])
-        atoms[terminal] = (-1, *atoms[terminal][1:])
-        bonds[single_idx] = (Chem.BondType.DOUBLE, *bonds[single_idx][1:])
-        bonds[double_idx] = (Chem.BondType.SINGLE, *bonds[double_idx][1:])
-        if context.state(shifted) != (tuple(atoms), tuple(bonds)):
+        atom_labels, bond_labels = list(state[0]), list(state[1])
+        atom_labels[negative] = (0, *atom_labels[negative][1:])
+        atom_labels[terminal] = (-1, *atom_labels[terminal][1:])
+        bond_labels[single_idx] = (Chem.BondType.DOUBLE, *bond_labels[single_idx][1:])
+        bond_labels[double_idx] = (Chem.BondType.SINGLE, *bond_labels[double_idx][1:])
+        if context.state(shifted) != (tuple(atom_labels), tuple(bond_labels)):
             return None
         current = shifted
     if not _mapped_graph_identity(current, right, mapping, use_chirality=use_chirality):
@@ -2372,7 +2380,7 @@ def _compare_electronic_properties(
             incomplete |= bounded
             if not matched:
                 continue
-            mapped_conflicts = []
+            mapped_conflicts: list[tuple[int, int, str, object, object]] = []
             comparable = 0
             for idx1, idx2 in enumerate(mapping):
                 fields1, fields2 = annotations1[idx1], annotations2[idx2]
@@ -2890,7 +2898,8 @@ def evaluate_equivalence(
     except Exception as exc:  # noqa: BLE001
         resonance_error = f"{type(exc).__name__}: {exc}"
         resonance_result = _ResonanceMatchResult(False, 0, 0, None)
-    resonance_matched, mol1_count, mol2_count, hit_smiles = resonance_result
+    mol1_count, mol2_count = resonance_result.mol1_count, resonance_result.mol2_count
+    hit_smiles = resonance_result.hit_smiles
     info.bounded_search.mol1_count = mol1_count
     info.bounded_search.mol2_count = mol2_count
     info.bounded_search.limit_reached = resonance_result.limit_reached
@@ -2906,7 +2915,7 @@ def evaluate_equivalence(
         info.bounded_search.regional_region_count = regional.region_count
         info.bounded_search.regional_state_count = regional.state_count
         info.bounded_search.regional_pruned_moves = regional.distance_pruned
-    if resonance_matched:
+    if resonance_result.matched:
         info.resonance = ResonanceDetail(
             max_resonance=max_resonance,
             resonance_flags=int(resonance_flags),

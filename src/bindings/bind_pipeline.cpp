@@ -45,6 +45,8 @@ namespace molgr
             thread_local molgr::diagnostics::ReconstructionDiagnostics
                 t_last_reconstruction_diagnostics;
 
+            /// @param diagnostics Diagnostic record for the current reconstruction.
+            /// @return Native failure diagnostics as a dictionary, or an empty dictionary on success.
             py::dict reconstruction_diagnostics_signature(
                 const molgr::diagnostics::ReconstructionDiagnostics &diagnostics)
             {
@@ -74,6 +76,9 @@ namespace molgr
                 return out;
             }
 
+            /// @param result Indexed native result whose graph is moved into the Python object.
+            /// @return The input index, optional molecule and diagnostics, transferring the result graph to
+            ///     Python.
             py::dict reconstruction_batch_result_signature(
                 molgr::pipeline::reconstruct_batch::ReconstructionBatchResult result)
             {
@@ -91,6 +96,10 @@ namespace molgr
                 return out;
             }
 
+            /// Convert Python batch rows into native requests in input order before scheduling worker
+            /// tasks.
+            /// @param requests Requests in original input order.
+            /// @return Native requests in the order supplied by Python.
             std::vector<molgr::pipeline::reconstruct_batch::ReconstructionBatchRequest>
             parse_reconstruction_batch_requests(const py::iterable &requests)
             {
@@ -119,6 +128,10 @@ namespace molgr
                 return parsed;
             }
 
+            /// Borrow a caller-owned OBMol by address; reject a null pointer before accessing atoms or
+            /// bonds.
+            /// @param mol_ptr Address of the caller-owned Open Babel molecule.
+            /// @return Borrowed molecule pointer. A null address raises an exception.
             OpenBabel::OBMol *require_obmol_ptr(intptr_t mol_ptr)
             {
                 molgr::WarnUnsafeOpenBabelUse(
@@ -131,6 +144,9 @@ namespace molgr
                 return reinterpret_cast<OpenBabel::OBMol *>(mol_ptr);
             }
 
+            /// @param metal_state Metal site with its coordinates and proposed electronic assignment.
+            /// @return The metal index, identity, candidate electronic labels and position as a Python
+            ///     tuple.
             py::tuple metal_state_signature(const molgr::metal::MetalAtomPosition &metal_state)
             {
                 py::tuple item(8);
@@ -145,6 +161,8 @@ namespace molgr
                 return item;
             }
 
+            /// @param choice Electronic states selected together for one or more metals.
+            /// @return The sequence of metal-state tuples for one assignment choice.
             py::list metal_state_choice_signature(
                 const std::vector<molgr::metal::MetalAtomPosition> &choice)
             {
@@ -156,6 +174,9 @@ namespace molgr
                 return out;
             }
 
+            /// Export all alternative assignments for one metal search group in traversal order.
+            /// @param group Grouped metal assignments in search order.
+            /// @return Python list preserving the native ordering.
             py::list metal_state_search_group_signature(
                 const molgr::metal::search::MetalStateChoiceGroup &group)
             {
@@ -167,6 +188,9 @@ namespace molgr
                 return out;
             }
 
+            /// Export the metal search groups belonging to one frontier layer.
+            /// @param layer Grouped metal assignments in search order.
+            /// @return Python list preserving the native ordering.
             py::list metal_state_search_layer_signature(
                 const molgr::metal::search::MetalStateSearchLayer &layer)
             {
@@ -178,6 +202,9 @@ namespace molgr
                 return out;
             }
 
+            /// Copy the ordered reconstruction phase names into a Python list.
+            /// @param phase_history Ordered reconstruction stages already applied.
+            /// @return Python list preserving the native ordering.
             py::list phase_history_signature(const std::vector<std::string> &phase_history)
             {
                 py::list out;
@@ -188,6 +215,9 @@ namespace molgr
                 return out;
             }
 
+            /// Parse one SMILES string into an independently owned OBMol; return null on reader failure.
+            /// @param smiles SMILES representation of the input molecular graph.
+            /// @return Newly owned molecule, or null on a parse failure.
             std::unique_ptr<OpenBabel::OBMol> mol_from_smiles(const std::string &smiles)
             {
                 auto mol = std::make_unique<OpenBabel::OBMol>();
@@ -198,17 +228,21 @@ namespace molgr
                 return mol;
             }
 
+            /// Register the metal-aware single-molecule and streaming batch reconstruction interfaces.
+            /// @param ns Python module on which to register the native interface.
             void bind_reconstruct_with_metals_public_ns(py::module_ &ns)
             {
                 py::class_<molgr::pipeline::reconstruct_batch::ReconstructionBatchIterator>(
                     ns,
-                    "ReconstructionBatchIterator")
+                    "ReconstructionBatchIterator",
+                    "Stream indexed reconstruction results from the native workers. Close the iterator to stop outstanding work.")
                     .def(
                         "__iter__",
                         [](molgr::pipeline::reconstruct_batch::ReconstructionBatchIterator &iterator)
                             -> molgr::pipeline::reconstruct_batch::ReconstructionBatchIterator &
                         { return iterator; },
-                        py::return_value_policy::reference_internal)
+                        py::return_value_policy::reference_internal,
+                        "Return this native result iterator.")
                     .def(
                         "__next__",
                         [](molgr::pipeline::reconstruct_batch::ReconstructionBatchIterator &iterator)
@@ -225,10 +259,11 @@ namespace molgr
                                 throw py::stop_iteration();
                             }
                             return reconstruction_batch_result_signature(std::move(*result));
-                        })
+                        }, "Yield the input index, reconstructed molecule data and diagnostics for one request.")
                     .def(
                         "close",
-                        &molgr::pipeline::reconstruct_batch::ReconstructionBatchIterator::Close);
+                        &molgr::pipeline::reconstruct_batch::ReconstructionBatchIterator::Close,
+                        "Stop scheduling requests and wait for active tasks to finish.");
 
                 ns.def(
                     "xyz2omol",
@@ -289,18 +324,29 @@ namespace molgr
                     py::arg("ordered") = false);
             }
 
+            /// Register inspection of metal-state alternatives, search buckets and candidate scores.
+            /// @param ns Python module on which to register the native interface.
             void bind_reconstruct_with_metals_dev_ns(py::module_ &ns)
             {
-                py::class_<molgr::metal::MetalAtomPosition>(ns, "MetalAtomPosition")
+                py::class_<molgr::metal::MetalAtomPosition>(ns, "MetalAtomPosition",
+                    "A candidate metal charge and unpaired-electron count at the original one-based atom index and Cartesian position.")
                     .def(py::init<>())
-                    .def_readwrite("idx", &molgr::metal::MetalAtomPosition::idx)
-                    .def_readwrite("symbol", &molgr::metal::MetalAtomPosition::symbol)
-                    .def_readwrite("element_idx", &molgr::metal::MetalAtomPosition::element_idx)
-                    .def_readwrite("valence", &molgr::metal::MetalAtomPosition::valence)
-                    .def_readwrite("radical_num", &molgr::metal::MetalAtomPosition::radical_num)
-                    .def_readwrite("position_x", &molgr::metal::MetalAtomPosition::position_x)
-                    .def_readwrite("position_y", &molgr::metal::MetalAtomPosition::position_y)
-                    .def_readwrite("position_z", &molgr::metal::MetalAtomPosition::position_z)
+                    .def_readwrite("idx", &molgr::metal::MetalAtomPosition::idx,
+                                   "One-based index of the metal in the original molecule.")
+                    .def_readwrite("symbol", &molgr::metal::MetalAtomPosition::symbol,
+                                   "Chemical element symbol.")
+                    .def_readwrite("element_idx", &molgr::metal::MetalAtomPosition::element_idx,
+                                   "Atomic number of the metal.")
+                    .def_readwrite("valence", &molgr::metal::MetalAtomPosition::valence,
+                                   "Candidate signed formal charge assigned to the metal.")
+                    .def_readwrite("radical_num", &molgr::metal::MetalAtomPosition::radical_num,
+                                   "Number of unpaired electrons assigned to the metal.")
+                    .def_readwrite("position_x", &molgr::metal::MetalAtomPosition::position_x,
+                                   "Cartesian x coordinate in angstroms.")
+                    .def_readwrite("position_y", &molgr::metal::MetalAtomPosition::position_y,
+                                   "Cartesian y coordinate in angstroms.")
+                    .def_readwrite("position_z", &molgr::metal::MetalAtomPosition::position_z,
+                                   "Cartesian z coordinate in angstroms.")
                     .def("__repr__", [](const molgr::metal::MetalAtomPosition &metal)
                          { return "<MetalAtomPosition " + metal.symbol +
                                    " val=" + std::to_string(metal.valence) +
@@ -334,6 +380,16 @@ namespace molgr
                     "Combine metal states with an existing OBMol pointer in place.",
                     py::arg("mol_ptr"),
                     py::arg("metals"),
+                    py::call_guard<py::gil_scoped_release>());
+
+                ns.def(
+                    "debug_ring_allene_resonance_ptr",
+                    [](intptr_t mol_ptr, int atom_index) {
+                        return molgr::metal::scoring::HasAromaticRingAlleneResonance(
+                            *require_obmol_ptr(mol_ptr), atom_index);
+                    },
+                    "Check a copy for a charge-preserving aromatic ring-allene resonance witness.",
+                    py::arg("mol_ptr"), py::arg("atom_index"),
                     py::call_guard<py::gil_scoped_release>());
 
                 ns.def(
@@ -445,103 +501,22 @@ namespace molgr
                     {
                         auto runtime_config = molgr::config::FromPython(config);
                         py::dict out;
-                        const auto base_state = molgr::metal::preparation::PrepareMetalState(
-                            xyz_block,
-                            total_charge,
-                            total_radical_electrons,
-                            runtime_config);
-                        if (base_state.phase_history.empty())
-                        {
-                            out["layer_index"] = py::none();
-                            out["candidates"] = py::list();
-                            return out;
-                        }
-
-                        const auto state_search_groups =
-                            molgr::metal::search::BuildMetalStateSearchGroups(
-                                base_state.available_valence_radical_states,
-                                runtime_config);
-                        const auto layered_state_search_groups =
-                            molgr::metal::search::BuildLayeredMetalStateSearchGroups(
-                                state_search_groups,
-                                total_radical_electrons,
-                                runtime_config);
-
                         std::vector<molgr::state::MetalCandidateState> selected_layer_candidates;
-                        std::optional<std::size_t> selected_layer_index;
-                        for (std::size_t layer_index = 0; layer_index < layered_state_search_groups.size();
-                             ++layer_index)
-                        {
-                            auto grouped_candidates = molgr::metal::search::GroupCandidatesByTargetDp(
-                                base_state.phase_history,
-                                layered_state_search_groups[layer_index],
-                                total_charge,
-                                total_radical_electrons,
-                                runtime_config);
-                            if (grouped_candidates.empty())
-                            {
-                                continue;
-                            }
-
-                            std::vector<molgr::state::MetalCandidateState> current_layer_candidates;
-                            for (auto &target_entry : grouped_candidates)
-                            {
-                                if (target_entry.second.empty())
-                                {
-                                    continue;
-                                }
-                                const auto &prototype = target_entry.second.front();
-                                auto no_metal_state =
-                                    molgr::pipeline::reconstruct_without_metals::XyzToOmolNoMetalState(
-                                        base_state.no_metal_xyz_block,
-                                        prototype.no_metal_charge_target,
-                                        prototype.no_metal_radical_target,
-                                        runtime_config);
-                                if (!no_metal_state.has_value())
-                                {
-                                    continue;
-                                }
-                                auto shared_no_metal_state =
-                                    std::make_shared<molgr::state::ReconstructionState>(
-                                        std::move(*no_metal_state));
-                                for (const auto &candidate : target_entry.second)
-                                {
-                                    current_layer_candidates.push_back(
-                                        molgr::metal::scoring::PrepareCandidateWithNoMetalState(
-                                            candidate,
-                                            shared_no_metal_state,
-                                            runtime_config));
-                                }
-                            }
-                            if (current_layer_candidates.empty())
-                            {
-                                continue;
-                            }
-                            selected_layer_candidates = std::move(current_layer_candidates);
-                            selected_layer_index = layer_index;
-                            break;
-                        }
-
-                        out["layer_index"] = selected_layer_index.has_value()
-                                                 ? py::object(py::int_(static_cast<int>(*selected_layer_index)))
-                                                 : py::object(py::none());
+                        molgr::pipeline::reconstruct_with_metals::Xyz2OmolMolData(
+                            xyz_block, total_charge, total_radical_electrons,
+                            runtime_config, nullptr, &selected_layer_candidates);
+                        out["layer_index"] = selected_layer_candidates.empty()
+                            ? py::object(py::none())
+                            : py::object(py::int_(molgr::metal::scoring::MetadataInt(
+                                  selected_layer_candidates.front(), "search_layer_index")));
                         py::list candidates_out;
-                        auto selected_candidate =
-                            molgr::metal::scoring::SelectBestCandidateInPlace(
-                                &selected_layer_candidates,
-                                runtime_config);
-                        const int selected_combination_index =
-                            selected_candidate.has_value()
-                                ? molgr::metal::scoring::CandidateCombinationIndex(*selected_candidate)
-                                : -1;
                         for (const auto &candidate : selected_layer_candidates)
                         {
                             py::dict item;
                             item["combination_index"] =
                                 molgr::metal::scoring::CandidateCombinationIndex(candidate);
                             item["selected"] =
-                                molgr::metal::scoring::CandidateCombinationIndex(candidate) ==
-                                selected_combination_index;
+                                std::get<bool>(candidate.metadata.at("selected"));
                             item["no_metal_charge_target"] = candidate.no_metal_charge_target;
                             item["no_metal_radical_target"] = candidate.no_metal_radical_target;
                             if (candidate.no_metal_state)
@@ -698,6 +673,20 @@ namespace molgr
                                 molgr::metal::scoring::MetadataInt(
                                     candidate,
                                     "organic_hyperconjugation_deficit");
+                            item["metal_nitrosonium_formal_charge_exemption"] =
+                                molgr::metal::scoring::MetadataDouble(candidate, "metal_nitrosonium_formal_charge_exemption");
+                            item["nitrosyl_geometry_penalty"] =
+                                molgr::metal::scoring::MetadataDouble(candidate, "nitrosyl_geometry_penalty");
+                            item["metal_discordance_long_carbonyl_multiple_bond_count"] =
+                                molgr::metal::scoring::MetadataInt(candidate, "metal_discordance_long_carbonyl_multiple_bond_count");
+                            item["metal_discordance_short_carbonyl_reduction_count"] =
+                                molgr::metal::scoring::MetadataInt(candidate, "metal_discordance_short_carbonyl_reduction_count");
+                            item["metal_discordance_long_dioxygen_multiple_bond_count"] =
+                                molgr::metal::scoring::MetadataInt(candidate, "metal_discordance_long_dioxygen_multiple_bond_count");
+                            item["nitrosyl_geometry_site_count"] =
+                                molgr::metal::scoring::MetadataInt(candidate, "nitrosyl_geometry_site_count");
+                            item["nitrosonium_redistribution_exception"] =
+                                molgr::metal::scoring::MetadataInt(candidate, "nitrosonium_redistribution_exception");
                             item["organic_charge_localization_penalty"] =
                                 molgr::metal::scoring::MetadataDouble(candidate, "organic_charge_localization_penalty");
                             item["organic_charge_localization_component_cancellation"] =
@@ -774,6 +763,35 @@ namespace molgr
                                 molgr::metal::scoring::MetadataInt(
                                     candidate,
                                     "metal_discordance_inner_visible_adjacent_carbanion_pair_count");
+                            item["metal_equalized_carbon_reduction_exemption_count"] =
+                                molgr::metal::scoring::MetadataInt(
+                                    candidate, "metal_equalized_carbon_reduction_exemption_count");
+                            item["metal_equalized_carbon_localization_count"] =
+                                molgr::metal::scoring::MetadataInt(
+                                    candidate, "metal_equalized_carbon_localization_count");
+                            item["metal_alkoxy_allylic_geometry_conflict_count"] =
+                                molgr::metal::scoring::MetadataInt(
+                                    candidate, "metal_alkoxy_allylic_geometry_conflict_count");
+                            item["metal_formazan_geometry_conflict_count"] =
+                                molgr::metal::scoring::MetadataInt(
+                                    candidate, "metal_formazan_geometry_conflict_count");
+                            item["metal_quinodiimine_geometry_conflict_count"] =
+                                molgr::metal::scoring::MetadataInt(
+                                    candidate, "metal_quinodiimine_geometry_conflict_count");
+                            item["metal_polyenamine_geometry_conflict_count"] =
+                                molgr::metal::scoring::MetadataInt(
+                                    candidate, "metal_polyenamine_geometry_conflict_count");
+                            item["metal_paired_diimine_geometry_conflict_count"] =
+                                molgr::metal::scoring::MetadataInt(
+                                    candidate, "metal_paired_diimine_geometry_conflict_count");
+                            item["metal_terminal_hydrazido_geometry_conflict_count"] =
+                                molgr::metal::scoring::MetadataInt(candidate, "metal_terminal_hydrazido_geometry_conflict_count");
+                            item["metal_folded_ring_geometry_conflict_count"] =
+                                molgr::metal::scoring::MetadataInt(
+                                    candidate, "metal_folded_ring_geometry_conflict_count");
+                            item["metal_macrocycle_electron_conflict_count"] =
+                                molgr::metal::scoring::MetadataInt(
+                                    candidate, "metal_macrocycle_electron_conflict_count");
                             item["metal_discordance_inner_visible_conjugated_carbanion_pair_count"] =
                                 molgr::metal::scoring::MetadataInt(
                                     candidate,
@@ -782,6 +800,20 @@ namespace molgr
                                 molgr::metal::scoring::MetadataInt(
                                     candidate,
                                     "metal_discordance_inner_visible_same_sign_charge_count");
+                            item["metal_discordance_inner_visible_cationic_donor_count"] =
+                                molgr::metal::scoring::MetadataInt(
+                                    candidate,
+                                    "metal_discordance_inner_visible_cationic_donor_count");
+                            item["metal_discordance_inner_visible_same_sign_charge_penalty"] =
+                                molgr::metal::scoring::MetadataDouble(
+                                    candidate,
+                                    "metal_discordance_inner_visible_same_sign_charge_penalty");
+                            item["metal_aryl_carbenoid_geometry_conflict_count"] =
+                                molgr::metal::scoring::MetadataInt(
+                                    candidate, "metal_aryl_carbenoid_geometry_conflict_count");
+                            item["metal_discordance_high_zinc_valence_count"] =
+                                molgr::metal::scoring::MetadataInt(
+                                    candidate, "metal_discordance_high_zinc_valence_count");
                             item["metal_discordance_negative_metal_count"] =
                                 molgr::metal::scoring::MetadataInt(
                                     candidate,
@@ -888,8 +920,12 @@ namespace molgr
                     py::arg("config") = py::none());
             }
 
+            /// Register ligand-only reconstruction and inspection of intermediate electronic assignments.
+            /// @param ns Python module on which to register the native interface.
             void bind_reconstruct_without_metals_dev_ns(py::module_ &ns)
             {
+                /// Serialize the ligand snapshot with its remaining charge, phase history and score
+                /// diagnostics.
                 const auto state_summary = [](molgr::state::ReconstructionState &state)
                 {
                     py::dict item;
@@ -1035,8 +1071,11 @@ namespace molgr
                             item["hyperconjugative_donor_count"] =
                                 summary.hyperconjugative_donor_count;
                             item["hyperconjugation_score"] = summary.hyperconjugation_score;
+                            item["azinium_geometry_conflict_count"] = summary.azinium_geometry_conflict_count;
                             item["formal_charge_absolute_sum"] =
                                 summary.formal_charge_absolute_sum;
+                            item["long_carbonyl_multiple_bond_count"] =
+                                summary.long_carbonyl_multiple_bond_count;
                             item["conjugation_charge_penalty"] =
                                 summary.conjugation_charge_penalty;
                             item["adjusted_max_conjugated_component_size"] =
@@ -1057,6 +1096,8 @@ namespace molgr
                     py::kw_only(),
                     py::arg("config") = py::none());
             }
+            /// Register the one-step and bounded resonance traversal helpers for development callers.
+            /// @param ns Python module on which to register the native interface.
             void bind_resonance_dev_ns(py::module_ &ns)
             {
                 ns.def(

@@ -6,6 +6,11 @@
 
 namespace molgr::coordination
 {
+    /// Return the covalent-radius based metal-ligand coordination cutoff.
+    /// @param metal_atomic_num Atomic number of the indicated bond partner or site.
+    /// @param ligand_atomic_num Atomic number of the indicated bond partner or site.
+    /// @param config Metal contact cutoffs, visibility radii and candidate scoring weights.
+    /// @return Maximum accepted donor-metal separation in angstroms.
     inline double CoordinationDistanceCutoff(
         int metal_atomic_num,
         int ligand_atomic_num,

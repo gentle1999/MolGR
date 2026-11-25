@@ -12,6 +12,9 @@
 #include <openbabel/ring.h>
 
 #include <algorithm>
+#include <array>
+#include <cmath>
+#include <optional>
 #include <cstddef>
 #include <cstdlib>
 #include <utility>
@@ -21,16 +24,21 @@ namespace
 {
     constexpr int kAromaticRingFormalChargeAbsRejectionThreshold = 4;
 
+    /// Dense membership flags and an insertion list for atom or bond indices.
     struct IntFlagSet
     {
         std::vector<unsigned char> present;
         std::vector<int> values;
 
+        /// Reserve the initial range of indices for constant-time membership tests.
+        /// @param initial_size Initial range of atom or bond indices to accommodate.
         explicit IntFlagSet(std::size_t initial_size = 0)
             : present(initial_size, 0)
         {
         }
 
+        /// @param index Index of the requested entry.
+        /// @return True when the index has been inserted.
         bool Contains(int index) const
         {
             return index >= 0 &&
@@ -38,6 +46,9 @@ namespace
                    present[static_cast<std::size_t>(index)] != 0;
         }
 
+        /// Insert a new index and report whether the membership set grew.
+        /// @param index Index of the requested entry.
+        /// @return True if the index was newly added.
         bool Add(int index)
         {
             if (index < 0)
@@ -58,12 +69,14 @@ namespace
             return true;
         }
 
+        /// @return The number of distinct indices inserted.
         std::size_t Size() const
         {
             return values.size();
         }
     };
 
+    /// Heavy-atom bond and endpoint indices used to assemble conjugated components.
     struct HeavyBondRef
     {
         OpenBabel::OBBond *bond = nullptr;
@@ -72,107 +85,152 @@ namespace
         int bond_idx = -1;
     };
 
+    /// Geometry-validated atom and bond sets for scoring ligand conjugation.
     struct ValidatedConjugationTopology
     {
         IntFlagSet bond_indices;
         std::vector<IntFlagSet> cumulated_bond_indices_by_center;
     };
 
-    OpenBabel::OBAtom *FirstMultipleBondOuterAtom(
-        OpenBabel::OBMol &mol,
-        OpenBabel::OBAtom &center,
-        const std::vector<int> &bond_indices)
+    using PiPlaneTensor = std::array<double, 9>;
+
+    /// A tetrahedral second-row center cannot supply a trigonal pi plane.
+    /// @param atom Atom whose local chemical environment is examined.
+    /// @return True for a strongly pyramidal atom inconsistent with a local pi plane.
+    bool StronglyPyramidalPiEndpoint(OpenBabel::OBAtom &atom)
     {
-        for (const int bond_idx : bond_indices)
+        if ((atom.GetAtomicNum() != 6 && atom.GetAtomicNum() != 7) ||
+            atom.GetExplicitDegree() != 3 || atom.GetImplicitHCount() != 0) return false;
+        std::vector<OpenBabel::OBAtom *> neighbors;
+        FOR_NBORS_OF_ATOM(neighbor, &atom)
         {
-            OpenBabel::OBBond *bond = mol.GetBond(bond_idx);
-            if (bond == nullptr)
-            {
-                continue;
-            }
-            OpenBabel::OBAtom *outer = bond->GetNbrAtom(&center);
-            if (outer != nullptr && outer->GetAtomicNum() != 1)
-            {
-                return outer;
-            }
+            if (atom.GetDistance(&*neighbor) < 1e-8) return false;
+            neighbors.push_back(&*neighbor);
         }
-        return nullptr;
+        double sum = 0.0;
+        for (std::size_t i = 0; i < neighbors.size(); ++i)
+            for (std::size_t j = i + 1; j < neighbors.size(); ++j)
+            {
+                const double angle = atom.GetParent()->GetAngle(neighbors[i], &atom, neighbors[j]);
+                if (!(80.0 < angle && angle < 125.0)) return false;
+                sum += angle;
+            }
+        return sum < 330.0;
     }
 
-    OpenBabel::OBAtom *FirstOuterSingleBondNeighbor(
-        OpenBabel::OBAtom &atom,
-        const OpenBabel::OBAtom &excluded_neighbor)
+    /// Average unoriented plane normals over the neighboring bonds.
+    /// @param center Atom or site occupying this position in the local chemical motif.
+    /// @param partner Atom or site occupying this position in the local chemical motif.
+    /// @param single_bonds_only Whether to build the plane estimate from single bonds only.
+    /// @return Local plane tensor, or an empty optional for insufficient geometry.
+    std::optional<PiPlaneTensor> LocalPiPlaneTensor(
+        OpenBabel::OBAtom &center, OpenBabel::OBAtom &partner,
+        bool single_bonds_only = true)
     {
-        OpenBabel::OBAtom *selected = nullptr;
-        FOR_BONDS_OF_ATOM(bond_iter, &atom)
+        auto axis = partner.GetVector() - center.GetVector();
+        const double axis_length = axis.length();
+        if (axis_length < 1e-12) return std::nullopt;
+        axis /= axis_length;
+        PiPlaneTensor tensor{};
+        int count = 0;
+        FOR_BONDS_OF_ATOM(bond_iter, &center)
         {
-            OpenBabel::OBBond &bond = *bond_iter;
-            if (molgr::vendor::openbabel_threading::BondIsAromatic(bond) ||
-                bond.GetBondOrder() != 1)
-            {
+            auto &bond = *bond_iter;
+            if (single_bonds_only &&
+                (molgr::vendor::openbabel_threading::BondIsAromatic(bond) || bond.GetBondOrder() != 1))
                 continue;
-            }
-            OpenBabel::OBAtom *neighbor = bond.GetNbrAtom(&atom);
-            if (neighbor == nullptr || neighbor->GetIdx() == excluded_neighbor.GetIdx())
-            {
-                continue;
-            }
-            if (selected == nullptr || neighbor->GetIdx() < selected->GetIdx())
-            {
-                selected = neighbor;
-            }
+            auto *neighbor = bond.GetNbrAtom(&center);
+            if (neighbor == nullptr || neighbor->GetIdx() == partner.GetIdx()) continue;
+            auto vector = neighbor->GetVector() - center.GetVector();
+            const double length = vector.length();
+            if (length < 1e-12) continue;
+            vector /= length;
+            auto normal = OpenBabel::cross(axis, vector);
+            const double normal_length = normal.length();
+            if (normal_length < 1e-8) continue;
+            normal /= normal_length;
+            for (std::size_t i = 0; i < 3; ++i)
+                for (std::size_t j = 0; j < 3; ++j)
+                    tensor[i * 3 + j] += normal[i] * normal[j];
+            ++count;
         }
-        return selected;
+        if (count == 0) return std::nullopt;
+        for (auto &value : tensor) value /= count;
+        return tensor;
     }
 
+    /// Require compatible local pi planes, independent of atom/bond ordering.
+    /// @param mol Ligand graph supplying the atom labels, coordinates and bond orders.
+    /// @param left_inner Atom at the inner end of an alternating pi bond.
+    /// @param right_inner Atom at the inner end of an alternating pi bond.
+    /// @param multiple_bonds_by_atom Multiple-bond neighbors indexed by atom.
+    /// @param min_plane_overlap Minimum allowed overlap of the local pi planes.
+    /// @return True when the alternating bonds pass the local plane-overlap screen.
     bool AlternatingDoubleBondsAreGeometricallyConjugated(
         OpenBabel::OBMol &mol,
         OpenBabel::OBAtom &left_inner,
         OpenBabel::OBAtom &right_inner,
         const std::vector<std::vector<int>> &multiple_bonds_by_atom,
-        double volume_tolerance)
+        double min_plane_overlap)
     {
         const auto left_idx = static_cast<std::size_t>(left_inner.GetIdx());
         const auto right_idx = static_cast<std::size_t>(right_inner.GetIdx());
         if (left_idx >= multiple_bonds_by_atom.size() ||
             right_idx >= multiple_bonds_by_atom.size() ||
             multiple_bonds_by_atom[left_idx].empty() ||
-            multiple_bonds_by_atom[right_idx].empty())
-        {
-            return true;
-        }
+            multiple_bonds_by_atom[right_idx].empty()) return true;
 
-        OpenBabel::OBAtom *left_outer = FirstMultipleBondOuterAtom(
-            mol,
-            left_inner,
-            multiple_bonds_by_atom[left_idx]);
-        OpenBabel::OBAtom *right_outer = FirstMultipleBondOuterAtom(
-            mol,
-            right_inner,
-            multiple_bonds_by_atom[right_idx]);
-        if (left_outer == nullptr || right_outer == nullptr)
+        // Enumerate pi channels. Every explicit single-bonded neighbor, including
+        // H, contributes to each unoriented local plane tensor; no atom/bond
+        // index selects the geometry. Cumulated component boundaries stay below.
+        for (const int left_bond_idx : multiple_bonds_by_atom[left_idx])
         {
-            return true;
+            auto *left_bond = mol.GetBond(left_bond_idx);
+            auto *left_outer = left_bond == nullptr ? nullptr : left_bond->GetNbrAtom(&left_inner);
+            if (left_outer == nullptr || left_outer->GetAtomicNum() == 1) continue;
+            for (const int right_bond_idx : multiple_bonds_by_atom[right_idx])
+            {
+                auto *right_bond = mol.GetBond(right_bond_idx);
+                auto *right_outer = right_bond == nullptr ? nullptr : right_bond->GetNbrAtom(&right_inner);
+                if (right_outer == nullptr || right_outer->GetAtomicNum() == 1) continue;
+                if (StronglyPyramidalPiEndpoint(*left_outer) || StronglyPyramidalPiEndpoint(left_inner) ||
+                    StronglyPyramidalPiEndpoint(right_inner) || StronglyPyramidalPiEndpoint(*right_outer))
+                    continue;
+                std::vector<PiPlaneTensor> planes;
+                for (const auto &[center, partner] : std::array<std::pair<OpenBabel::OBAtom *, OpenBabel::OBAtom *>, 4>{{
+                         {left_outer, &left_inner}, {&left_inner, left_outer},
+                         {&right_inner, right_outer}, {right_outer, &right_inner}}})
+                {
+                    // Triple bonds retain both perpendicular pi channels;
+                    // their substituents must not select one exclusive plane.
+                    if (center->GetBond(partner)->GetBondOrder() >= 3) continue;
+                    const auto plane = LocalPiPlaneTensor(*center, *partner);
+                    if (plane) planes.push_back(*plane);
+                }
+                bool compatible = true;
+                for (std::size_t i = 0; i < planes.size() && compatible; ++i)
+                    for (std::size_t j = i + 1; j < planes.size(); ++j)
+                    {
+                        double overlap = 0.0;
+                        for (std::size_t k = 0; k < 9; ++k)
+                            overlap += planes[i][k] * planes[j][k];
+                        if (overlap + 1e-12 < min_plane_overlap)
+                        {
+                            compatible = false;
+                            break;
+                        }
+                    }
+                // Missing/collinear coordinates cannot disprove conjugation.
+                if (compatible) return true;
+            }
         }
-
-        OpenBabel::OBAtom *left_terminal = FirstOuterSingleBondNeighbor(
-            *left_outer,
-            left_inner);
-        OpenBabel::OBAtom *right_terminal = FirstOuterSingleBondNeighbor(
-            *right_outer,
-            right_inner);
-        if (left_terminal == nullptr || right_terminal == nullptr)
-        {
-            return true;
-        }
-
-        return molgr::utils::CalculateShapeQuality(
-                   left_terminal->GetVector(),
-                   left_outer->GetVector(),
-                   right_outer->GetVector(),
-                   right_terminal->GetVector()) <= volume_tolerance;
+        return false;
     }
 
+    /// Sum the formal charges of the atoms on the ring path.
+    /// @param mol Ligand graph supplying the atom labels, coordinates and bond orders.
+    /// @param ring Ring path in the current molecule.
+    /// @return Net formal charge of the ring.
     int RingFormalChargeSum(OpenBabel::OBMol &mol, const OpenBabel::OBRing &ring)
     {
         int charge_sum = 0;
@@ -188,6 +246,10 @@ namespace
         return charge_sum;
     }
 
+    /// Test the ring's net charge against the aromatic scoring cutoff.
+    /// @param mol Ligand graph supplying the atom labels, coordinates and bond orders.
+    /// @param ring Ring path in the current molecule.
+    /// @return True if the ring or fused system qualifies for aromatic scoring.
     bool IsChargeAcceptedAromaticRing(OpenBabel::OBMol &mol, OpenBabel::OBRing &ring)
     {
         if (!molgr::vendor::openbabel_threading::RingIsAromatic(ring))
@@ -198,11 +260,16 @@ namespace
                kAromaticRingFormalChargeAbsRejectionThreshold;
     }
 
+    /// Test for an explicit unpaired electron on the atom.
+    /// @param atom Atom whose local chemical environment is examined.
+    /// @return True if the atom carries at least one explicit unpaired electron.
     bool AtomHasUnpairedElectrons(const OpenBabel::OBAtom &atom)
     {
         return molgr::utils::GetUnpairedElectronCount(atom) > 0;
     }
 
+    /// Prepare ring, aromaticity and hybridization data used by topology scoring.
+    /// @param mol Ligand graph supplying the atom labels, coordinates and bond orders.
     void PrepareTopologyWorkingMolecule(OpenBabel::OBMol &mol)
     {
         molgr::vendor::openbabel_threading::ResetAndAssignAromaticFlags(mol);
@@ -210,6 +277,11 @@ namespace
         molgr::vendor::openbabel_threading::EnsureHybridizationPerceived(mol);
     }
 
+    /// Count pi electrons contributed by an atom beyond ring multiple-bond contributions.
+    /// @param atom Atom whose local chemical environment is examined.
+    /// @param incident_to_ring_multiple_bond Whether the atom already contributes through a ring multiple
+    ///     bond.
+    /// @return Estimated pi-electron contribution under the local aromaticity model.
     int AdditionalAtomPiElectrons(
         const OpenBabel::OBAtom &atom,
         bool incident_to_ring_multiple_bond)
@@ -237,6 +309,10 @@ namespace
         return 0;
     }
 
+    /// Sum ring pi bonds and eligible atomic contributions without counting a pi-bonded atom twice.
+    /// @param mol Ligand graph supplying the atom labels, coordinates and bond orders.
+    /// @param ring Ring path in the current molecule.
+    /// @return Pi-electron count, or -1 when the ring path or its bonds cannot be evaluated.
     int RingPiElectronCount(OpenBabel::OBMol &mol, const OpenBabel::OBRing &ring)
     {
         if (ring._path.size() < 3)
@@ -278,17 +354,27 @@ namespace
         return pi_electron_count;
     }
 
+    /// Test the Hückel 4n+2 electron-count condition.
+    /// @param pi_electron_count Number of electrons assigned to the ring pi system.
+    /// @return True for two or more electrons satisfying the 4n+2 rule.
     bool HasHuckelPiElectronCount(int pi_electron_count)
     {
         return pi_electron_count >= 2 && (pi_electron_count - 2) % 4 == 0;
     }
 
+    /// Check that both net charge and pi-electron count support aromatic scoring of the ring.
+    /// @param mol Ligand graph supplying the atom labels, coordinates and bond orders.
+    /// @param ring Ring path in the current molecule.
+    /// @return True if the ring or fused system qualifies for aromatic scoring.
     bool IsHuckelAcceptedAromaticRing(OpenBabel::OBMol &mol, OpenBabel::OBRing &ring)
     {
         return IsChargeAcceptedAromaticRing(mol, ring) &&
                HasHuckelPiElectronCount(RingPiElectronCount(mol, ring));
     }
 
+    /// @param lhs First ring path.
+    /// @param rhs Second ring path.
+    /// @return True when the two ring paths contain a common edge.
     bool RingsShareFusedBond(const OpenBabel::OBRing &lhs, const OpenBabel::OBRing &rhs)
     {
         int shared_atom_count = 0;
@@ -307,6 +393,9 @@ namespace
         return false;
     }
 
+    /// Group aromatic rings into systems connected by fused bonds.
+    /// @param mol Ligand graph supplying the atom labels, coordinates and bond orders.
+    /// @return Groups of aromatic rings joined by shared edges.
     std::vector<std::vector<OpenBabel::OBRing *>> AromaticRingSystems(OpenBabel::OBMol &mol)
     {
         std::vector<OpenBabel::OBRing *> aromatic_rings;
@@ -349,6 +438,10 @@ namespace
         return systems;
     }
 
+    /// Collect the unique atom indices across the supplied ring system.
+    /// @param rings Rings belonging to the fused system.
+    /// @param atom_capacity Initial range of atom or bond indices to accommodate.
+    /// @return Unique atom indices belonging to the ring system.
     IntFlagSet RingSystemAtomIndices(
         const std::vector<OpenBabel::OBRing *> &rings,
         std::size_t atom_capacity)
@@ -368,6 +461,10 @@ namespace
         return atom_indices;
     }
 
+    /// Check isolated rings by electron count and fused aromatic systems by their net formal charge.
+    /// @param mol Ligand graph supplying the atom labels, coordinates and bond orders.
+    /// @param rings Rings belonging to the fused system.
+    /// @return True if the ring or fused system qualifies for aromatic scoring.
     bool IsAcceptedAromaticRingSystem(
         OpenBabel::OBMol &mol,
         const std::vector<OpenBabel::OBRing *> &rings)
@@ -397,6 +494,10 @@ namespace
         return std::abs(charge_sum) < kAromaticRingFormalChargeAbsRejectionThreshold;
     }
 
+    /// @param mol Ligand graph supplying the atom labels, coordinates and bond orders.
+    /// @param ring Ring path in the current molecule.
+    /// @param config Aromatic stability weights and conjugation geometry thresholds.
+    /// @return The configured aromatic stabilization weight for the accepted ring.
     double AromaticRingStabilityWeight(
         OpenBabel::OBMol &mol,
         const OpenBabel::OBRing &ring,
@@ -465,6 +566,9 @@ namespace
             size_factor * hetero_factor * charge_factor * radical_factor);
     }
 
+    /// Test whether the bond is aromatic or has multiple-bond character.
+    /// @param bond Bond whose endpoints and order define the local environment.
+    /// @return True when the local bond or atom meets the indicated conjugation criterion.
     bool IsMultipleLikeBond(const OpenBabel::OBBond &bond)
     {
         OpenBabel::OBBond &mutable_bond = const_cast<OpenBabel::OBBond &>(bond);
@@ -472,6 +576,9 @@ namespace
                bond.GetBondOrder() >= 2;
     }
 
+    /// Determine whether this atom's valence and electron labels permit participation in a pi system.
+    /// @param atom Atom whose local chemical environment is examined.
+    /// @return True when the local bond or atom meets the indicated conjugation criterion.
     bool IsPiActiveElectronCenter(const OpenBabel::OBAtom &atom)
     {
         OpenBabel::OBAtom &mutable_atom = const_cast<OpenBabel::OBAtom &>(atom);
@@ -485,7 +592,18 @@ namespace
             lone_pair_count == 0 &&
             !molgr::utils::HasUnresolvedTwoElectronCenter(atom))
         {
-            return false;
+            // Search-active pairs are not the full Lewis inventory. Resolved
+            // neutral sp2 heteroatoms can retain a conjugating p lone pair.
+            const auto info = molgr::kNonMetalDict.find(atom.GetAtomicNum());
+            if (info == molgr::kNonMetalDict.end() || atom.GetAtomicNum() == 6 ||
+                atom.GetHyb() != 2)
+            {
+                return false;
+            }
+            const int valence = static_cast<int>(atom.GetTotalValence());
+            const int outer = static_cast<int>(info->second.num_outer_electrons);
+            const int paired = outer - valence;
+            return outer + valence == 8 && paired >= 2 && paired % 2 == 0;
         }
 
         const auto element_info_iter = molgr::kNonMetalDict.find(atom.GetAtomicNum());
@@ -502,12 +620,18 @@ namespace
         return is_under_saturated;
     }
 
+    /// Count implicit hydrogens and directly bonded hydrogen atoms.
+    /// @param atom Atom whose local chemical environment is examined.
+    /// @return Total hydrogen count at this atom.
     int AttachedHydrogenCount(const OpenBabel::OBAtom &atom)
     {
         return static_cast<int>(atom.GetImplicitHCount()) +
                static_cast<int>(atom.ExplicitHydrogenCount());
     }
 
+    /// Test whether a neutral carbon can supply a sigma donor for hyperconjugation.
+    /// @param atom Atom whose local chemical environment is examined.
+    /// @return True when the local bond or atom meets the indicated conjugation criterion.
     bool IsHyperconjugativeDonor(const OpenBabel::OBAtom &atom)
     {
         return atom.GetAtomicNum() == 6 && atom.GetFormalCharge() == 0 &&
@@ -517,6 +641,10 @@ namespace
                AttachedHydrogenCount(atom) > 0;
     }
 
+    /// Test whether this electronic environment can accept hyperconjugative donation.
+    /// @param atom Atom whose local chemical environment is examined.
+    /// @param incident_to_multiple_like_bond Whether the atom is adjacent to an aromatic or multiple bond.
+    /// @return True when the local bond or atom meets the indicated conjugation criterion.
     bool IsHyperconjugationAcceptor(
         const OpenBabel::OBAtom &atom,
         bool incident_to_multiple_like_bond)
@@ -539,6 +667,8 @@ namespace
                element_info_iter->second.default_valence > atom.GetTotalValence();
     }
 
+    /// @param mol Ligand graph supplying the atom labels, coordinates and bond orders.
+    /// @return The number of distinct donor atoms and the hyperconjugation score.
     std::pair<int, int> HyperconjugationMetrics(OpenBabel::OBMol &mol)
     {
         IntFlagSet atoms_incident_to_multiple_like_bond(
@@ -589,6 +719,8 @@ namespace
         return {static_cast<int>(donor_atom_indices.Size()), score};
     }
 
+    /// @param bond Bond whose endpoints and order define the local environment.
+    /// @return True when both bond endpoints are elements heavier than hydrogen.
     bool IsHeavyAtomBond(const OpenBabel::OBBond &bond)
     {
         const OpenBabel::OBAtom *begin_atom = bond.GetBeginAtom();
@@ -597,6 +729,11 @@ namespace
                end_atom->GetAtomicNum() != 1;
     }
 
+    /// Label connected atom components using only the selected heavy-atom bonds.
+    /// @param heavy_bonds Heavy-atom edges and their endpoint indices.
+    /// @param selected_bond_indices Indices of heavy-atom bonds retained in the conjugation graph.
+    /// @param atom_capacity Initial range of atom or bond indices to accommodate.
+    /// @return Component identifiers indexed by atom.
     std::vector<int> AtomComponentIds(
         const std::vector<HeavyBondRef> &heavy_bonds,
         const IntFlagSet &selected_bond_indices,
@@ -655,6 +792,94 @@ namespace
         return component_ids;
     }
 
+    /// Check carbon electron centers and neutral heteroatom lone-pair donation.
+    /// @param donor Atom or site occupying this position in the local chemical motif.
+    /// @param acceptor Atom or site occupying this position in the local chemical motif.
+    /// @param volume_tolerance Tolerance on the donor's local out-of-plane volume.
+    /// @param min_plane_overlap Minimum allowed overlap of the local pi planes.
+    /// @return True when the local bond or atom meets the indicated conjugation criterion.
+    bool LonePairIsGeometricallyConjugated(
+        OpenBabel::OBAtom &donor,
+        OpenBabel::OBAtom &acceptor,
+        double volume_tolerance,
+        double min_plane_overlap)
+    {
+        const int z = static_cast<int>(donor.GetAtomicNum());
+        if (z == 6 || (z == 7 && donor.GetFormalCharge() == 0))
+        {
+            // Carbon electron centers and neutral N donors share the overlap
+            // threshold used for alternating double bonds. A stricter volume
+            // guard for N would favor an iminium contributor at identical geometry.
+            if (StronglyPyramidalPiEndpoint(donor) || StronglyPyramidalPiEndpoint(acceptor))
+                return false;
+            FOR_BONDS_OF_ATOM(bond, &acceptor)
+            {
+                // Triple bonds retain both perpendicular pi channels.
+                if (bond->GetBondOrder() >= 3) return true;
+            }
+            const auto left = LocalPiPlaneTensor(donor, acceptor, false);
+            const auto right = LocalPiPlaneTensor(acceptor, donor, false);
+            /// Compare the local pi-plane tensors against the minimum overlap needed for conjugation.
+            const auto compatible = [min_plane_overlap](
+                const std::optional<PiPlaneTensor> &a,
+                const std::optional<PiPlaneTensor> &b)
+            {
+                if (!a || !b) return true;
+                double overlap = 0.0;
+                for (std::size_t k = 0; k < 9; ++k)
+                    overlap += (*a)[k] * (*b)[k];
+                return overlap + 1e-12 >= min_plane_overlap;
+            };
+            if (!compatible(left, right)) return false;
+            // Include the far endpoint of each localized pi bond; otherwise
+            // a twisted iminium/carbanion contributor bypasses the N-pair guard.
+            bool has_pi_partner = false;
+            FOR_BONDS_OF_ATOM(bond, &acceptor)
+            {
+                if (bond->IsAromatic() || bond->GetBondOrder() != 2) continue;
+                has_pi_partner = true;
+                auto *partner = bond->GetNbrAtom(&acceptor);
+                if (StronglyPyramidalPiEndpoint(*partner)) continue;
+                const auto outer_plane = LocalPiPlaneTensor(*partner, acceptor);
+                if (compatible(left, outer_plane) && compatible(right, outer_plane))
+                    return true;
+            }
+            return !has_pi_partner;
+        }
+        if (donor.GetFormalCharge() != 0 ||
+            (z != 7 && z != 8 && z != 15 && z != 16 && z != 33 && z != 34))
+        {
+            return true;
+        }
+        FOR_NBORS_OF_ATOM(neighbor, &donor)
+        {
+            if (neighbor->GetIdx() == acceptor.GetIdx())
+            {
+                continue;
+            }
+            FOR_BONDS_OF_ATOM(bond, &acceptor)
+            {
+                if (!IsMultipleLikeBond(*bond))
+                {
+                    continue;
+                }
+                const auto *pi_neighbor = bond->GetNbrAtom(&acceptor);
+                if (pi_neighbor != nullptr &&
+                    !(molgr::utils::CalculateShapeQuality(
+                        neighbor->GetVector(), donor.GetVector(),
+                        acceptor.GetVector(), pi_neighbor->GetVector()) <= volume_tolerance))
+                {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    /// Build conjugated components after applying local lone-pair and pi-plane geometry tests.
+    /// @param mol Ligand graph supplying the atom labels, coordinates and bond orders.
+    /// @param config Aromatic stability weights and conjugation geometry thresholds.
+    /// @return Geometry-validated conjugated topology for the supplied ligand graph.
     ValidatedConjugationTopology ValidatedConjugatedTopology(
         OpenBabel::OBMol &mol,
         const molgr::config::OrganicTopologyConfig &config)
@@ -772,7 +997,20 @@ namespace
                      *begin_atom,
                      *end_atom,
                      nonaromatic_multiple_bonds_by_atom,
-                     config.conjugation_normalized_tetrahedron_volume_tolerance)))
+                     config.conjugation_min_plane_overlap)))
+            {
+                continue;
+            }
+            if ((!begin_has_pi_bond &&
+                 !LonePairIsGeometricallyConjugated(
+                     *begin_atom, *end_atom,
+                     config.conjugation_normalized_tetrahedron_volume_tolerance,
+                     config.conjugation_min_plane_overlap)) ||
+                (!end_has_pi_bond &&
+                 !LonePairIsGeometricallyConjugated(
+                     *end_atom, *begin_atom,
+                     config.conjugation_normalized_tetrahedron_volume_tolerance,
+                     config.conjugation_min_plane_overlap)))
             {
                 continue;
             }
@@ -799,7 +1037,9 @@ namespace
             {
                 continue;
             }
-            if (atom_has_adjacent_alternating_single_bond.Contains(static_cast<int>(begin_atom->GetIdx())) ||
+            if (molgr::vendor::openbabel_threading::AtomIsAromatic(*begin_atom) ||
+                molgr::vendor::openbabel_threading::AtomIsAromatic(*end_atom) ||
+                atom_has_adjacent_alternating_single_bond.Contains(static_cast<int>(begin_atom->GetIdx())) ||
                 atom_has_adjacent_alternating_single_bond.Contains(static_cast<int>(end_atom->GetIdx())))
             {
                 conjugated_bond_indices.Add(heavy_bond.bond_idx);
@@ -1078,7 +1318,11 @@ namespace molgr
                     std::max(
                         metrics.max_conjugated_component_size,
                         static_cast<int>(component_atom_indices.Size()));
+                auto component = component_atom_indices.values;
+                std::sort(component.begin(), component.end());
+                metrics.conjugated_atom_components.push_back(std::move(component));
             }
+            std::sort(metrics.conjugated_atom_components.begin(), metrics.conjugated_atom_components.end());
             const auto [hyperconjugative_donor_count, hyperconjugation_score] =
                 HyperconjugationMetrics(working);
             metrics.hyperconjugative_donor_count = hyperconjugative_donor_count;

@@ -16,6 +16,7 @@
 
 namespace
 {
+    /// Parsed XYZ atom with atomic number and Cartesian coordinates in angstroms.
     struct ParsedXyzAtom
     {
         int atomic_num = 0;
@@ -24,6 +25,10 @@ namespace
         double z = 0.0;
     };
 
+    /// Parse the declared positive atom count from the XYZ header.
+    /// @param line One line from the XYZ input.
+    /// @param atom_count Destination for the declared number of XYZ atoms.
+    /// @return True if parsing succeeded and the output was populated.
     bool ParseAtomCountLine(const std::string &line, std::size_t *atom_count)
     {
         std::istringstream stream(line);
@@ -46,6 +51,10 @@ namespace
         return count > 0;
     }
 
+    /// Accept an XYZ element symbol or numeric identifier and return its atomic number through the output.
+    /// @param token Token extracted from or supplied by the input line.
+    /// @param atomic_num Output atomic number for the parsed element.
+    /// @return True if parsing succeeded and the output was populated.
     bool ParseAtomicNumber(std::string token, int *atomic_num)
     {
         if (token.empty())
@@ -89,6 +98,10 @@ namespace
         return true;
     }
 
+    /// Parse an element token and three Cartesian coordinates from one XYZ atom line.
+    /// @param line One line from the XYZ input.
+    /// @param parsed_atom Destination for the element and Cartesian coordinates.
+    /// @return True if parsing succeeded and the output was populated.
     bool ParseAtomLine(const std::string &line, ParsedXyzAtom *parsed_atom)
     {
         std::istringstream stream(line);

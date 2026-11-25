@@ -13,6 +13,9 @@
 namespace molgr {
 namespace bind {
 
+/// Borrow a caller-owned OBMol by address; reject a null pointer before accessing atoms or bonds.
+/// @param mol_ptr Address of the caller-owned Open Babel molecule.
+/// @return Borrowed molecule pointer. A null address raises an exception.
 static OpenBabel::OBMol *require_obmol_ptr(intptr_t mol_ptr)
 {
     molgr::WarnUnsafeOpenBabelUse(
@@ -27,26 +30,32 @@ static OpenBabel::OBMol *require_obmol_ptr(intptr_t mol_ptr)
 
 void bind_stages(py::module_ &m)
 {
-    // These dev helpers operate on OBMol pointers owned by Python OpenBabel wrappers.
-    // Keep the GIL held while using those pointers and while constructing py::object results.
+    /// These dev helpers operate on OBMol pointers owned by Python OpenBabel wrappers.
+    /// Keep the GIL held while using those pointers and while constructing py::object results.
     const auto make_connections_ptr = [](intptr_t mol_ptr, double extra_tolerance_angstrom)
     {
         auto *mol = require_obmol_ptr(mol_ptr);
         return molgr::reconstruct::MakeConnections(*mol, extra_tolerance_angstrom);
     };
 
+    /// Python adapter for molgr::reconstruct::PreClean. Apply the stage to the borrowed graph and report
+    /// whether it changed.
     const auto pre_clean_ptr = [](intptr_t mol_ptr)
     {
         auto *mol = require_obmol_ptr(mol_ptr);
         return molgr::reconstruct::PreClean(*mol);
     };
 
+    /// Python adapter for molgr::reconstruct::FreshOmolChargeRadical. Apply the stage to the borrowed graph
+    /// and report whether it changed.
     const auto fresh_omol_charge_radical_ptr = [](intptr_t mol_ptr)
     {
         auto *mol = require_obmol_ptr(mol_ptr);
         return molgr::reconstruct::FreshOmolChargeRadical(*mol);
     };
 
+    /// Python adapter for molgr::reconstruct::AssignRadicalDots. Return the local active-electron deficit
+    /// at the one-based atom index.
     const auto assign_radical_dots_ptr = [](intptr_t mol_ptr, int atom_idx) -> int
     {
         auto *mol = require_obmol_ptr(mol_ptr);
@@ -58,6 +67,8 @@ void bind_stages(py::module_ &m)
         return molgr::reconstruct::AssignRadicalDots(*atom);
     };
 
+    /// Python adapter for molgr::reconstruct::AssignChargeRadicalForAtom. Apply the stage to the borrowed
+    /// graph and report whether it changed.
     const auto assign_charge_radical_for_atom_ptr = [](intptr_t mol_ptr, int atom_idx)
     {
         auto *mol = require_obmol_ptr(mol_ptr);
@@ -69,12 +80,16 @@ void bind_stages(py::module_ &m)
         return molgr::reconstruct::AssignChargeRadicalForAtom(*atom);
     };
 
+    /// Python adapter for molgr::reconstruct::ValidateOmol. Return whether the borrowed graph satisfies
+    /// both electronic targets.
     const auto validate_omol_ptr = [](intptr_t mol_ptr, int total_charge, int total_radical) -> bool
     {
         auto *mol = require_obmol_ptr(mol_ptr);
         return molgr::reconstruct::ValidateOmol(*mol, total_charge, total_radical);
     };
 
+    /// Python adapter for molgr::reconstruct::Eliminate13DipolePostive. Return the outstanding charge and
+    /// whether the graph changed.
     const auto eliminate_1_3_dipole_postive_ptr = [](intptr_t mol_ptr,
                                                        int given_charge) -> py::tuple
     {
@@ -83,6 +98,8 @@ void bind_stages(py::module_ &m)
         return py::make_tuple(given_charge, hit);
     };
 
+    /// Python adapter for molgr::reconstruct::EliminatePositiveCharges. Return the outstanding charge and
+    /// whether the graph changed.
     const auto eliminate_positive_charges_ptr = [](intptr_t mol_ptr, int given_charge) -> py::tuple
     {
         auto *mol = require_obmol_ptr(mol_ptr);
@@ -90,6 +107,8 @@ void bind_stages(py::module_ &m)
         return py::make_tuple(given_charge, hit);
     };
 
+    /// Python adapter for molgr::reconstruct::EliminateNegativeCharges. Return the outstanding charge and
+    /// whether the graph changed.
     const auto eliminate_negative_charges_ptr = [](
         intptr_t mol_ptr,
         int given_charge,
@@ -103,6 +122,8 @@ void bind_stages(py::module_ &m)
         return py::make_tuple(given_charge, hit);
     };
 
+    /// Python adapter for molgr::reconstruct::EliminatePossibleCPLikeRadicalAnion. Return the outstanding
+    /// charge and whether the graph changed.
     const auto eliminate_possible_cp_like_radical_anion_ptr = [](
                                                                  intptr_t mol_ptr,
                                                                  int given_charge,
@@ -116,6 +137,8 @@ void bind_stages(py::module_ &m)
         return py::make_tuple(given_charge, hit);
     };
 
+    /// Python adapter for molgr::reconstruct::EliminateNNN. Return the outstanding charge and whether the
+    /// graph changed.
     const auto eliminate_nnn_ptr = [](intptr_t mol_ptr, int given_charge, bool positive) -> py::tuple
     {
         auto *mol = require_obmol_ptr(mol_ptr);
@@ -123,6 +146,8 @@ void bind_stages(py::module_ &m)
         return py::make_tuple(given_charge, hit);
     };
 
+    /// Python adapter for molgr::reconstruct::EliminateHighPositiveChargeAtoms. Return the outstanding
+    /// charge and whether the graph changed.
     const auto eliminate_high_positive_charge_atoms_ptr = [](intptr_t mol_ptr, int given_charge) -> py::tuple
     {
         auto *mol = require_obmol_ptr(mol_ptr);
@@ -130,6 +155,8 @@ void bind_stages(py::module_ &m)
         return py::make_tuple(given_charge, hit);
     };
 
+    /// Python adapter for molgr::reconstruct::EliminateCarboxyl. Return the outstanding charge and whether
+    /// the graph changed.
     const auto eliminate_carboxyl_ptr = [](intptr_t mol_ptr, int given_charge) -> py::tuple
     {
         auto *mol = require_obmol_ptr(mol_ptr);
@@ -137,6 +164,8 @@ void bind_stages(py::module_ &m)
         return py::make_tuple(given_charge, hit);
     };
 
+    /// Python adapter for molgr::reconstruct::EliminateCarbeneNeighborHeteroatom. Return the outstanding
+    /// charge and whether the graph changed.
     const auto eliminate_carbene_neighbor_heteroatom_ptr = [](intptr_t mol_ptr, int given_charge) -> py::tuple
     {
         auto *mol = require_obmol_ptr(mol_ptr);
@@ -144,36 +173,48 @@ void bind_stages(py::module_ &m)
         return py::make_tuple(given_charge, hit);
     };
 
+    /// Python adapter for molgr::reconstruct::CleanResonances. Apply the stage to the borrowed graph and
+    /// report whether it changed.
     const auto clean_resonances_ptr = [](intptr_t mol_ptr)
     {
         auto *mol = require_obmol_ptr(mol_ptr);
         return molgr::reconstruct::CleanResonances(*mol);
     };
 
+    /// Python adapter for molgr::reconstruct::CleanResonances14. Apply the stage to the borrowed graph and
+    /// report whether it changed.
     const auto clean_resonances_14_ptr = [](intptr_t mol_ptr)
     {
         auto *mol = require_obmol_ptr(mol_ptr);
         return molgr::reconstruct::CleanResonances14(*mol);
     };
 
+    /// Python adapter for molgr::reconstruct::CleanResonances16. Apply the stage to the borrowed graph and
+    /// report whether it changed.
     const auto clean_resonances_16_ptr = [](intptr_t mol_ptr)
     {
         auto *mol = require_obmol_ptr(mol_ptr);
         return molgr::reconstruct::CleanResonances16(*mol);
     };
 
+    /// Python adapter for molgr::reconstruct::CleanResonances17. Apply the stage to the borrowed graph and
+    /// report whether it changed.
     const auto clean_resonances_17_ptr = [](intptr_t mol_ptr)
     {
         auto *mol = require_obmol_ptr(mol_ptr);
         return molgr::reconstruct::CleanResonances17(*mol);
     };
 
+    /// Python adapter for molgr::reconstruct::CleanResonances18. Apply the stage to the borrowed graph and
+    /// report whether it changed.
     const auto clean_resonances_18_ptr = [](intptr_t mol_ptr)
     {
         auto *mol = require_obmol_ptr(mol_ptr);
         return molgr::reconstruct::CleanResonances18(*mol);
     };
 
+    /// Python adapter for molgr::reconstruct::CleanNeighborRadicals. Apply the stage to the borrowed graph
+    /// and report whether it changed.
     const auto clean_neighbor_radicals_ptr = [](
                                                   intptr_t mol_ptr,
                                                   int given_charge,
@@ -186,6 +227,8 @@ void bind_stages(py::module_ &m)
             total_radical_electrons);
     };
 
+    /// Python adapter for molgr::reconstruct::Clean14Radicals. Apply the stage to the borrowed graph and
+    /// report whether it changed.
     const auto clean_1_4_radicals_ptr = [](
                                              intptr_t mol_ptr,
                                              int given_charge,
@@ -198,6 +241,8 @@ void bind_stages(py::module_ &m)
             total_radical_electrons);
     };
 
+    /// Python adapter for molgr::reconstruct::Clean16Radicals. Apply the stage to the borrowed graph and
+    /// report whether it changed.
     const auto clean_1_6_radicals_ptr = [](
                                              intptr_t mol_ptr,
                                              int given_charge,
@@ -210,6 +255,8 @@ void bind_stages(py::module_ &m)
             total_radical_electrons);
     };
 
+    /// Python adapter for molgr::reconstruct::CleanPossible13Dipole. Apply the stage to the borrowed graph
+    /// and report whether it changed.
     const auto clean_possible_1_3_dipole_ptr = [](
                                                   intptr_t mol_ptr,
                                                   int given_charge,
@@ -222,18 +269,24 @@ void bind_stages(py::module_ &m)
             total_radical_electrons);
     };
 
+    /// Python adapter for molgr::reconstruct::CleanCarbeneNeighborUnsaturated. Apply the stage to the
+    /// borrowed graph and report whether it changed.
     const auto clean_carbene_neighbor_unsaturated_ptr = [](intptr_t mol_ptr)
     {
         auto *mol = require_obmol_ptr(mol_ptr);
         return molgr::reconstruct::CleanCarbeneNeighborUnsaturated(*mol);
     };
 
+    /// Python adapter for molgr::reconstruct::BreakDeformedEne. Apply the stage to the borrowed graph and
+    /// report whether it changed.
     const auto break_deformed_ene_ptr = [](intptr_t mol_ptr, int given_charge, int given_radical, double tolerance)
     {
         auto *mol = require_obmol_ptr(mol_ptr);
         return molgr::reconstruct::BreakDeformedEne(*mol, given_charge, given_radical, tolerance);
     };
 
+    /// Python adapter for molgr::reconstruct::BreakOneBond. Return the outstanding charge and whether the
+    /// graph changed.
     const auto break_one_bond_ptr = [](intptr_t mol_ptr, int given_charge, int given_radical) -> py::tuple
     {
         auto *mol = require_obmol_ptr(mol_ptr);
@@ -251,7 +304,7 @@ void bind_stages(py::module_ &m)
         "make_connections_ptr",
         make_connections_ptr,
         R"pbdoc(
-Apply preprocess.make_connections to an existing OBMol.
+Remove overlong seed bonds and reconnect partners using their updated valences.
 
 Args:
     mol_ptr: int address of OpenBabel::OBMol
@@ -264,7 +317,7 @@ Args:
         "pre_clean_ptr",
         pre_clean_ptr,
         R"pbdoc(
-Apply preprocess.pre_clean to an existing OBMol.
+Normalize labile seed bonds and charge-separated groups before assigning electrons.
 )pbdoc",
         py::arg("mol_ptr"));
 
@@ -287,7 +340,7 @@ Args:
         "fresh_omol_charge_radical_ptr",
         fresh_omol_charge_radical_ptr,
         R"pbdoc(
-Apply fresh.fresh_omol_charge_radical to an existing OBMol.
+Apply local charge/electron rebuilding independently to every atom.
 )pbdoc",
         py::arg("mol_ptr"));
 
@@ -321,7 +374,7 @@ Args:
         "eliminate_1_3_dipole_postive_ptr",
         eliminate_1_3_dipole_postive_ptr,
         R"pbdoc(
-Apply eliminate.eliminate_1_3_dipole_postive to an existing OBMol.
+Use positive-charge budget to close a bond in a 1,3-dipole motif.
 
 Args:
     mol_ptr: int address of OpenBabel::OBMol
@@ -334,7 +387,7 @@ Args:
         "eliminate_positive_charges_ptr",
         eliminate_positive_charges_ptr,
         R"pbdoc(
-Apply eliminate.eliminate_positive_charges to an existing OBMol.
+Consume classified electron sources into positive formal charge.
 
 Args:
     mol_ptr: int address of OpenBabel::OBMol
@@ -347,7 +400,7 @@ Args:
         "eliminate_negative_charges_ptr",
         eliminate_negative_charges_ptr,
         R"pbdoc(
-Apply eliminate.eliminate_negative_charges to an existing OBMol.
+Consume classified electron sources into negative formal charge.
 
 Args:
     mol_ptr: int address of OpenBabel::OBMol
@@ -363,7 +416,7 @@ Args:
         "eliminate_possible_cp_like_radical_anion_ptr",
         eliminate_possible_cp_like_radical_anion_ptr,
         R"pbdoc(
-Apply eliminate.eliminate_possible_cp_like_radical_anion to an existing OBMol.
+Localize an excess cyclopentadienyl-like radical as an aromatic anion.
 
 Args:
     mol_ptr: int address of OpenBabel::OBMol
@@ -378,7 +431,7 @@ Args:
         "eliminate_nnn_ptr",
         eliminate_nnn_ptr,
         R"pbdoc(
-Apply eliminate.eliminate_nnn to an existing OBMol.
+Close N-N-N motifs using explicitly classified endpoint electrons.
 
 Args:
     mol_ptr: int address of OpenBabel::OBMol
@@ -393,7 +446,7 @@ Args:
         "eliminate_high_positive_charge_atoms_ptr",
         eliminate_high_positive_charge_atoms_ptr,
         R"pbdoc(
-Apply eliminate.eliminate_high_positive_charge_atoms to an existing OBMol.
+Neutralize positive centers from their most electronegative neighbors.
 
 Args:
     mol_ptr: int address of OpenBabel::OBMol
@@ -406,7 +459,7 @@ Args:
         "eliminate_carboxyl_ptr",
         eliminate_carboxyl_ptr,
         R"pbdoc(
-Apply eliminate.eliminate_carboxyl to an existing OBMol.
+Convert a carboxyl-like oxygen monoradical into an O- center.
 
 Args:
     mol_ptr: int address of OpenBabel::OBMol
@@ -419,7 +472,7 @@ Args:
         "eliminate_carbene_neighbor_heteroatom_ptr",
         eliminate_carbene_neighbor_heteroatom_ptr,
         R"pbdoc(
-Apply eliminate.eliminate_carbene_neighbor_heteroatom to an existing OBMol.
+Close an unresolved two-electron center with a heteroatom donor.
 
 Args:
     mol_ptr: int address of OpenBabel::OBMol
@@ -432,7 +485,7 @@ Args:
         "clean_resonances_ptr",
         clean_resonances_ptr,
         R"pbdoc(
-Apply clean.clean_resonances to an existing OBMol.
+Run the ordered resonance normalization rule set after candidate generation.
 )pbdoc",
         py::arg("mol_ptr"));
 
@@ -440,7 +493,7 @@ Apply clean.clean_resonances to an existing OBMol.
         "clean_resonances_14_ptr",
         clean_resonances_14_ptr,
         R"pbdoc(
-Apply clean.clean_resonances_14 to an existing OBMol.
+Neutralize the rule-14 triple-bond ion pair and rebuild both endpoints.
 )pbdoc",
         py::arg("mol_ptr"));
 
@@ -448,7 +501,7 @@ Apply clean.clean_resonances_14 to an existing OBMol.
         "clean_resonances_16_ptr",
         clean_resonances_16_ptr,
         R"pbdoc(
-Apply clean.clean_resonances_16 to an existing OBMol.
+Neutralize the rule-16 conjugated ion pair and rebuild both endpoints.
 )pbdoc",
         py::arg("mol_ptr"));
 
@@ -456,7 +509,7 @@ Apply clean.clean_resonances_16 to an existing OBMol.
         "clean_resonances_17_ptr",
         clean_resonances_17_ptr,
         R"pbdoc(
-Apply clean.clean_resonances_17 to an existing OBMol.
+Replace a ring allene with its charge-shifted conjugated resonance form.
 )pbdoc",
         py::arg("mol_ptr"));
 
@@ -464,7 +517,7 @@ Apply clean.clean_resonances_17 to an existing OBMol.
         "clean_resonances_18_ptr",
         clean_resonances_18_ptr,
         R"pbdoc(
-Apply clean.clean_resonances_18 to an existing OBMol.
+Convert an unresolved terminal diazene fragment to a charge-separated azide.
 )pbdoc",
         py::arg("mol_ptr"));
 
@@ -482,7 +535,7 @@ Convert an eligible excess-radical fragment into a neutral 1,3-dipole.
         "clean_neighbor_radicals_ptr",
         clean_neighbor_radicals_ptr,
         R"pbdoc(
-Apply clean.clean_neighbor_radicals to an existing OBMol.
+Resolve adjacent radical-compatible electron states.
 )pbdoc",
         py::arg("mol_ptr"),
         py::arg("given_charge"),
@@ -492,7 +545,7 @@ Apply clean.clean_neighbor_radicals to an existing OBMol.
         "clean_1_4_radicals_ptr",
         clean_1_4_radicals_ptr,
         R"pbdoc(
-Apply clean.clean_1_4_radicals to an existing OBMol.
+Resolve separated terminal radicals or unresolved electron centers.
 )pbdoc",
         py::arg("mol_ptr"),
         py::arg("given_charge"),
@@ -502,7 +555,7 @@ Apply clean.clean_1_4_radicals to an existing OBMol.
         "clean_1_6_radicals_ptr",
         clean_1_6_radicals_ptr,
         R"pbdoc(
-Apply clean.clean_1_6_radicals to an existing OBMol.
+Resolve terminal electron states across an alternating six-atom path.
 )pbdoc",
         py::arg("mol_ptr"),
         py::arg("given_charge"),
@@ -512,7 +565,7 @@ Apply clean.clean_1_6_radicals to an existing OBMol.
         "clean_carbene_neighbor_unsaturated_ptr",
         clean_carbene_neighbor_unsaturated_ptr,
         R"pbdoc(
-Apply clean.clean_carbene_neighbor_unsaturated to an existing OBMol.
+Move an unresolved two-electron center through an adjacent pi bond.
 )pbdoc",
         py::arg("mol_ptr"));
 
@@ -520,7 +573,7 @@ Apply clean.clean_carbene_neighbor_unsaturated to an existing OBMol.
         "break_deformed_ene_ptr",
         break_deformed_ene_ptr,
         R"pbdoc(
-Apply break_bond.break_deformed_ene to an existing OBMol.
+Homolytically reduce deformed multiple bonds by one bond-order unit.
 
 Args:
     mol_ptr: int address of OpenBabel::OBMol
@@ -537,7 +590,7 @@ Args:
         "break_one_bond_ptr",
         break_one_bond_ptr,
         R"pbdoc(
-Apply break_bond.break_one_bond to an existing OBMol.
+Apply last-resort homolytic and charge-transfer bond-breaking templates.
 
 Args:
     mol_ptr: int address of OpenBabel::OBMol

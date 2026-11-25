@@ -30,16 +30,25 @@ namespace
     constexpr std::size_t kDefaultForceFieldCacheMaxSize = 4096;
     using Clock = std::chrono::steady_clock;
 
+    /// Access a molecule through Open Babel's non-const inspection API.
+    /// @param mol Molecular graph supplying the coordinates, connectivity and atom labels.
+    /// @return Borrowed mutable reference to the same molecule.
     OpenBabel::OBMol &MutableMol(const OpenBabel::OBMol &mol)
     {
         return const_cast<OpenBabel::OBMol &>(mol);
     }
 
+    /// Quantize a coordinate to the integer grid used in force-field cache keys.
+    /// @param value Cartesian coordinate in angstroms.
+    /// @return Integer coordinate used when comparing scoring fingerprints.
     std::int64_t QuantizedCoordinate(double value)
     {
         return static_cast<std::int64_t>(std::llround(value * kCoordinateScale));
     }
 
+    /// Normalize the case of a force-field name or energy unit for comparison.
+    /// @param value Name to convert to lowercase.
+    /// @return Normalized string.
     std::string Lowercase(std::string value)
     {
         std::transform(
@@ -53,6 +62,9 @@ namespace
         return value;
     }
 
+    /// Normalize the case of a force-field name or energy unit for comparison.
+    /// @param value Name to convert to uppercase.
+    /// @return Normalized string.
     std::string Uppercase(std::string value)
     {
         std::transform(
@@ -66,6 +78,9 @@ namespace
         return value;
     }
 
+    /// Strip surrounding whitespace from the supplied string.
+    /// @param value String to trim.
+    /// @return Normalized string.
     std::string Trim(const std::string &value)
     {
         const auto begin = std::find_if_not(
@@ -89,6 +104,9 @@ namespace
         return std::string(begin, end);
     }
 
+    /// @param raw_energy Energy in the evaluator's reported unit.
+    /// @param raw_unit Unit accompanying the calculated energy.
+    /// @return The energy in kJ/mol after interpreting the force field's reported unit.
     double ForceFieldEnergyToKjMol(double raw_energy, const std::string &raw_unit)
     {
         const std::string unit = Lowercase(Trim(raw_unit));
@@ -103,6 +121,9 @@ namespace
         throw std::runtime_error("Unsupported force-field energy unit: " + raw_unit);
     }
 
+    /// Count atoms other than hydrogen in the molecular graph.
+    /// @param mol Molecular graph on which the operation acts.
+    /// @return Number of atoms with atomic number other than one.
     int CountHeavyAtoms(OpenBabel::OBMol &mol)
     {
         int count = 0;
@@ -120,6 +141,8 @@ namespace
     void AppendValue(std::string &out, std::int64_t value);
     void AppendValue(std::string &out, bool value);
 
+    /// @param force_field Force field to prepare for evaluation.
+    /// @return A new evaluator for a supported force field, or null for an unsupported name.
     std::unique_ptr<OpenBabel::MolgrForceFieldUFF> MakeForceFieldInstance(
         const std::string &force_field)
     {
@@ -130,6 +153,7 @@ namespace
         return std::make_unique<OpenBabel::MolgrForceFieldUFF>();
     }
 
+    /// Reusable force-field instance and the setup fingerprints last applied on this thread.
     struct ReusableForceField
     {
         std::unique_ptr<OpenBabel::MolgrForceFieldUFF> instance;
@@ -137,6 +161,9 @@ namespace
         std::string last_openbabel_setup_key;
     };
 
+    /// Encode the topology properties that Open Babel uses when deciding whether to reuse setup.
+    /// @param mol Molecular graph supplying the coordinates, connectivity and atom labels.
+    /// @return Molecular fingerprint for deciding whether force-field setup can be reused.
     std::string BuildOpenBabelSetupKey(const OpenBabel::OBMol &mol)
     {
         OpenBabel::OBMol &mutable_mol = MutableMol(mol);
@@ -174,6 +201,9 @@ namespace
         return key;
     }
 
+    /// Encode the full molecular typing environment relevant to a reusable UFF setup.
+    /// @param mol Molecular graph supplying the coordinates, connectivity and atom labels.
+    /// @return Molecular fingerprint for deciding whether force-field setup can be reused.
     std::string BuildExactForceFieldSetupKey(const OpenBabel::OBMol &mol)
     {
         OpenBabel::OBMol &mutable_mol = MutableMol(mol);
@@ -238,6 +268,8 @@ namespace
         return key;
     }
 
+    /// @param force_field Force field to prepare for evaluation.
+    /// @return The current thread's reusable evaluator for this force-field name.
     ReusableForceField &ThreadLocalForceField(
         const std::string &force_field)
     {
@@ -257,6 +289,12 @@ namespace
         return entry;
     }
 
+    /// Detect an exact typing-environment change that Open Babel's setup fingerprint would miss.
+    /// @param last_exact_setup_key Exact molecular typing-environment fingerprint for this setup.
+    /// @param last_openbabel_setup_key Topology fingerprint used by the Open Babel setup check.
+    /// @param exact_setup_key Exact molecular typing-environment fingerprint for this setup.
+    /// @param openbabel_setup_key Topology fingerprint used by the Open Babel setup check.
+    /// @return True when the reusable evaluator needs an explicit reset.
     bool ShouldResetForceFieldForSetup(
         const std::string &last_exact_setup_key,
         const std::string &last_openbabel_setup_key,
@@ -268,6 +306,8 @@ namespace
                last_openbabel_setup_key == openbabel_setup_key;
     }
 
+    /// Invalidate the force-field setup before the next molecular evaluation.
+    /// @param force_field Force field to prepare for evaluation.
     void ResetForceFieldSetup(OpenBabel::OBForceField &force_field)
     {
         // OpenBabel's coarse setup check ignores some graph and charge details.
@@ -276,6 +316,10 @@ namespace
         force_field.Setup(empty_mol);
     }
 
+    /// Reset stale setup data when a cached evaluator would otherwise reuse the wrong atom typing.
+    /// @param entry Thread-local evaluator and its most recent setup fingerprints.
+    /// @param exact_setup_key Exact molecular typing-environment fingerprint for this setup.
+    /// @param openbabel_setup_key Topology fingerprint used by the Open Babel setup check.
     void PrepareReusableForceFieldForSetup(
         ReusableForceField &entry,
         const std::string &exact_setup_key,
@@ -296,26 +340,40 @@ namespace
         entry.last_openbabel_setup_key.clear();
     }
 
+    /// Append a field delimiter to the molecular score key.
+    /// @param out Buffer to which the encoded field is appended.
     void AppendSeparator(std::string &out)
     {
         out.push_back('|');
     }
 
+    /// Encode one field in the force-field score key.
+    /// @param out Buffer to which the encoded field is appended.
+    /// @param value Field value to append to the key.
     void AppendValue(std::string &out, int value)
     {
         out += std::to_string(value);
     }
 
+    /// Encode one field in the force-field score key.
+    /// @param out Buffer to which the encoded field is appended.
+    /// @param value Field value to append to the key.
     void AppendValue(std::string &out, std::int64_t value)
     {
         out += std::to_string(value);
     }
 
+    /// Encode one field in the force-field score key.
+    /// @param out Buffer to which the encoded field is appended.
+    /// @param value Field value to append to the key.
     void AppendValue(std::string &out, bool value)
     {
         out.push_back(value ? '1' : '0');
     }
 
+    /// @param score_key Molecular fingerprint for reusing an evaluation with the same electronic state.
+    /// @param config Settings for the current reconstruction or scoring operation.
+    /// @return A cache key combining the molecular scoring environment and force-field settings.
     std::string BuildForceFieldEvaluationCacheKeyFromScoreKey(
         const std::string &score_key,
         const molgr::config::MolGRConfig &config)
@@ -326,6 +384,9 @@ namespace
         return key;
     }
 
+    /// @param mol Molecular graph supplying the coordinates, connectivity and atom labels.
+    /// @param config Settings for the current reconstruction or scoring operation.
+    /// @return A cache key combining the molecular scoring environment and force-field settings.
     std::string BuildForceFieldEvaluationCacheKey(
         const OpenBabel::OBMol &mol,
         const molgr::config::MolGRConfig &config)
@@ -335,6 +396,7 @@ namespace
             config);
     }
 
+    /// @return The shared bounded cache of force-field evaluations.
     molgr::utils::StringLruCache<molgr::scoring::ForceFieldEvaluation> &
     ForceFieldEvaluationCache()
     {
@@ -343,6 +405,10 @@ namespace
         return cache;
     }
 
+    /// Evaluate the configured force field directly and record setup, energy and failure information.
+    /// @param mol Molecular graph supplying the coordinates, connectivity and atom labels.
+    /// @param config Settings for the current reconstruction or scoring operation.
+    /// @return Force-field evaluation including energy and its unit.
     molgr::scoring::ForceFieldEvaluation EvaluateForceFieldUncached(
         const OpenBabel::OBMol &mol,
         const molgr::config::MolGRConfig &config)
@@ -602,6 +668,11 @@ namespace molgr
             return evaluation;
         }
 
+        /// Reuse a cached evaluation for the supplied molecular key or evaluate and cache the molecule.
+        /// @param mol Molecular graph supplying the coordinates, connectivity and atom labels.
+        /// @param score_key Molecular fingerprint for reusing an evaluation with the same electronic state.
+        /// @param config Settings for the current reconstruction or scoring operation.
+        /// @return Force-field evaluation including energy and its unit.
         ForceFieldEvaluation EvaluateForceFieldWithScoreKey(
             const OpenBabel::OBMol &mol,
             const std::string &score_key,

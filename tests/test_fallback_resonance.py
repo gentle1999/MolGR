@@ -63,10 +63,13 @@ def _make_radical_carbonyl_resonance_seed(*, target_radical: bool) -> pybel.Mole
 
 
 @pytest.mark.parametrize("target_radical", [False, True])
+@pytest.mark.parametrize("target_atomic_num", [6, 14])
 def test_radical_resonance_regenerates_deferred_two_electron_target_for_python_and_cpp(
     target_radical: bool,
+    target_atomic_num: int,
 ) -> None:
     seed = _make_radical_carbonyl_resonance_seed(target_radical=target_radical)
+    seed.OBMol.GetAtom(3).SetAtomicNum(target_atomic_num)
     python_states = get_radical_resonances(seed, max_depth=1)
 
     assert len(python_states) == 2
@@ -81,6 +84,7 @@ def test_radical_resonance_regenerates_deferred_two_electron_target_for_python_a
     from molgr import _core  # type: ignore
 
     cpp_seed = _make_radical_carbonyl_resonance_seed(target_radical=target_radical)
+    cpp_seed.OBMol.GetAtom(3).SetAtomicNum(target_atomic_num)
     cpp_ptrs = _core.dev.pipeline.resonance.get_radical_resonances_ptr(
         int(getattr(cpp_seed.OBMol, "this", cpp_seed.OBMol))
     )

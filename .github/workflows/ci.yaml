@@ -2,11 +2,9 @@ name: Build, Test, and Deploy
 
 on:
   push:
-    branches:
-      - "**"
+    branches: [main, develop]
   pull_request:
-    branches:
-      - main
+    branches: [main, develop]
   workflow_dispatch:
     inputs:
       build_release_wheels:
@@ -21,6 +19,10 @@ on:
         type: string
   release:
     types: [published]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -119,6 +121,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       UV_DEFAULT_INDEX: https://pypi.org/simple
+      TEST_SUITE: >-
+        ${{ (github.event_name == 'release' || github.event_name == 'workflow_dispatch' ||
+            (github.event_name == 'push' && matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'))
+            && 'full' || 'standard' }}
     strategy:
       fail-fast: false
       matrix:
@@ -136,7 +142,7 @@ jobs:
         run: sh scripts/ci_disable_proxy.sh
 
       - name: Set up Python ${{ matrix.python-version }} (GitHub)
-        if: ${{ env.ACT != 'true' }}
+        if: ${{ env.ACT != 'true' && !(runner.os == 'Linux' && (matrix.python-version == '3.8' || matrix.python-version == '3.9')) }}
         uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
@@ -157,8 +163,8 @@ jobs:
           PYPI_INDEX_URL: https://mirrors.zju.edu.cn/pypi/web/simple
         run: sh scripts/ci_install_uv.sh
 
-      - name: Set up Python ${{ matrix.python-version }} (act)
-        if: ${{ env.ACT == 'true' }}
+      - name: Install standalone Python ${{ matrix.python-version }}
+        if: ${{ env.ACT == 'true' || (runner.os == 'Linux' && (matrix.python-version == '3.8' || matrix.python-version == '3.9')) }}
         run: uv python install ${{ matrix.python-version }}
 
       - name: Create virtual environment
@@ -179,8 +185,13 @@ jobs:
         run: |
           uv run --no-sync --python ${{ matrix.python-version }} python -c "import molgr; import molgr._core"
 
-      - name: Run tests
+      - name: Run full suite with coverage
+        if: env.TEST_SUITE == 'full'
         run: uv run --no-sync --python ${{ matrix.python-version }} python -m pytest
+
+      - name: Run standard suite with representative fixtures
+        if: env.TEST_SUITE == 'standard'
+        run: uv run --no-sync --python ${{ matrix.python-version }} python -m pytest --no-cov -m "not exhaustive and not stress"
 
   build-release-wheels:
     needs: get-metadata

@@ -23,7 +23,7 @@ def clean_carbene_neighbor_unsaturated_ptr(
     mol_ptr: typing.SupportsInt | typing.SupportsIndex,
 ) -> bool:
     """
-    Apply clean.clean_carbene_neighbor_unsaturated to an existing OBMol.
+    Move an unresolved two-electron center through an adjacent pi bond.
     """
 
 def clean_neighbor_radicals_ptr(
@@ -56,17 +56,17 @@ def clean_possible_1_3_dipole_ptr(
 
 def clean_resonances_ptr(mol_ptr: typing.SupportsInt | typing.SupportsIndex) -> bool:
     """
-    Apply clean.clean_resonances to an existing OBMol.
+    Run the ordered resonance normalization rule set after candidate generation.
     """
 
 def clean_resonances_14_ptr(mol_ptr: typing.SupportsInt | typing.SupportsIndex) -> bool:
-    """Apply clean.clean_resonances_14 to an existing OBMol."""
+    """Neutralize the rule-14 triple-bond ion pair and rebuild both endpoints."""
 
 def clean_resonances_16_ptr(mol_ptr: typing.SupportsInt | typing.SupportsIndex) -> bool:
-    """Apply clean.clean_resonances_16 to an existing OBMol."""
+    """Neutralize the rule-16 conjugated ion pair and rebuild both endpoints."""
 
 def clean_resonances_17_ptr(mol_ptr: typing.SupportsInt | typing.SupportsIndex) -> bool:
-    """Apply clean.clean_resonances_17 to an existing OBMol."""
+    """Replace a ring allene with its charge-shifted conjugated resonance form."""
 
 def clean_resonances_18_ptr(mol_ptr: typing.SupportsInt | typing.SupportsIndex) -> bool:
-    """Apply clean.clean_resonances_18 to an existing OBMol."""
+    """Convert an unresolved terminal diazene fragment to a charge-separated azide."""

@@ -300,7 +300,6 @@ def test_cpp_acceleration_preset_enables_available_cpp_backend_switches() -> Non
     assert cpp_backend_config["enable_target_bucket_parallelism"] is True
     assert cpp_backend_config["enable_candidate_scoring_parallelism"] is False
     assert cpp_backend_config["enable_uff_atom_typing_cache"] is True
-    assert cpp_backend_config["enable_target_bucket_score_bundle_preheat"] is True
     assert cpp_backend_config["target_bucket_parallel_threshold"] == 1
     assert cpp_backend_config["target_bucket_parallel_max_threads"] is None
     assert cpp_backend_config["candidate_score_parallel_threshold"] == 32
@@ -364,7 +363,6 @@ def test_tmqmg_worker_applies_cpp_backend_config_before_running_methods(
             "enable_target_bucket_parallelism": True,
             "enable_candidate_scoring_parallelism": True,
             "enable_uff_atom_typing_cache": False,
-            "enable_target_bucket_score_bundle_preheat": True,
             "target_bucket_parallel_threshold": 4,
             "target_bucket_parallel_max_threads": 1,
             "candidate_score_parallel_threshold": 1,
@@ -378,7 +376,6 @@ def test_tmqmg_worker_applies_cpp_backend_config_before_running_methods(
     assert seen_configs[0].enable_target_bucket_parallelism is True
     assert seen_configs[0].enable_candidate_scoring_parallelism is True
     assert seen_configs[0].enable_uff_atom_typing_cache is False
-    assert seen_configs[0].enable_target_bucket_score_bundle_preheat is True
     assert seen_configs[0].target_bucket_parallel_threshold == 4
     assert seen_configs[0].target_bucket_parallel_max_threads == 1
 
@@ -991,29 +988,23 @@ def test_benchmark_default_budget_proves_native_abelok_resonance(scoring_runner)
     from molgr import MolGRConfig
     from molgr.interface import xyz_to_rdmol
     from molgr.utils.equivalence import EquivalenceDecision, evaluate_equivalence
+    from scripts.tmqmg_fixture_data import fixture as published_fixture
+    from scripts.tmqmg_fixture_data import reference_graph
 
-    fixtures = _PROJECT_ROOT / "tests" / "data" / "tmqmg" / "reconstruction"
-    with (fixtures / "manifest.csv").open() as handle:
-        fixture = next(row for row in csv.DictReader(handle) if row["case_id"] == "ABELOK")
+    fixture = published_fixture("ABELOK")
     config = MolGRConfig()
     config.cpp_backend.max_threads = 1
-    candidate = Chem.RemoveHs(
-        xyz_to_rdmol(
-            (fixtures / fixture["xyz_file"]).read_text(),
-            int(fixture["charge"]),
-            1,
-            backend="cpp",
-            config=config,
-        )
+    candidate = xyz_to_rdmol(
+        fixture["xyz"], fixture["charge"], fixture["multiplicity"], backend="cpp", config=config
     )
-    reference = Chem.MolFromSmiles(fixture["reference_smiles"])
+    reference = reference_graph("ABELOK")
     limited = evaluate_equivalence(reference, candidate, max_resonance=100)
-    assert limited.decision == EquivalenceDecision.INCONCLUSIVE
-    assert limited.bounded_search.limit_reached
+    assert limited.decision == EquivalenceDecision.EQUIVALENT
+    assert not limited.bounded_search.limit_reached
 
     result = scoring_runner(
         {
-            "case_idx": int(fixture["row_index"]),
+            "case_idx": fixture["input_index"],
             "input_smiles": fixture["reference_smiles"],
             "ground_truth_smiles": fixture["reference_smiles"],
             "ground_truth_rdmol": reference,

@@ -763,7 +763,7 @@ def test_live_candidate_payload_is_self_consistent_and_does_not_use_snapshot_cac
     assert live_payload["candidate_snapshot_smiles"] == "C"
     assert live_payload["live_matches_candidate_snapshot"] is False
     assert live_payload["live_candidate_equivalence_reason"] == (
-        "Not equivalent: heavy-atom element counts differ."
+        "Heavy-atom formulas differ."
     )
     assert live_payload["svg"] == "<svg>live</svg>"
     assert first_render["svg"] == "<svg>live</svg>"

@@ -7,10 +7,30 @@ def _smarts(pattern: str) -> pybel.Smarts:
     return pybel.Smarts(pattern)
 
 
-PREPROCESS_DONATE = _smarts("[Nv0,Cv1,Nv3,Clv1,Clv2,Clv3,Brv1,Brv2,Brv3,Iv1,Iv2,Iv3,Asv3,Sev2]")
-PREPROCESS_ACCEPT = _smarts(
-    "[Hv0,Bv2,Bv3,Cv0,Cv1,Cv2,Cv3,Nv1,Nv2,Ov0,Ov1,Clv0,Siv3,Pv2,Sv0,Sv1,Brv0,Iv0]"
+# The first two atoms identify the suspect single bond in the seed graph.
+LONG_SEED_BONDS = (
+    _smarts("[#14D4v4]-[#6D2v3]=[#8]"),
+    _smarts("[#15D4v4]-[#15D4v4]"),
 )
+
+# Each row matches the two atoms independently before a bond exists.
+OCTAHEDRAL_PHOSPHORUS_RULES = ((_smarts("[#15D5v5]"), _smarts("[#8v1,#6v3]")),)
+PRIMARY_CONNECTION_RULES = (
+    (
+        _smarts("[Nv0,Cv1,Nv3,Clv1,Clv2,Clv3,Brv1,Brv2,Brv3,Iv1,Iv2,Iv3,Asv3,Sev2]"),
+        _smarts("[Hv0,Bv2,Bv3,Cv0,Cv1,Cv2,Cv3,Nv1,Nv2,Ov0,Ov1,Clv0,Siv3,Pv2,Sv0,Sv1,Brv0,Iv0]"),
+    ),
+    (_smarts("[Pv2]"), _smarts("[Cv0,Cv1,Cv2,Cv3,Nv2]")),
+)
+SECONDARY_CONNECTION_RULES = (
+    (_smarts("[Ov1]"), _smarts("[Cv3]")),
+    (_smarts("[#34v3,#53v4,#53v5]"), _smarts("[Ov0,Ov1]")),
+)
+# Aggregate queries kept for callers that inspect candidate atoms.
+PREPROCESS_ACCEPT = PRIMARY_CONNECTION_RULES[0][1]
+PREPROCESS_DONATE = _smarts("[Nv0,Cv1,Nv3,Pv2,Clv1,Clv2,Clv3,Brv1,Brv2,Brv3,Iv1,Iv2,Iv3,Asv3,Sev2]")
+PREPROCESS_ADDITIONAL_DONORS = _smarts("[Ov1,#34v3,#53v4,#53v5]")
+
 PRE_CLEAN_HYPERVALENT = _smarts("[Cv5,Nv5,Pv5,Siv5]=,#[*]")
 # Open Babel may perceive sulfur in an aromatic heterocycle as ``s``. Match by
 # atomic number so an aromatic S=O bond still gets normalized to S-O before
@@ -18,7 +38,6 @@ PRE_CLEAN_HYPERVALENT = _smarts("[Cv5,Nv5,Pv5,Siv5]=,#[*]")
 PRE_CLEAN_HYPER_PI_BOND = _smarts("[#16,#15,#33,#9,#17,#35,#53]=,#[*]")
 PRE_CLEAN_BCP_RING_5 = _smarts("[#6]1([#6]2)([#6]3)[#7]23[#6]1")
 PRE_CLEAN_BCP_RING_4 = _smarts("[#6]1([#6]2)[#7]2[#6]1")
-PRE_CLEAN_SI_O_F = _smarts("[Siv5]-[O,F]")
 
 ELIM_HIGH_POSITIVE = _smarts("[*+1,*+2,*+3]-[Ov1+0,Nv2+0,Sv1+0]")
 ELIM_CARBOXYL = _smarts("[Ov1+0]-C=O")
@@ -147,11 +166,15 @@ __all__ = [
     "ELIM_POSITIVE_DIPOLE",
     "ELIM_POSITIVE_N",
     "PREPROCESS_ACCEPT",
+    "PREPROCESS_ADDITIONAL_DONORS",
     "PREPROCESS_DONATE",
+    "LONG_SEED_BONDS",
+    "OCTAHEDRAL_PHOSPHORUS_RULES",
+    "PRIMARY_CONNECTION_RULES",
+    "SECONDARY_CONNECTION_RULES",
     "PRE_CLEAN_BCP_RING_4",
     "PRE_CLEAN_BCP_RING_5",
     "PRE_CLEAN_HYPERVALENT",
-    "PRE_CLEAN_SI_O_F",
     "RESONANCE_ONE_STEP",
     "SCORING_CONJUGATION",
 ]

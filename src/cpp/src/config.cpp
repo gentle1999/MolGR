@@ -10,6 +10,10 @@ namespace molgr::config
 {
     namespace
     {
+        /// Read a required named attribute of a Python configuration object.
+        /// @param object Python configuration object providing the named attribute.
+        /// @param name Name of the requested field or counter.
+        /// @return Named attribute, converted to the requested native type where applicable.
         py::object RequiredAttr(py::handle object, const char *name)
         {
             if (object.is_none())
@@ -25,12 +29,20 @@ namespace molgr::config
             return py::reinterpret_borrow<py::object>(object.attr(name));
         }
 
+        /// Read a required named attribute of a Python configuration object.
+        /// @tparam T Native type required by the configuration schema.
+        /// @param object Python configuration object providing the named attribute.
+        /// @param name Name of the requested field or counter.
+        /// @return Named attribute, converted to the requested native type where applicable.
         template <typename T>
         T CastRequiredAttr(py::handle object, const char *name)
         {
             return RequiredAttr(object, name).cast<T>();
         }
 
+        /// @param object Python configuration object providing the named attribute.
+        /// @param name Name of the requested field or counter.
+        /// @return The configured integer, or an empty optional for Python None.
         std::optional<int> CastRequiredOptionalIntAttr(py::handle object, const char *name)
         {
             py::object value = RequiredAttr(object, name);
@@ -41,6 +53,9 @@ namespace molgr::config
             return value.cast<int>();
         }
 
+        /// @param config Settings for the current reconstruction or scoring operation.
+        /// @return The supplied Python configuration, falling back to the package configuration when
+        ///     omitted.
         py::object ResolvePythonConfig(py::handle config)
         {
             if (!config.is_none())
@@ -71,6 +86,9 @@ namespace molgr::config
         out.resonance.traversal_score = CastRequiredAttr<std::string>(
             resonance,
             "traversal_score");
+        out.resonance.neighbor_radical_max_discrepancy = CastRequiredAttr<int>(
+            resonance,
+            "neighbor_radical_max_discrepancy");
 
         py::object cpp_backend = RequiredAttr(resolved, "cpp_backend");
         out.cpp_backend.max_threads = CastRequiredOptionalIntAttr(
@@ -85,9 +103,6 @@ namespace molgr::config
         out.cpp_backend.enable_uff_atom_typing_cache = CastRequiredAttr<bool>(
             cpp_backend,
             "enable_uff_atom_typing_cache");
-        out.cpp_backend.enable_target_bucket_score_bundle_preheat = CastRequiredAttr<bool>(
-            cpp_backend,
-            "enable_target_bucket_score_bundle_preheat");
         out.cpp_backend.target_bucket_parallel_threshold = CastRequiredAttr<int>(
             cpp_backend,
             "target_bucket_parallel_threshold");
@@ -99,6 +114,8 @@ namespace molgr::config
             "candidate_score_parallel_threshold");
 
         py::object organic_topology = RequiredAttr(resolved, "organic_topology");
+        out.organic_topology.conjugation_min_plane_overlap =
+            CastRequiredAttr<double>(organic_topology, "conjugation_min_plane_overlap");
         out.organic_topology.conjugation_normalized_tetrahedron_volume_tolerance =
             CastRequiredAttr<double>(
                 organic_topology,

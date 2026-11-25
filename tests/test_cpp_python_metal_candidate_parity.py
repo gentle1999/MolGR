@@ -16,7 +16,7 @@ from openbabel import openbabel as ob
 
 from molgr import _core
 from molgr.config import MolGRConfig
-from molgr.fallback.pipeline import reconstruct_with_metals
+from molgr.fallback.pipeline import reconstruct_with_metals, reconstruct_without_metals
 from molgr.fallback.utils.electrons import (
     get_lone_pair_count,
     get_unpaired_electron_count,
@@ -24,27 +24,125 @@ from molgr.fallback.utils.electrons import (
 )
 from molgr.fallback.utils.force_field import organic_force_field_evaluation
 from molgr.fallback.utils.metals import preparation, scoring, search
-from molgr.fallback.utils.no_metals import neighbor_radicals as no_metal_neighbor_radicals
 from molgr.fallback.utils.no_metals import preparation as no_metal_preparation
-from molgr.fallback.utils.no_metals import resonance as no_metal_resonance
 from molgr.fallback.utils.no_metals import selection as no_metal_selection
 from molgr.fallback.utils.organic_topology import compute_organic_topology_metrics
 from molgr.interface import xyz_to_rdmol
+from scripts.tmqmg_fixture_data import fixture
 
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
-_TMQMG_DATA_DIR = (
-    _PROJECT_ROOT / ".local" / "datasets" / "tmqmg" / "e1dc9887b8f20a217a1db6ca972d726bcbaab45b"
-)
-_TMQMG_CSV = _TMQMG_DATA_DIR / "tmQMg_properties_and_targets.csv"
-_TMQMG_XYZ_DIR = _TMQMG_DATA_DIR / "tmQMg_xyz" / "xyz"
 _XYZ_FIXTURES = _PROJECT_ROOT / "tests/data/xyz"
 
 
-requires_local_tmqmg = pytest.mark.skipif(
-    not _TMQMG_CSV.exists() or not _TMQMG_XYZ_DIR.exists(),
-    reason="tmQMg local benchmark data is not available",
+def _assert_metal_selection_key_matches(
+    native: tuple[float, ...] | None, fallback: tuple[float, ...] | None
+) -> None:
+    """Allow rounding of the total score and compare the remaining ranking fields exactly."""
+    if fallback is None:
+        assert native is None
+        return
+    assert native is not None
+    # The total score precedes the final deterministic combination index.
+    assert native[:-2] == fallback[:-2]
+    assert native[-2] == pytest.approx(fallback[-2], rel=1e-14, abs=1e-12)
+    assert native[-1] == fallback[-1]
+
+
+@pytest.mark.parametrize(
+    "case_id,symbol,valence",
+    [
+        ("CENPAN", "Ta", 5),
+        ("XEMDEZ", "Ti", 4),
+        ("DERYUV", "Mo", 6),
+        ("HUPHOR", "Ir", 1),
+    ],
 )
+def test_terminal_hydrazido_seed_and_geometry_scoring_parity(case_id, symbol, valence):
+
+    if case_id == "CENPAN":
+        case = fixture(case_id)
+        xyz, charge = case["xyz"], case["charge"]
+    else:
+        case = next(c for c in _backend_parity_cases() if c["case_id"] == case_id)
+        xyz = (_PROJECT_ROOT / "tests/data/tmqmg/backend_parity" / case["xyz_file"]).read_text()
+        charge = int(case["charge"])
+    native = _core.dev.pipeline.reconstruct_with_metals.debug_scored_candidate_summaries(
+        xyz, charge, 0, config=MolGRConfig()
+    )
+    _, candidates, best = _python_scored_candidates(xyz, charge, 0)
+    assert best is not None
+    assert [(s.symbol, s.valence) for s in best.metal_states] == [(symbol, valence)]
+    assert len(native["candidates"]) == len(candidates)
+    for cpp, python in zip(native["candidates"], candidates):
+        assert tuple(cpp["no_metal_atom_signature"]) == _pybel_atom_signature(
+            python.no_metal_state.omol
+        )
+        assert tuple(cpp["no_metal_bond_signature"]) == _pybel_bond_signature(
+            python.no_metal_state.omol
+        )
+        assert cpp["selected"] == (python is best)
+        key = "metal_terminal_hydrazido_geometry_conflict_count"
+        assert cpp[key] == python.metadata[key]
+        assert (
+            cpp["metal_discordance_structural_count"]
+            == python.metadata["metal_discordance_structural_count"]
+        )
+    assert scoring.select_best_candidate(list(reversed(candidates))) is best
+    assert scoring.select_best_candidate(candidates) is best
+
+
+def test_cation_resonance_preselection_preserves_reviewed_zinc_state():
+    """A local carbocation contributor must not hide the accepted Zn(II) state."""
+
+    case = fixture("CEJDUU")
+    assert case is not None
+    xyz, charge = case["xyz"], case["charge"]
+    radicals = case["multiplicity"] - 1
+    native = _core.dev.pipeline.reconstruct_with_metals.debug_scored_candidate_summaries(
+        xyz, charge, radicals, config=MolGRConfig()
+    )
+    _, candidates, best = _python_scored_candidates(xyz, charge, radicals)
+    assert best is not None
+    assert [(s.symbol, s.valence) for s in best.metal_states] == [("Zn", 2)]
+    assert best.metadata["metal_discordance_unsaturated_organic_cation_count"] == 0
+    assert len(native["candidates"]) == len(candidates)
+    for cpp, python in zip(native["candidates"], candidates):
+        assert cpp["combination_index"] == python.metadata["combination_index"]
+        assert cpp["selected"] == (python is best)
+        assert (
+            cpp["metal_discordance_unsaturated_organic_cation_count"]
+            == python.metadata["metal_discordance_unsaturated_organic_cation_count"]
+        )
+
+
+@pytest.mark.parametrize(
+    "case_id, metal",
+    [("APOVOS", ("Ti", 4)), ("LUQXAZ", ("Fe", 2)), ("NUDRUZ", ("Ni", 2)), ("WEDVAF", ("Y", 3))],
+)
+def test_aryl_donor_nhc_candidate_preference_parity(case_id, metal):
+    """Geometry compares complete partners equally in both candidate pools."""
+
+    case = fixture(case_id)
+    xyz, charge, radicals = case["xyz"], case["charge"], case["multiplicity"] - 1
+    native = _core.dev.pipeline.reconstruct_with_metals.debug_scored_candidate_summaries(
+        xyz, charge, radicals, config=MolGRConfig()
+    )
+    _, candidates, best = _python_scored_candidates(xyz, charge, radicals)
+    assert best is not None
+    assert [(s.symbol, s.valence) for s in best.metal_states] == [metal]
+    assert len(native["candidates"]) == len(candidates)
+    for cpp, python in zip(native["candidates"], candidates):
+        assert cpp["combination_index"] == python.metadata["combination_index"]
+        ligand = python.no_metal_state.omol
+        assert tuple(cpp["no_metal_atom_signature"]) == _pybel_atom_signature(ligand)
+        assert tuple(cpp["no_metal_bond_signature"]) == _pybel_bond_signature(ligand)
+        assert cpp["selected"] == (python is best)
+        assert (
+            cpp["metal_discordance_structural_count"]
+            == python.metadata["metal_discordance_structural_count"]
+        )
+        assert cpp["score"] == pytest.approx(python.score)
 
 
 def test_338_s_mixed_metal_candidate_order_parity() -> None:
@@ -81,14 +179,284 @@ def test_338_s_mixed_metal_candidate_order_parity() -> None:
     assert [(s.symbol, s.valence) for s in best.metal_states] == [("Fe", 2), ("Pd", 2), ("Fe", 2)]
 
 
-def _load_tmqmg_row(case_idx: int) -> dict[str, str]:
-    with _TMQMG_CSV.open(newline="", encoding="utf-8") as handle:
-        rows = list(csv.DictReader(handle))
-    return rows[case_idx - 1]
+@pytest.mark.parametrize(
+    ("case_id", "charge"),
+    [
+        ("GUMBAS", 0),
+        ("OPAGES", 0),
+        ("ZUPYAN", 1),
+        ("BODFIJ", 0),
+        ("OXMTMI", 0),
+        ("BADGUL", 1),
+        ("KARMIZ", 0),
+        ("WECYUB", 0),
+    ],
+)
+def test_shared_seed_preserves_scored_candidate_parity(case_id: str, charge: int) -> None:
+    """Seed perception must agree before independent electronic-state searches."""
+    xyz = (_PROJECT_ROOT / "tests/data/tmqmg/reconstruction" / f"{case_id}.xyz").read_text()
+    cpp = _core.dev.pipeline.reconstruct_with_metals.debug_scored_candidate_summaries(
+        xyz, charge, 0, config=MolGRConfig()
+    )
+    layer, candidates, best = _python_scored_candidates(xyz, charge, 0)
+    assert best is not None
+    assert cpp["layer_index"] == layer
+    assert len(cpp["candidates"]) == len(candidates)
+    for native, fallback in zip(cpp["candidates"], candidates):
+        assert native["combination_index"] == fallback.metadata["combination_index"]
+        assert tuple(native["no_metal_atom_signature"]) == _pybel_atom_signature(
+            fallback.no_metal_state.omol
+        )
+        assert tuple(native["no_metal_bond_signature"]) == _pybel_bond_signature(
+            fallback.no_metal_state.omol
+        )
+        assert native["score"] == pytest.approx(fallback.score)
+        if native["selection_key"] is not None:
+            assert native["selection_key"] == pytest.approx(fallback.metadata["selection_key"])
+        assert native["selected"] == (fallback is best)
+
+
+def _backend_parity_cases() -> list[dict[str, str]]:
+    path = _PROJECT_ROOT / "tests/data/tmqmg/backend_parity/manifest.csv"
+    with path.open(newline="", encoding="utf-8") as handle:
+        return list(csv.DictReader(handle))
+
+
+def test_on_seesaw_phosphoranide_avoids_reducing_aryl_rings() -> None:
+    """Explore the phosphoranide without treating a pending standard as approved.
+
+    The same ligand combination is reported as a Pd(II) phosphoranide complex
+    in doi:10.1016/j.ica.2019.119239. Geometry opens the alternative; the normal
+    charge/spin search selects it without changing scoring weights.
+    """
+    xyz = (_PROJECT_ROOT / "tests/data/tmqmg/backend_parity/BUBNUK.xyz").read_text()
+    source = Chem.MolFromXYZBlock(xyz)
+    results = []
+    for backend in ("python", "cpp"):
+        result = xyz_to_rdmol(xyz, 0, 1, backend=backend)
+        assert [a.GetAtomicNum() for a in result.GetAtoms()] == [
+            a.GetAtomicNum() for a in source.GetAtoms()
+        ]
+        assert sum(a.GetAtomicNum() == 1 for a in result.GetAtoms()) == 29
+        assert all(a.GetNumImplicitHs() == 0 for a in result.GetAtoms())
+        assert Chem.GetFormalCharge(result) == 0
+        assert sum(a.GetNumRadicalElectrons() for a in result.GetAtoms()) == 0
+        assert [a.GetFormalCharge() for a in result.GetAtoms() if a.GetAtomicNum() == 46] == [2]
+        assert sorted(a.GetFormalCharge() for a in result.GetAtoms() if a.GetAtomicNum() == 15) == [
+            -1,
+            0,
+        ]
+        assert all(a.GetFormalCharge() == 0 for a in result.GetAtoms() if a.GetAtomicNum() == 6)
+        for i in range(source.GetNumAtoms()):
+            assert tuple(result.GetConformer().GetAtomPosition(i)) == pytest.approx(
+                tuple(source.GetConformer().GetAtomPosition(i)), abs=1e-8
+            )
+        Chem.RemoveStereochemistry(result)
+        results.append(Chem.MolToSmiles(result))
+    assert results[0] == results[1]
+
+
+@pytest.mark.parametrize("case", _backend_parity_cases(), ids=lambda case: case["case_id"])
+def test_recovery_candidates_and_final_graph_match_between_backends(
+    case: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Check production recovery paths without treating either graph as a reference."""
+    xyz = (_PROJECT_ROOT / "tests/data/tmqmg/backend_parity" / case["xyz_file"]).read_text()
+    charge = int(case["charge"])
+    config = MolGRConfig()
+    config.cpp_backend.max_threads = 1
+    cpp = _core.dev.pipeline.reconstruct_with_metals.debug_scored_candidate_summaries(
+        xyz, charge, 0, config=config
+    )
+    captured = []
+    select = scoring.select_best_candidate
+
+    def capture(candidates, **kwargs):
+        best = select(candidates, **kwargs)
+        captured.extend(candidates)
+        return best
+
+    monkeypatch.setattr(scoring, "select_best_candidate", capture)
+    best = reconstruct_with_metals.xyz2omol_state(xyz, charge, 0, config=config)
+    monkeypatch.setattr(scoring, "select_best_candidate", select)
+    assert best is not None
+    assert len(cpp["candidates"]) == len(captured) > 0
+    for native, fallback in zip(cpp["candidates"], captured):
+        assert native["combination_index"] == fallback.metadata["combination_index"]
+        assert tuple(native["no_metal_atom_signature"]) == _pybel_atom_signature(
+            fallback.no_metal_state.omol
+        )
+        assert tuple(native["no_metal_bond_signature"]) == _pybel_bond_signature(
+            fallback.no_metal_state.omol
+        )
+        assert native["score"] == pytest.approx(fallback.score)
+        if native["selection_key"] is None:
+            assert fallback.metadata.get("selection_key") is None
+        else:
+            assert native["selection_key"] == pytest.approx(fallback.metadata["selection_key"])
+        for key in (
+            "metal_discordance_long_carbonyl_multiple_bond_count",
+            "metal_discordance_short_carbonyl_reduction_count",
+            "metal_discordance_long_dioxygen_multiple_bond_count",
+        ):
+            assert native[key] == fallback.metadata[key]
+        assert native["selected"] == (
+            fallback.metadata["combination_index"] == best.metadata["combination_index"]
+        )
+
+    results = [
+        _canonical_reconstructed_smiles(
+            xyz,
+            backend=backend,
+            total_charge=charge,
+            total_radical_electrons=0,
+            config=config,
+        )
+        for backend in ("cpp", "python")
+    ]
+    assert results[0] == results[1]
 
 
 def _load_tmqmg_xyz(case_id: str) -> str:
-    return (_TMQMG_XYZ_DIR / f"{case_id}.xyz").read_text(encoding="utf-8")
+    return fixture(case_id)["xyz"]
+
+
+@pytest.mark.parametrize(
+    ("case_id", "pairs", "order", "charges", "metal_charge"),
+    [
+        ("BOWPEL", [(14, 52), (33, 54)], 2, (0, 0), 2),
+        ("EGEHIJ", [(6, 73)], 2, (0, 0), 3),
+        ("GOHCOY", [(3, 10)], 2, (0, 0), 2),
+        ("JAYGEV", [(1, 24)], 2, (0, 0), 0),
+        ("YEVWAX", [(1, 2), (15, 16)], 1, (-1, -1), 6),
+        ("ALUSEI", [(42, 43)], 1, (-1, -1), 4),
+        ("FOXZOH", [(1, 2), (3, 4)], 1, (-1, -1), 6),
+        ("RITCIG", [(1, 16)], 1, (-1, -1), 4),
+        ("FUDRIF", [(5, 7), (6, 10)], 1, (-1, -1), 6),
+        ("TILXIX", [(2, 5), (3, 18)], 1, (-1, -1), 6),
+        ("KUPMOX", [(5, 8)], 1, (-1, -1), 6),
+        ("SIPDEB", [(5, 6)], 1, (-1, -1), 4),
+        ("AVEPEW", [(6, 43), (5, 9)], 1, (-1, -1), 4),
+        ("COCJOT", [(1, 2), (4, 5)], 1, (-1, -1), 4),
+        ("XASJEK", [(2, 12)], 1, (-1, -1), 2),
+    ],
+)
+def test_carbonyl_and_peroxide_local_reconstruction(case_id, pairs, order, charges, metal_charge):
+    """Assert the affected local structures without approving the whole reference."""
+    case = next(c for c in _backend_parity_cases() if c["case_id"] == case_id)
+    xyz = (_PROJECT_ROOT / "tests/data/tmqmg/backend_parity" / case["xyz_file"]).read_text()
+    config = MolGRConfig()
+    config.cpp_backend.max_threads = 1
+    config.cpp_backend.target_bucket_parallel_max_threads = 1
+    for backend in ("cpp", "python"):
+        mol = xyz_to_rdmol(xyz, int(case["charge"]), 1, backend=backend, config=config)
+        assert Chem.GetFormalCharge(mol) == int(case["charge"])
+        assert sum(a.GetNumRadicalElectrons() for a in mol.GetAtoms()) == 0
+        for i, j in pairs:
+            assert mol.GetBondBetweenAtoms(i, j).GetBondTypeAsDouble() == order
+            assert tuple(mol.GetAtomWithIdx(k).GetFormalCharge() for k in (i, j)) == charges
+        if metal_charge is not None:
+            metals = [a for a in mol.GetAtoms() if a.GetSymbol() == case["metal_center"]]
+            assert len(metals) == 1 and metals[0].GetFormalCharge() == metal_charge
+
+
+@pytest.mark.parametrize("case_id", ["ITUCUW", "QEJSIK"])
+def test_cumulene_exception_preserves_aromatic_macrocycle(case_id):
+    case = next(c for c in _backend_parity_cases() if c["case_id"] == case_id)
+    xyz = (_PROJECT_ROOT / "tests/data/tmqmg/backend_parity" / case["xyz_file"]).read_text()
+    for backend in ("cpp", "python"):
+        mol = xyz_to_rdmol(xyz, int(case["charge"]), 1, backend=backend)
+        metal = next(a for a in mol.GetAtoms() if a.GetSymbol() == case["metal_center"])
+        assert metal.GetFormalCharge() == 2
+        assert not mol.HasSubstructMatch(Chem.MolFromSmarts("[#6]=[#6]=[#6]"))
+
+
+@pytest.mark.parametrize("case_id", ["JAYGEV", "QEHQUP"])
+def test_accepted_nhc_charge_separated_representation_is_retained(case_id):
+    case = next(c for c in _backend_parity_cases() if c["case_id"] == case_id)
+    xyz = (_PROJECT_ROOT / "tests/data/tmqmg/backend_parity" / case["xyz_file"]).read_text()
+    pattern = Chem.MolFromSmarts("[#6-]=[#7+]")
+    for backend in ("cpp", "python"):
+        mol = xyz_to_rdmol(xyz, int(case["charge"]), 1, backend=backend)
+        assert mol.HasSubstructMatch(pattern)
+
+
+@pytest.mark.parametrize("charge,multiplicity,order", [(0, 1, 2), (-1, 2, 1), (-2, 1, 1)])
+def test_elongated_o2_normalization_respects_charge_and_spin(charge, multiplicity, order):
+    xyz = "2\nO2 charge and spin control\nO 0 0 0\nO 1.45 0 0\n"
+    for backend in ("cpp", "python"):
+        mol = xyz_to_rdmol(xyz, charge, multiplicity, backend=backend)
+        assert Chem.GetFormalCharge(mol) == charge
+        assert sum(a.GetNumRadicalElectrons() for a in mol.GetAtoms()) == multiplicity - 1
+        assert mol.GetBondBetweenAtoms(0, 1).GetBondTypeAsDouble() == order
+
+
+@pytest.mark.parametrize(
+    ("case_id", "expected_charge"),
+    [("FAKDOL", 1), ("BIBZEV", 1), ("BOBYAS", 1), ("PEDNIY", -1), ("RASBOC", 1)],
+)
+def test_terminal_nitrosyl_selection_and_backend_metrics(case_id, expected_charge):
+    """Assert reviewed local NO behavior without freezing unrelated ligand states."""
+    case = next(c for c in _backend_parity_cases() if c["case_id"] == case_id)
+    xyz = (_PROJECT_ROOT / "tests/data/tmqmg/backend_parity" / case["xyz_file"]).read_text()
+    charge = int(case["charge"])
+    config = MolGRConfig()
+    config.cpp_backend.max_threads = 1
+    config.cpp_backend.target_bucket_parallel_max_threads = 1
+    cpp = _core.dev.pipeline.reconstruct_with_metals.debug_scored_candidate_summaries(
+        xyz, charge, 0, config=config
+    )
+    _, candidates, best = _python_scored_candidates(xyz, charge, 0)
+    assert best is not None
+    assert len(cpp["candidates"]) == len(candidates)
+    for native, fallback in zip(cpp["candidates"], candidates):
+        assert (
+            native["nitrosyl_geometry_site_count"]
+            == fallback.metadata["nitrosyl_geometry_site_count"]
+        )
+        assert native["nitrosyl_geometry_penalty"] == pytest.approx(
+            fallback.metadata["nitrosyl_geometry_penalty"]
+        )
+        assert native["selected"] == (fallback is best)
+        assert (
+            native["nitrosonium_redistribution_exception"]
+            == fallback.metadata["nitrosonium_redistribution_exception"]
+        )
+        if fallback.metadata.get("selection_key") is not None:
+            assert native["selection_key"] == pytest.approx(fallback.metadata["selection_key"])
+    assert best.metadata["nitrosyl_geometry_site_count"] == (expected_charge == 1)
+    outputs = []
+    for backend in ("cpp", "python"):
+        mol = xyz_to_rdmol(xyz, charge, 1, backend=backend, config=config)
+        assert Chem.GetFormalCharge(mol) == charge
+        assert sum(a.GetNumRadicalElectrons() for a in mol.GetAtoms()) == 0
+        organic = Chem.RWMol(mol)
+        for atom in reversed(list(mol.GetAtoms())):
+            if atom.GetSymbol() in {"Os", "Fe", "Re", "Co", "Mo"}:
+                organic.RemoveAtom(atom.GetIdx())
+        no_fragments = [
+            indices
+            for indices in Chem.GetMolFrags(organic)
+            if sorted(organic.GetAtomWithIdx(i).GetAtomicNum() for i in indices) == [7, 8]
+        ]
+        assert len(no_fragments) == 1
+        assert (
+            sum(organic.GetAtomWithIdx(i).GetFormalCharge() for i in no_fragments[0])
+            == expected_charge
+        )
+        outputs.append(Chem.MolToSmiles(mol))
+    assert outputs[0] == outputs[1]
+    if case_id == "RASBOC":
+        # Oximate geometry makes the approved Mo(II) state reachable directly;
+        # the former Mo(0)/nitroso winner needed a redistribution exception.
+        assert best.metal_states[0].valence == 2
+        assert best.metadata["nitrosonium_redistribution_exception"] == 0
+        assert scoring.select_best_candidate(candidates) is best
+        assert scoring.select_best_candidate(candidates) is best
+        scoring._annotate_candidate_discordance_features(best)
+        assert best.metadata["nitrosonium_redistribution_exception"] == 0
+        assert scoring.select_best_candidate(candidates) is best
+        assert best.metadata["metal_discordance_structural_count"] == 0
 
 
 def _canonical_reconstructed_smiles(
@@ -116,56 +484,32 @@ def _canonical_reconstructed_smiles(
 
 
 def _python_scored_candidates(xyz_block: str, total_charge: int, total_radical_electrons: int):
+    # Capture the production pool after geometry-supported seeds have been scored.
+    from unittest.mock import patch
+
+    candidates = []
+    original = scoring.select_best_candidate
+    selected = None
+
+    def capture(pool, **kwargs):
+        nonlocal selected
+        candidates[:] = pool
+        selected = original(pool, **kwargs)
+        return selected
+
     config = MolGRConfig()
-    base_state = preparation.prepare_metal_state(
-        xyz_block,
-        total_charge,
-        total_radical_electrons,
-        config=config,
-    )
-    search_groups = search._build_metal_state_search_groups(
-        base_state.available_valence_radical_states,
-        config=config,
-    )
-    layered_groups = search._build_layered_metal_state_search_groups(
-        search_groups,
-        total_radical_electrons,
-        config=config,
-    )
-    for layer_index, layer in enumerate(layered_groups):
-        grouped_candidates = search._group_candidates_by_target_dp(
-            base_state.phase_history,
-            layer,
+    with patch.object(scoring, "select_best_candidate", capture):
+        best = reconstruct_with_metals.xyz2omol_state(
+            xyz_block,
             total_charge,
             total_radical_electrons,
             config=config,
         )
-        candidates = []
-        for target_entry in grouped_candidates.values():
-            if not target_entry:
-                continue
-            no_metal_state = (
-                reconstruct_with_metals.reconstruct_without_metals.xyz_to_omol_no_metal_state(
-                    base_state.no_metal_xyz_block,
-                    target_entry[0].no_metal_charge_target,
-                    target_entry[0].no_metal_radical_target,
-                    config=config,
-                )
-            )
-            if no_metal_state is None:
-                continue
-            for candidate in target_entry:
-                candidates.append(
-                    scoring._prepare_candidate_with_no_metal_state(
-                        candidate,
-                        no_metal_state,
-                        config=config,
-                    )
-                )
-        if candidates:
-            scored = scoring.select_best_candidate(candidates, config=config)
-            return layer_index, candidates, scored
-    return None, [], None
+    if best is None:
+        return None, [], None
+    # xyz2omol_state freezes its winner for materialization. Return the selected
+    # pool object so identity-based assertions keep checking the actual choice.
+    return best.metadata["search_layer_index"], candidates, selected
 
 
 def _python_no_metal_resonance_candidate_summaries(
@@ -180,13 +524,11 @@ def _python_no_metal_resonance_candidate_summaries(
         total_charge,
         total_radical_electrons,
     )
-    prepared_seed = no_metal_preparation.prepare_no_metal_seed(seed_state)
-    neighbor_seeds = no_metal_neighbor_radicals.enumerate_neighbor_radical_seeds(prepared_seed)
-    resonance_seeds = no_metal_resonance.build_resonance_seed_pool(neighbor_seeds)
-    candidates = no_metal_resonance.search_resonance_candidates(
-        resonance_seeds,
-        resonance_traversal_policy=no_metal_resonance._default_resonance_traversal_policy(config),
+    candidates = []
+    reconstruct_without_metals._run_no_metal_pipeline_from_state(
+        seed_state,
         config=config,
+        candidate_pool=candidates,
     )
 
     summaries = []
@@ -224,7 +566,9 @@ def _cpp_no_metal_resonance_candidate_summaries(
         config=config,
     ):
         selection_key = (
+            int(item["azinium_geometry_conflict_count"]),
             int(item["formal_charge_absolute_sum"]),
+            int(item["long_carbonyl_multiple_bond_count"]),
             -int(item["aromatic_atom_count"]),
             -int(item["aromatic_ring_count"]),
             -float(item["aromatic_stability_score"]),
@@ -496,9 +840,8 @@ def test_cpp_python_organic_topology_metrics_match_smiles(smiles: str) -> None:
     _assert_cpp_python_topology_metrics_match(omol, config=config)
 
 
-@requires_local_tmqmg
 def test_cpp_python_organic_topology_metrics_match_case_522_no_metal_candidate() -> None:
-    row = _load_tmqmg_row(522)
+    row = fixture("AFAKAW")
     xyz_block = _load_tmqmg_xyz(row["id"])
     total_charge = int(row["charge"])
     total_radical_electrons = 0
@@ -514,9 +857,8 @@ def test_cpp_python_organic_topology_metrics_match_case_522_no_metal_candidate()
     _assert_cpp_python_topology_metrics_match(py_candidates[0].no_metal_state.omol, config=config)
 
 
-@requires_local_tmqmg
 def test_cpp_python_organic_force_field_energy_matches_case_522_no_metal_candidates() -> None:
-    row = _load_tmqmg_row(522)
+    row = fixture("AFAKAW")
     xyz_block = _load_tmqmg_xyz(row["id"])
     total_charge = int(row["charge"])
     total_radical_electrons = 0
@@ -538,10 +880,9 @@ def test_cpp_python_organic_force_field_energy_matches_case_522_no_metal_candida
         assert cpp_energy == pytest.approx(py_energy)
 
 
-@pytest.mark.parametrize("case_idx", [430, 431])
-@requires_local_tmqmg
-def test_cpp_python_scored_candidate_parity_for_dmso_state_regressions(case_idx: int) -> None:
-    row = _load_tmqmg_row(case_idx)
+@pytest.mark.parametrize("case_id", ["ADIXUI", "ADIYAP"])
+def test_cpp_python_scored_candidate_parity_for_dmso_state_regressions(case_id: str) -> None:
+    row = fixture(case_id)
     xyz_block = _load_tmqmg_xyz(row["id"])
     total_charge = int(row["charge"])
     total_radical_electrons = 0
@@ -564,13 +905,14 @@ def test_cpp_python_scored_candidate_parity_for_dmso_state_regressions(case_idx:
         assert cpp_item["combination_index"] == py_item.metadata.get("combination_index")
         assert cpp_item["no_metal_charge_target"] == py_item.no_metal_charge_target
         assert cpp_item["score"] == pytest.approx(py_item.score or 0.0)
-        assert cpp_item["selection_key"] == py_item.metadata.get("selection_key")
+        _assert_metal_selection_key_matches(
+            cpp_item["selection_key"], py_item.metadata.get("selection_key")
+        )
         assert cpp_item["selected"] == (py_best is py_item)
 
 
-@requires_local_tmqmg
 def test_cpp_python_scored_candidate_parity_for_acifea_nitrate_exemption() -> None:
-    row = _load_tmqmg_row(232)
+    row = fixture("ACIFEA")
     assert row["id"] == "ACIFEA"
     xyz_block = _load_tmqmg_xyz(row["id"])
     total_charge = int(row["charge"])
@@ -588,7 +930,14 @@ def test_cpp_python_scored_candidate_parity_for_acifea_nitrate_exemption() -> No
     )
 
     assert cpp["layer_index"] == py_layer_index == 0
+    # Exceptional Zn(+4) remains searchable with an explicit preference cost.
     assert len(cpp["candidates"]) == len(py_candidates) == 3
+    assert [item["metal_states"][0]["valence"] for item in cpp["candidates"]] == [4, 2, 0]
+    assert [item["metal_discordance_high_zinc_valence_count"] for item in cpp["candidates"]] == [
+        1,
+        0,
+        0,
+    ]
     for cpp_item, py_item in zip(cpp["candidates"], py_candidates):
         assert cpp_item["metal_states"] == [
             {
@@ -645,7 +994,9 @@ def test_cpp_python_scored_candidate_parity_for_acifea_nitrate_exemption() -> No
                 False,
             )
         )
-        assert cpp_item["selection_key"] == py_item.metadata.get("selection_key")
+        _assert_metal_selection_key_matches(
+            cpp_item["selection_key"], py_item.metadata.get("selection_key")
+        )
         assert cpp_item["selected"] == (py_best is py_item)
 
     zinc_ii = next(item for item in cpp["candidates"] if item["metal_states"][0]["valence"] == 2)
@@ -654,7 +1005,6 @@ def test_cpp_python_scored_candidate_parity_for_acifea_nitrate_exemption() -> No
     assert zinc_ii["selected"] is True
 
 
-@requires_local_tmqmg
 def test_cpp_python_arojew_titanium_two_counts_visible_same_sign_nitrogen() -> None:
     xyz_block = _load_tmqmg_xyz("AROJEW")
     config = MolGRConfig()
@@ -684,8 +1034,7 @@ def test_cpp_python_arojew_titanium_two_counts_visible_same_sign_nitrogen() -> N
     assert py_titanium_two.metadata["metal_discordance_inner_visible_same_sign_charge_count"] == 1
 
 
-@requires_local_tmqmg
-def test_cpp_python_cehhab_rejects_single_bond_charge_polarity_inversion() -> None:
+def test_cpp_python_cehhab_preserves_iron_two_after_nitroso_geometry_screen() -> None:
     xyz_block = _load_tmqmg_xyz("CEHHAB")
     config = MolGRConfig()
     cpp = _core.dev.pipeline.reconstruct_with_metals.debug_scored_candidate_summaries(
@@ -703,21 +1052,34 @@ def test_cpp_python_cehhab_rejects_single_bond_charge_polarity_inversion() -> No
         (2, 0)
     ]
 
-    iron_zero_cpp = next(
+    iron_zero_cpp_candidates = [
         item for item in cpp["candidates"] if item["metal_states"][0]["valence"] == 0
-    )
-    iron_zero_py = next(
+    ]
+    iron_zero_py_candidates = [
         candidate for candidate in py_candidates if candidate.metal_states[0].valence == 0
+    ]
+    # Missing candidates are a backend-search regression, not a fixture lookup
+    # error or an unexplained StopIteration. Keep the original presence control.
+    assert len(iron_zero_cpp_candidates) == len(iron_zero_py_candidates) == 1, (
+        "CEHHAB Fe(0) candidate coverage differs",
+        len(iron_zero_cpp_candidates),
+        len(iron_zero_py_candidates),
     )
-    assert iron_zero_cpp["organic_charge_localization_polarity_inversion_penalty"] > 0.0
+    iron_zero_cpp = iron_zero_cpp_candidates[0]
+    iron_zero_py = iron_zero_py_candidates[0]
+    # The old inverted C+/N- alternative is no longer this target's winner.
+    # Its replacement still fails the zero-metal/organic-cation safeguard.
+    assert iron_zero_cpp["metal_discordance_zero_valent_metals_with_organic_cation_count"] == 1
+    assert (
+        iron_zero_py.metadata["metal_discordance_zero_valent_metals_with_organic_cation_count"] == 1
+    )
     assert iron_zero_cpp["organic_charge_localization_polarity_inversion_penalty"] == pytest.approx(
         iron_zero_py.metadata["organic_charge_localization_polarity_inversion_penalty"]
     )
 
 
-@requires_local_tmqmg
 def test_cpp_python_akonew_preserves_cobalt_three_local_charge_state() -> None:
-    row = _load_tmqmg_row(1132)
+    row = fixture("AKONEW")
     assert row["id"] == "AKONEW"
     xyz_block = _load_tmqmg_xyz(row["id"])
     config = MolGRConfig()
@@ -744,9 +1106,8 @@ def test_cpp_python_akonew_preserves_cobalt_three_local_charge_state() -> None:
     assert len(cpp["candidates"]) == len(py_candidates)
 
 
-@requires_local_tmqmg
 def test_cpp_python_metal_search_stage_parity_case_522() -> None:
-    row = _load_tmqmg_row(522)
+    row = fixture("AFAKAW")
     xyz_block = _load_tmqmg_xyz(row["id"])
     total_charge = int(row["charge"])
     total_radical_electrons = 0
@@ -770,9 +1131,8 @@ def test_cpp_python_metal_search_stage_parity_case_522() -> None:
     assert cpp_summary == py_summary
 
 
-@requires_local_tmqmg
 def test_cpp_python_scored_candidate_parity_case_522() -> None:
-    row = _load_tmqmg_row(522)
+    row = fixture("AFAKAW")
     xyz_block = _load_tmqmg_xyz(row["id"])
     total_charge = int(row["charge"])
     total_radical_electrons = 0
@@ -880,7 +1240,9 @@ def test_cpp_python_scored_candidate_parity_case_522() -> None:
         assert cpp_item["passes_metal_discordance_filter"] == py_item.metadata.get(
             "passes_metal_discordance_filter"
         )
-        assert cpp_item["selection_key"] == py_item.metadata.get("selection_key")
+        _assert_metal_selection_key_matches(
+            cpp_item["selection_key"], py_item.metadata.get("selection_key")
+        )
 
         assert cpp_item["selected"] == (py_best is py_item)
 
@@ -907,14 +1269,15 @@ def test_cpp_python_scored_candidate_state_matches_abagam_fixture() -> None:
         assert tuple(cpp_item["no_metal_bond_signature"]) == _pybel_bond_signature(
             py_item.no_metal_state.omol
         )
-        assert cpp_item["selection_key"] == py_item.metadata.get("selection_key")
+        _assert_metal_selection_key_matches(
+            cpp_item["selection_key"], py_item.metadata.get("selection_key")
+        )
         assert cpp_item["selected"] == (py_best is py_item)
 
 
-@pytest.mark.parametrize("case_idx", [113, 627, 684, 727])
-@requires_local_tmqmg
-def test_cpp_python_no_metal_resonance_candidate_parity_cases(case_idx: int) -> None:
-    row = _load_tmqmg_row(case_idx)
+@pytest.mark.parametrize("case_id", ["ABISEL", "AFUGEQ", "AGAZOA", "AGICOJ"])
+def test_cpp_python_no_metal_resonance_candidate_parity_cases(case_id: str) -> None:
+    row = fixture(case_id)
     xyz_block = _load_tmqmg_xyz(row["id"])
     total_charge = int(row["charge"])
     total_radical_electrons = 0
@@ -957,10 +1320,9 @@ def test_cpp_python_no_metal_resonance_candidate_parity_cases(case_idx: int) -> 
         assert cpp_item["selection_key"] == pytest.approx(py_item["selection_key"])
 
 
-@pytest.mark.parametrize("case_idx", [113, 627, 684, 727])
-@requires_local_tmqmg
-def test_cpp_python_final_smiles_match_resonance_representative_cases(case_idx: int) -> None:
-    row = _load_tmqmg_row(case_idx)
+@pytest.mark.parametrize("case_id", ["ABISEL", "AFUGEQ", "AGAZOA", "AGICOJ"])
+def test_cpp_python_final_smiles_match_resonance_representative_cases(case_id: str) -> None:
+    row = fixture(case_id)
     xyz_block = _load_tmqmg_xyz(row["id"])
     total_charge = int(row["charge"])
     total_radical_electrons = 0
@@ -984,10 +1346,9 @@ def test_cpp_python_final_smiles_match_resonance_representative_cases(case_idx: 
     assert cpp_smiles == py_smiles
 
 
-@pytest.mark.parametrize("case_idx", [113, 522, 627])
-@requires_local_tmqmg
-def test_cpp_all_accelerations_preserve_python_final_smiles(case_idx: int) -> None:
-    row = _load_tmqmg_row(case_idx)
+@pytest.mark.parametrize("case_id", ["ABISEL", "AFAKAW", "AFUGEQ"])
+def test_cpp_all_accelerations_preserve_python_final_smiles(case_id: str) -> None:
+    row = fixture(case_id)
     xyz_block = _load_tmqmg_xyz(row["id"])
     total_charge = int(row["charge"])
     total_radical_electrons = 0
@@ -1000,7 +1361,6 @@ def test_cpp_all_accelerations_preserve_python_final_smiles(case_idx: int) -> No
             enable_target_bucket_parallelism=True,
             enable_candidate_scoring_parallelism=False,
             enable_uff_atom_typing_cache=True,
-            enable_target_bucket_score_bundle_preheat=True,
             target_bucket_parallel_threshold=1,
             target_bucket_parallel_max_threads=1,
             candidate_score_parallel_threshold=32,
@@ -1023,3 +1383,345 @@ def test_cpp_all_accelerations_preserve_python_final_smiles(case_idx: int) -> No
     )
 
     assert cpp_smiles == py_smiles
+
+
+@pytest.mark.parametrize(
+    "case_id,metal_charge,rings,ring_charges,contacts",
+    [
+        (
+            "GAYZEO",
+            3,
+            [[6, 7, 8, 10, 2, 4], [25, 26, 27, 29, 22, 23]],
+            [-1, -1],
+            [(55, 49), (6, 49), (25, 49)],
+        ),
+        ("OHIMEA", 4, [[38, 39, 41, 34, 35, 36], [55, 56, 58, 59, 61, 54]], [0, 0], []),
+        ("ACADCO", 3, [[8, 14, 7, 17, 16, 15]], [1], []),
+        ("SOZCIW", 2, [[45, 47, 49, 51, 53, 11]], [1], []),
+    ],
+)
+def test_reviewed_arene_and_coordination_repairs(
+    case_id, metal_charge, rings, ring_charges, contacts
+):
+    """Assert reviewed local states, without freezing the whole dataset reference."""
+    case = next(c for c in _backend_parity_cases() if c["case_id"] == case_id)
+    xyz = (_PROJECT_ROOT / "tests/data/tmqmg/backend_parity" / case["xyz_file"]).read_text()
+    outputs = []
+    for backend in ("cpp", "python"):
+        mol = xyz_to_rdmol(xyz, int(case["charge"]), 1, backend=backend, kekulize=False)
+        assert Chem.GetFormalCharge(mol) == int(case["charge"])
+        assert sum(a.GetNumRadicalElectrons() for a in mol.GetAtoms()) == 0
+        metals = [a for a in mol.GetAtoms() if a.GetSymbol() == case["metal_center"]]
+        assert len(metals) == 1 and metals[0].GetFormalCharge() == metal_charge
+        for ring, charge in zip(rings, ring_charges):
+            assert all(mol.GetAtomWithIdx(i).GetIsAromatic() for i in ring)
+            assert sum(mol.GetAtomWithIdx(i).GetFormalCharge() for i in ring) == charge
+        for donor, metal in contacts:
+            bond = mol.GetBondBetweenAtoms(donor, metal)
+            assert bond is not None and bond.GetBondType() == Chem.BondType.DATIVE
+        if case_id == "OHIMEA":
+            assert mol.HasSubstructMatch(Chem.MolFromSmarts("[#6-]=[#7+]"))
+        outputs.append(Chem.MolToSmiles(mol))
+    assert outputs[0] == outputs[1]
+
+
+def test_geometry_triggered_recovery_reports_the_production_gold_candidate():
+    xyz = (_PROJECT_ROOT / "tests/data/tmqmg/gold_electronic_assignment/MIKLOK.xyz").read_text()
+    config = MolGRConfig()
+    native = _core.dev.pipeline.reconstruct_with_metals.debug_scored_candidate_summaries(
+        xyz, 0, 0, config=config
+    )
+    _, candidates, best = _python_scored_candidates(xyz, 0, 0)
+    assert best is not None
+    assert [s.valence for s in best.metal_states] == [1]
+    assert len(native["candidates"]) == len(candidates)
+    for cpp, python in zip(native["candidates"], candidates):
+        assert cpp["combination_index"] == python.metadata["combination_index"]
+        assert cpp["selected"] == (python is best)
+        assert cpp["score"] == pytest.approx(python.score)
+
+
+def test_equalized_three_carbon_candidate_selection_matches_backends():
+
+    case = fixture("CEGGAW")
+    xyz, charge = case["xyz"], case["charge"]
+    native = _core.dev.pipeline.reconstruct_with_metals.debug_scored_candidate_summaries(
+        xyz, charge, 0, config=MolGRConfig()
+    )
+    _, candidates, best = _python_scored_candidates(xyz, charge, 0)
+    assert best is not None
+    assert [(state.symbol, state.valence) for state in best.metal_states] == [("W", 4)]
+    assert best.metadata["metal_equalized_carbon_reduction_exemption_count"] == 1
+    assert len(native["candidates"]) == len(candidates)
+    for cpp, python in zip(native["candidates"], candidates):
+        assert cpp["combination_index"] == python.metadata["combination_index"]
+        assert cpp["selected"] == (python is best)
+        for key in (
+            "metal_equalized_carbon_reduction_exemption_count",
+            "metal_equalized_carbon_localization_count",
+            "metal_discordance_structural_count",
+        ):
+            assert cpp[key] == python.metadata[key]
+
+
+@pytest.mark.parametrize("case_id", ["GILPUQ", "GIMGOC"])
+def test_alkoxy_allylic_candidate_counts_and_selection_match_backends(case_id):
+
+    case = fixture(case_id)
+    xyz, charge = case["xyz"], case["charge"]
+    native = _core.dev.pipeline.reconstruct_with_metals.debug_scored_candidate_summaries(
+        xyz, charge, 0, config=MolGRConfig()
+    )
+    _, candidates, best = _python_scored_candidates(xyz, charge, 0)
+    key = "metal_alkoxy_allylic_geometry_conflict_count"
+    assert best is not None
+    assert [(s.symbol, s.valence) for s in best.metal_states] == [("W", 2)]
+    assert any(c.metadata[key] for c in candidates)
+    assert best.metadata[key] == 0
+    assert len(native["candidates"]) == len(candidates)
+    for cpp, python in zip(native["candidates"], candidates):
+        assert cpp["combination_index"] == python.metadata["combination_index"]
+        assert cpp["selected"] == (python is best)
+        assert cpp[key] == python.metadata[key]
+        assert (
+            cpp["metal_discordance_structural_count"]
+            == python.metadata["metal_discordance_structural_count"]
+        )
+    before = [c.metadata[key] for c in candidates]
+    assert scoring.select_best_candidate(list(reversed(candidates))) is best
+    assert scoring.select_best_candidate(candidates) is best
+    assert [c.metadata[key] for c in candidates] == before
+
+
+@pytest.mark.parametrize("case_id,symbol,valence", [("XEYQIB", "Mn", 1)])
+def test_bent_nitronium_recovery_and_selection_match_backends(case_id, symbol, valence):
+
+    case = fixture(case_id)
+    xyz, charge = case["xyz"], case["charge"]
+    native = _core.dev.pipeline.reconstruct_with_metals.debug_scored_candidate_summaries(
+        xyz, charge, 0, config=MolGRConfig()
+    )
+    _, candidates, best = _python_scored_candidates(xyz, charge, 0)
+    key = "metal_discordance_zero_valent_metals_with_organic_cation_count"
+    assert best is not None
+    assert [(s.symbol, s.valence) for s in best.metal_states] == [(symbol, valence)]
+    assert best.metadata[key] == 0
+    assert len(native["candidates"]) == len(candidates)
+    for cpp, python in zip(native["candidates"], candidates):
+        assert cpp["combination_index"] == python.metadata["combination_index"]
+        assert cpp["selected"] == (python is best)
+        assert cpp[key] == python.metadata[key]
+        assert cpp["score"] == pytest.approx(python.score)
+
+
+@pytest.mark.parametrize("case_id,symbol", [("BASDAC", "Fe"), ("BIBZEV", "Fe"), ("BEBQIK", "Ni")])
+def test_macrocycle_recovery_counts_and_selection_match_backends(case_id, symbol):
+
+    case = fixture(case_id)
+    xyz, charge = case["xyz"], case["charge"]
+    native = _core.dev.pipeline.reconstruct_with_metals.debug_scored_candidate_summaries(
+        xyz, charge, 0, config=MolGRConfig()
+    )
+    _, candidates, best = _python_scored_candidates(xyz, charge, 0)
+    key = "metal_macrocycle_electron_conflict_count"
+    assert best is not None
+    assert [(s.symbol, s.valence) for s in best.metal_states] == [(symbol, 2)]
+    assert any(c.metadata[key] for c in candidates)
+    assert best.metadata[key] == 0
+    assert len(native["candidates"]) == len(candidates)
+    for cpp, python in zip(native["candidates"], candidates):
+        assert cpp["combination_index"] == python.metadata["combination_index"]
+        assert cpp["selected"] == (python is best)
+        assert cpp[key] == python.metadata[key]
+        assert (
+            cpp["metal_discordance_structural_count"]
+            == python.metadata["metal_discordance_structural_count"]
+        )
+    before = [c.metadata[key] for c in candidates]
+    assert scoring.select_best_candidate(list(reversed(candidates))) is best
+    assert scoring.select_best_candidate(candidates) is best
+    assert [c.metadata[key] for c in candidates] == before
+
+
+@pytest.mark.parametrize("case_id,symbol,valence", [("XUMTAD", "Ru", 2)])
+def test_local_multiple_bond_geometry_recovery_matches_backends(case_id, symbol, valence):
+
+    case = fixture(case_id)
+    xyz, charge = case["xyz"], case["charge"]
+    native = _core.dev.pipeline.reconstruct_with_metals.debug_scored_candidate_summaries(
+        xyz, charge, 0, config=MolGRConfig()
+    )
+    _, candidates, best = _python_scored_candidates(xyz, charge, 0)
+    assert best is not None
+    assert [(s.symbol, s.valence) for s in best.metal_states] == [(symbol, valence)]
+    assert len(native["candidates"]) == len(candidates)
+    for cpp, python in zip(native["candidates"], candidates):
+        assert cpp["combination_index"] == python.metadata["combination_index"]
+        assert cpp["selected"] == (python is best)
+        assert cpp["score"] == pytest.approx(python.score)
+
+
+@pytest.mark.parametrize(
+    "case_id,symbol,valence", [("BUSWOD", "Fe", 4), ("EHILEM", "Nb", 5), ("KETGOG", "Ni", 4)]
+)
+def test_folded_ring_and_contributor_ties_match_backends(case_id, symbol, valence):
+
+    case = fixture(case_id)
+    xyz, charge, radicals = case["xyz"], case["charge"], case["multiplicity"] - 1
+    native = _core.dev.pipeline.reconstruct_with_metals.debug_scored_candidate_summaries(
+        xyz, charge, radicals, config=MolGRConfig()
+    )
+    _, candidates, best = _python_scored_candidates(xyz, charge, radicals)
+    key = "metal_folded_ring_geometry_conflict_count"
+    assert best is not None
+    assert [(s.symbol, s.valence) for s in best.metal_states] == [(symbol, valence)]
+    assert best.metadata[key] == 0
+    if case_id == "BUSWOD":
+        assert max(c.metadata[key] for c in candidates) == 2
+    assert len(native["candidates"]) == len(candidates)
+    for cpp, python in zip(native["candidates"], candidates):
+        assert cpp["combination_index"] == python.metadata["combination_index"]
+        assert cpp["selected"] == (python is best)
+        assert cpp[key] == python.metadata[key]
+        assert (
+            cpp["metal_discordance_structural_count"]
+            == python.metadata["metal_discordance_structural_count"]
+        )
+        assert cpp["score"] == pytest.approx(python.score)
+    before = [c.metadata[key] for c in candidates]
+    assert scoring.select_best_candidate(list(reversed(candidates))) is best
+    assert scoring.select_best_candidate(candidates) is best
+    assert [c.metadata[key] for c in candidates] == before
+
+
+@pytest.mark.parametrize("case_id,symbol,valence", [("BIXBUG", "Co", 3)])
+def test_formazan_geometry_alternatives_match_backends(case_id, symbol, valence):
+
+    case = fixture(case_id)
+    xyz, charge, radicals = case["xyz"], case["charge"], case["multiplicity"] - 1
+    native = _core.dev.pipeline.reconstruct_with_metals.debug_scored_candidate_summaries(
+        xyz, charge, radicals, config=MolGRConfig()
+    )
+    _, candidates, best = _python_scored_candidates(xyz, charge, radicals)
+    key = "metal_formazan_geometry_conflict_count"
+    assert best is not None
+    assert [(s.symbol, s.valence) for s in best.metal_states] == [(symbol, valence)]
+    assert best.metadata[key] == 0
+    assert max(c.metadata[key] for c in candidates) == 1
+    assert len(native["candidates"]) == len(candidates)
+    for cpp, python in zip(native["candidates"], candidates):
+        assert cpp["combination_index"] == python.metadata["combination_index"]
+        assert cpp["selected"] == (python is best)
+        assert cpp[key] == python.metadata[key]
+        assert (
+            cpp["metal_discordance_structural_count"]
+            == python.metadata["metal_discordance_structural_count"]
+        )
+        assert cpp["score"] == pytest.approx(python.score)
+    before = [c.metadata[key] for c in candidates]
+    assert scoring.select_best_candidate(list(reversed(candidates))) is best
+    assert scoring.select_best_candidate(candidates) is best
+    assert [c.metadata[key] for c in candidates] == before
+
+
+@pytest.mark.parametrize("case_id", ["BIXTUY", "AYEVEF"])
+def test_cationic_donor_penalties_and_selection_match_backends(case_id):
+
+    case = fixture(case_id)
+    xyz, charge, radicals = case["xyz"], case["charge"], case["multiplicity"] - 1
+    native = _core.dev.pipeline.reconstruct_with_metals.debug_scored_candidate_summaries(
+        xyz, charge, radicals, config=MolGRConfig()
+    )
+    _, candidates, best = _python_scored_candidates(xyz, charge, radicals)
+    assert best is not None
+    assert len(native["candidates"]) == len(candidates)
+    assert any(
+        c.metadata["metal_discordance_inner_visible_cationic_donor_count"] for c in candidates
+    )
+    for cpp, python in zip(native["candidates"], candidates):
+        assert cpp["combination_index"] == python.metadata["combination_index"]
+        assert cpp["selected"] == (python is best)
+        for key in (
+            "metal_discordance_inner_visible_same_sign_charge_count",
+            "metal_discordance_inner_visible_cationic_donor_count",
+            "metal_discordance_inner_visible_same_sign_charge_penalty",
+            "metal_discordance_structural_count",
+        ):
+            assert cpp[key] == pytest.approx(python.metadata[key])
+
+
+@pytest.mark.parametrize(
+    "case_id,symbol,valence",
+    [
+        ("LEBNIR", "Zn", 4),
+        ("YURTOW", "Zn", 2),
+        ("UNOQAR", "Zn", 2),
+        ("AROJIA", "Ti", 4),
+        ("WUQJAT", "Ti", 4),
+        ("AYEVEF", "W", 4),
+    ],
+)
+def test_reviewed_cationic_allocation_repairs_match_native_scores(case_id, symbol, valence):
+
+    case = fixture(case_id)
+    xyz, charge, radicals = case["xyz"], case["charge"], case["multiplicity"] - 1
+    native = _core.dev.pipeline.reconstruct_with_metals.debug_scored_candidate_summaries(
+        xyz, charge, radicals, config=MolGRConfig()
+    )
+    _, candidates, best = _python_scored_candidates(xyz, charge, radicals)
+    assert best is not None
+    assert [(s.symbol, s.valence) for s in best.metal_states] == [(symbol, valence)]
+    assert len(native["candidates"]) == len(candidates)
+    for cpp, python in zip(native["candidates"], candidates):
+        assert cpp["combination_index"] == python.metadata["combination_index"]
+        assert cpp["selected"] == (python is best)
+        for key in (
+            "metal_discordance_inner_visible_same_sign_charge_penalty",
+            "metal_discordance_high_zinc_valence_count",
+            "metal_discordance_unsaturated_organic_cation_count",
+            "metal_aryl_carbenoid_geometry_conflict_count",
+            "metal_discordance_structural_count",
+        ):
+            assert cpp[key] == pytest.approx(python.metadata[key])
+    assert scoring.select_best_candidate(list(reversed(candidates))) is best
+    assert scoring.select_best_candidate(candidates) is best
+
+
+@pytest.mark.parametrize(
+    "case_id,symbol,valence",
+    [
+        ("ARUTIR", "Fe", -2),
+        ("DEYCUI", "Fe", -2),
+        ("BISJOC", "Co", -1),
+        ("NSTPRU", "Ru", -2),
+        ("BALDIE", "Fe", -2),
+        ("HIKPUP", "Fe", -2),
+        ("CEBWUB", "Mn", -1),
+        ("OHIHEV", "Re", -1),
+        ("WEDNEY", "Re", -1),
+    ],
+)
+def test_nitrosonium_formal_charge_scoring_matches_backends(case_id, symbol, valence):
+    xyz = (_PROJECT_ROOT / "tests/data/tmqmg/backend_parity" / f"{case_id}.xyz").read_text()
+    native = _core.dev.pipeline.reconstruct_with_metals.debug_scored_candidate_summaries(
+        xyz, 0, 0, config=MolGRConfig()
+    )
+    _, candidates, best = _python_scored_candidates(xyz, 0, 0)
+    assert best is not None
+    assert [(s.symbol, s.valence) for s in best.metal_states] == [(symbol, valence)]
+    assert best.metadata["metal_nitrosonium_formal_charge_exemption"] > 0
+    assert len(native["candidates"]) == len(candidates)
+    for cpp, python in zip(native["candidates"], candidates):
+        assert cpp["combination_index"] == python.metadata["combination_index"]
+        assert cpp["selected"] == (python is best)
+        for key in (
+            "metal_nitrosonium_formal_charge_exemption",
+            "metal_discordance_negative_metal_penalty",
+            "metal_discordance_inner_visible_same_sign_charge_penalty",
+            "metal_discordance_structural_count",
+            "nitrosyl_geometry_penalty",
+        ):
+            assert cpp[key] == pytest.approx(python.metadata[key])
+        assert cpp["score"] == pytest.approx(python.score)
+    assert scoring.select_best_candidate(list(reversed(candidates))) is best
+    assert scoring.select_best_candidate(candidates) is best

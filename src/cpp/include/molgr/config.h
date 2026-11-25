@@ -5,13 +5,18 @@
 
 namespace molgr::config
 {
+    /// Search depth, ordering and discrepancy budgets for exploring electronic assignments.
     struct ResonanceConfig
     {
-        int max_depth = 2;
-        int limited_discrepancy_max_discrepancy = 1;
+        int max_depth = 3;
+        int limited_discrepancy_max_discrepancy = 2;
         std::string traversal_score = "uff_lite_gain";
+        // Charge-separation choices during neighbor-radical seed generation.
+        // Independent of limited discrepancy in the resonance walk.
+        int neighbor_radical_max_discrepancy = 2;
     };
 
+    /// Worker limits and cache settings for native reconstruction and candidate scoring.
     struct CppBackendConfig
     {
 #if defined(_WIN32)
@@ -22,12 +27,12 @@ namespace molgr::config
         bool enable_target_bucket_parallelism = true;
         bool enable_candidate_scoring_parallelism = false;
         bool enable_uff_atom_typing_cache = false;
-        bool enable_target_bucket_score_bundle_preheat = true;
         int target_bucket_parallel_threshold = 1;
         std::optional<int> target_bucket_parallel_max_threads;
         int candidate_score_parallel_threshold = 32;
     };
 
+    /// Aromatic stability weights and geometric cutoffs for conjugation in organic ligands.
     struct OrganicTopologyConfig
     {
         double aromatic_stability_benzene_score = 1.0;
@@ -42,8 +47,10 @@ namespace molgr::config
         double aromatic_stability_radical_penalty = 0.20;
         double aromatic_stability_min_radical_factor = 0.50;
         double conjugation_normalized_tetrahedron_volume_tolerance = 0.075;
+        double conjugation_min_plane_overlap = 0.5;
     };
 
+    /// Coordination visibility, contact cutoffs and weights for ranking metal assignments.
     struct MetalScoringConfig
     {
         double open_shell_multimetal_state_penalty_window = 10.0;
@@ -58,6 +65,7 @@ namespace molgr::config
         double charge_localization_selection_margin = 0.3;
     };
 
+    /// Spin-state inference settings for metal sites with incomplete electronic labels.
     struct MetalRadicalInferenceConfig
     {
         int max_considered_donors = 6;
@@ -69,6 +77,7 @@ namespace molgr::config
         double field_ambiguity_margin = 0.10;
     };
 
+    /// Run-level settings shared by native search, topology and metal scoring.
     struct MolGRConfig
     {
         ResonanceConfig resonance;
@@ -78,5 +87,6 @@ namespace molgr::config
         MetalRadicalInferenceConfig metal_radical_inference;
     };
 
+    /// @return The shared default reconstruction settings when no per-run configuration is supplied.
     const MolGRConfig &GetDefaultConfig();
 }

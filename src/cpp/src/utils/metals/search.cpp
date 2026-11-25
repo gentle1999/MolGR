@@ -25,6 +25,7 @@ namespace molgr
 
                 const auto prior_it = kMetalValencePrior.find(metal_state.symbol);
                 const auto minor_it = kMetalValenceMinor.find(metal_state.symbol);
+                /// Check whether the proposed valence is represented in this metal's preference tier.
                 const auto contains = [](const std::vector<int> &values, int target)
                 {
                     return std::find(values.begin(), values.end(), target) != values.end();
@@ -44,6 +45,8 @@ namespace molgr
 
             namespace
             {
+                /// @param choice Electronic states selected together for one or more metals.
+                /// @return The sum of penalties for the metal states in one assignment choice.
                 double MetalStateChoicePenalty(const MetalStateChoice &choice)
                 {
                     double penalty = 0.0;
@@ -54,6 +57,8 @@ namespace molgr
                     return penalty;
                 }
 
+                /// @param choice Electronic states selected together for one or more metals.
+                /// @return The total number of unpaired electrons assigned to the metals in this choice.
                 int MetalStateChoiceRadicals(const MetalStateChoice &choice)
                 {
                     int radicals = 0;
@@ -64,6 +69,9 @@ namespace molgr
                     return radicals;
                 }
 
+                /// @param choice Electronic states selected together for one or more metals.
+                /// @return The assignment ordering key combining penalty, radical count and explicit metal
+                ///     labels.
                 auto MetalStateChoiceSortKey(const MetalStateChoice &choice)
                 {
                     std::vector<std::tuple<std::string, int, int, int>> signature;
@@ -82,6 +90,11 @@ namespace molgr
                         signature);
                 }
 
+                /// Merge compatible choices for equivalent metal elements, or report that unification is
+                /// unavailable.
+                /// @param grouped_state_options Electronic alternatives for metal sites grouped by element.
+                /// @return Unified choices, or an empty optional if the element-wise merge cannot be
+                ///     applied.
                 std::optional<MetalStateChoiceGroup> BuildUnifiedSameElementStateOptions(
                     const std::vector<std::vector<molgr::metal::MetalAtomPosition>> &grouped_state_options)
                 {

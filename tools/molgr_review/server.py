@@ -243,8 +243,9 @@ def _mol_from_smiles_without_sanitize(smiles: str) -> Chem.Mol | None:
     return mol
 
 
-def _live_candidate_comparison(mol: Chem.Mol, snapshot_smiles: str) -> dict[str, Any]:
-    live_smiles = _safe_smiles(mol)
+def _live_candidate_comparison(
+    mol: Chem.Mol, live_smiles: str, snapshot_smiles: str
+) -> dict[str, Any]:
     comparison: dict[str, Any] = {
         "candidate_snapshot_smiles": snapshot_smiles,
         "live_candidate_smiles_exact_match": (
@@ -264,7 +265,7 @@ def _live_candidate_comparison(mol: Chem.Mol, snapshot_smiles: str) -> dict[str,
         comparison["live_candidate_equivalence_reason"] = "candidate_snapshot_smiles_invalid"
         return comparison
 
-    info = evaluate_equivalence(mol, snapshot, use_chirality=False)
+    info = evaluate_equivalence(mol, Chem.AddHs(snapshot), use_chirality=False)
     decision = info.decision.value
     comparison["live_candidate_equivalence_decision"] = decision
     comparison["live_matches_candidate_snapshot"] = (
@@ -766,7 +767,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 "live_candidate_smiles": smiles,
                 "error": "",
                 "render_error": render_error,
-                **_live_candidate_comparison(candidate_mol, snapshot_smiles),
+                **_live_candidate_comparison(reconstructed_mol, smiles, snapshot_smiles),
             },
         )
 

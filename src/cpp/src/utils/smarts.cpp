@@ -25,11 +25,16 @@ namespace
     constexpr std::array<const char *, kPatternCount> kSmartsPatterns = {
         "[Nv0,Cv1,Nv3,Clv1,Clv2,Clv3,Brv1,Brv2,Brv3,Iv1,Iv2,Iv3,Asv3,Sev2]",
         "[Hv0,Bv2,Bv3,Cv0,Cv1,Cv2,Cv3,Nv1,Nv2,Ov0,Ov1,Clv0,Siv3,Pv2,Sv0,Sv1,Brv0,Iv0]",
+        "[Pv2]", "[Cv0,Cv1,Cv2,Cv3,Nv2]",
+        "[Ov1]", "[Cv3]",
+        "[#34v3,#53v4,#53v5]", "[Ov0,Ov1]",
+        "[#15D5v5]", "[#8v1,#6v3]",
+        "[#14D4v4]-[#6D2v3]=[#8]",
+        "[#15D4v4]-[#15D4v4]",
         "[Cv5,Nv5,Pv5,Siv5]=,#[*]",
         "[#16,#15,#33,#9,#17,#35,#53]=,#[*]",
         "[#6]1([#6]2)([#6]3)[#7]23[#6]1",
         "[#6]1([#6]2)[#7]2[#6]1",
-        "[Siv5]-[O,F]",
         "[*+1,*+2,*+3]-[Ov1+0,Nv2+0,Sv1+0]",
         "[Ov1+0]-C=O",
         "[#7v1+0]-[#7v2+0]-[#7v1+0]",
@@ -93,6 +98,7 @@ namespace
     };
     using PatternArray = std::array<std::unique_ptr<OpenBabel::OBSmartsPattern>, kPatternCount>;
 
+    /// @return The current thread's compiled reconstruction SMARTS patterns.
     PatternArray &ThreadLocalPatterns()
     {
         // Open Babel SMARTS destructors are unsafe during external worker

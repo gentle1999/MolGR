@@ -31,6 +31,7 @@ GNU General Public License for more details.
 
 namespace OpenBabel
 {
+  /// Parameters and coordinates for one UFF bond stretching interaction.
   class MolgrFFBondCalculationUFF : public OBFFCalculation2
   {
     public:
@@ -40,9 +41,12 @@ namespace OpenBabel
       double rab = 0.0;
       double delta = 0.0;
 
+      /// Evaluate this bond stretching interaction and accumulate gradients when requested by the template
+      /// argument.
       template<bool> void Compute();
   };
 
+  /// Parameters and coordinates for one UFF angle bending interaction.
   class MolgrFFAngleCalculationUFF : public OBFFCalculation3
   {
     public:
@@ -64,9 +68,12 @@ namespace OpenBabel
       int coord = 0;
       int n = 0;
 
+      /// Evaluate this angle bending interaction and accumulate gradients when requested by the template
+      /// argument.
       template<bool> void Compute();
   };
 
+  /// Parameters and coordinates for one UFF torsion interaction.
   class MolgrFFTorsionCalculationUFF : public OBFFCalculation4
   {
     public:
@@ -76,10 +83,13 @@ namespace OpenBabel
       double tor = 0.0;
       double cosNPhi0 = 0.0;
 
+      /// Evaluate this torsion interaction and accumulate gradients when requested by the template
+      /// argument.
       template<bool> void Compute();
 
   };
 
+  /// Parameters and coordinates for one UFF out-of-plane bending interaction.
   class MolgrFFOOPCalculationUFF : public OBFFCalculation4
   {
     public:
@@ -89,9 +99,12 @@ namespace OpenBabel
       double c1 = 0.0;
       double c2 = 0.0;
 
+      /// Evaluate this out-of-plane bending interaction and accumulate gradients when requested by the
+      /// template argument.
       template<bool> void Compute();
   };
 
+  /// Parameters and coordinates for one UFF van der Waals interaction.
   class MolgrFFVDWCalculationUFF : public OBFFCalculation2
   {
     public:
@@ -105,37 +118,52 @@ namespace OpenBabel
       double kab = 0.0;
       double rab = 0.0;
 
+      /// Evaluate this van der Waals interaction and accumulate gradients when requested by the template
+      /// argument.
       template<bool> void Compute();
   };
 
+  /// Parameters and coordinates for one UFF electrostatic interaction.
   class MolgrFFElectrostaticCalculationUFF : public OBFFCalculation2
   {
     public:
       double qq = 0.0;
       double rab = 0.0;
 
+      /// Evaluate this electrostatic interaction and accumulate gradients when requested by the template
+      /// argument.
       template<bool> void Compute();
   };
 
   // Class MolgrForceFieldUFF
   // class introduction in forcefieldUFF.cpp
+  /// UFF evaluator with per-instance constraints, atom typing and interaction lists for one molecular
+  /// topology.
   class MolgrForceFieldUFF: public OBForceField
   {
   protected:
-    //!  Parses the parameter file
+    /// @return True when the UFF parameter table is available.
     bool ParseParamFile();
-    //!  Sets atomtypes to UFF types in _mol
+    /// @return True when every atom has a UFF type usable for parameter lookup.
     bool SetTypes();
-    //!  Fill OBFFXXXCalculation vectors
+    /// Build the bonded and nonbonded interaction lists for the typed molecule.
+    /// @return True when the requested setup completed successfully.
     bool SetupCalculations();
-    //! Setup pointers in OBFFXXXCalculation vectors
+    /// Bind the stored interaction terms to the active molecular coordinates.
+    /// @return True when the requested setup completed successfully.
     bool SetupPointers();
+    /// Initialize the mixed van der Waals parameters for a nonbonded atom pair.
+    /// @param a First atom of the nonbonded pair.
+    /// @param b Second atom of the nonbonded pair.
+    /// @param vdwcalc Destination for the mixed van der Waals interaction parameters.
+    /// @return True when the requested setup completed successfully.
     bool SetupVDWCalculation(OBAtom *a, OBAtom *b, MolgrFFVDWCalculationUFF &vdwcalc);
-    //!  By default, electrostatic terms are disabled
-    //!  This is discouraged, since the parameterization is not designed for it
-    //!  But if you want, we give you the option.
+    /// Initialize electrostatic pairs when the electrostatic term is requested.
+    /// @return True when the requested setup completed successfully.
     bool SetupElectrostatics();
-    //! Same as OBForceField::GetParameter, but simpler
+    /// @param a UFF atom type name.
+    /// @param parameter Compatibility argument. Lookup uses the evaluator's own indexed parameter table.
+    /// @return The UFF parameter record for an atom type, or null if the type is unknown.
     OBFFParameter* GetParameterUFF(std::string a, std::vector<OBFFParameter> &parameter);
 
     // OBFFParameter vectors to contain the parameters
@@ -156,12 +184,14 @@ namespace OpenBabel
     bool use_atom_typing_cache_ = false;
     std::string atom_typing_cache_key_;
 
+    /// Make this evaluator's fixed and ignored atom settings available to this thread's calculations.
     void ActivateThreadLocalInstance();
+    /// @return The UFF instance active on this thread.
     static MolgrForceFieldUFF* ActiveInstance();
     static thread_local MolgrForceFieldUFF* active_instance_;
 
   public:
-    //! Constructor
+    /// Initialize an independent evaluator with the default UFF cutoffs and minimization settings.
     MolgrForceFieldUFF() : OBForceField("", false)
     {
       _validSetup = false;
@@ -174,94 +204,146 @@ namespace OpenBabel
       _linesearch = LineSearchType::Newton2Num;
     }
 
-    //! Destructor
+    /// Release the evaluator and detach its thread-local instance reference when applicable.
     ~MolgrForceFieldUFF() override;
 
-     //!Clone the current instance. May be desirable in multithreaded environments
+    /// @return A newly allocated UFF evaluator with independently initialized state.
     MolgrForceFieldUFF* MakeNewInstance() override
     {
        return new MolgrForceFieldUFF();
     }
 
+    /// Prepare a typed copy of the molecule and the interaction terms used to evaluate its energy.
+    /// @param mol Molecular graph on which the operation acts.
+    /// @return True when the requested setup completed successfully.
     bool Setup(OBMol &mol);
+    /// Prepare a typed copy of the molecule and the interaction terms used to evaluate its energy.
+    /// @param mol Molecular graph on which the operation acts.
+    /// @param constraints Coordinate constraints to apply to this UFF setup.
+    /// @return True when the requested setup completed successfully.
     bool Setup(OBMol &mol, OBFFConstraints &constraints);
 
-    //! Assignment
-    MolgrForceFieldUFF &operator = (MolgrForceFieldUFF &);
+    /// Copy the source molecule, interaction lists and constraint state into this evaluator.
+    /// @param src Evaluator supplying the molecule and UFF interaction state.
+    /// @return Reference to this evaluator.
+    MolgrForceFieldUFF &operator = (MolgrForceFieldUFF &src);
 
+    /// @return The constraints used by this evaluator.
     OBFFConstraints& GetConstraints();
+    /// Replace the evaluator's coordinate constraints.
+    /// @param constraints Coordinate constraints to apply to this UFF setup.
     void SetConstraints(OBFFConstraints& constraints);
+    /// Set the evaluator’s fixed-atom index.
+    /// @param index One-based molecular atom index.
     void SetFixAtom(int index);
+    /// Clear the fixed-atom index.
     void UnsetFixAtom();
+    /// Select an atom to omit from interaction calculations.
+    /// @param index One-based molecular atom index.
     void SetIgnoreAtom(int index);
+    /// Clear the ignored-atom index so its interactions can be evaluated again.
     void UnsetIgnoreAtom();
+    /// @param a First one-based atom index in the interaction.
+    /// @param b Second one-based atom index in the interaction.
+    /// @return True when the active evaluator excludes an atom participating in this interaction.
     static bool IgnoreCalculation(int a, int b);
+    /// @param a First one-based atom index in the interaction.
+    /// @param b Second one-based atom index in the interaction.
+    /// @param c Third one-based atom index in the interaction.
+    /// @return True when the active evaluator excludes an atom participating in this interaction.
     static bool IgnoreCalculation(int a, int b, int c);
+    /// @param a First one-based atom index in the interaction.
+    /// @param b Second one-based atom index in the interaction.
+    /// @param c Third one-based atom index in the interaction.
+    /// @param d Fourth one-based atom index in the interaction.
+    /// @return True when the active evaluator excludes an atom participating in this interaction.
     static bool IgnoreCalculation(int a, int b, int c, int d);
+    /// Configure reuse of UFF atom types for an equivalent typing environment.
+    /// @param enabled Whether to reuse stored UFF atom-type assignments.
+    /// @param cache_key Fingerprint identifying a reusable molecular environment.
     void ConfigureAtomTypingCache(bool enabled, std::string cache_key);
+    /// Copy the evaluator's perceived hybridizations to corresponding atoms of the destination molecule.
+    /// @param mol Molecular graph on which the operation acts.
     void CopyPerceivedHybridizationTo(OBMol &mol) const;
+    /// @return The assigned UFF type strings in molecular atom order.
     std::vector<std::string> DebugAtomTypes() const;
 
-    //! Get the description for this force field
+    /// @return The force field's display name.
     const char* Description()
     {
       return "Universal Force Field.";
     }
 
-    //! Get the unit in which the energy is expressed
+    /// @return The energy unit used by this implementation (kJ/mol).
     std::string GetUnit()
       {
         return std::string("kJ/mol");  // Note that we convert from kcal/mol internally
       }
 
-    //! \return that analytical gradients are implemented for UFF
+    /// @return True because UFF supplies analytical coordinate gradients.
     bool HasAnalyticalGradients() { return true; }
 
-    //! \return total energy
+    /// @param gradients Whether the evaluation should also accumulate coordinate gradients.
+    /// @return The sum of enabled UFF energy terms in kJ/mol.
     double Energy(bool gradients = true);
-    //! \return the bond stretching energy
+    /// @return The UFF bond stretching energy in kJ/mol.
     template<bool> double E_Bond();
+    /// @param gradients Whether the evaluation should also accumulate coordinate gradients.
+    /// @return The UFF bond stretching energy in kJ/mol.
     double E_Bond(bool gradients = true)
     {
       return gradients ? E_Bond<true>() : E_Bond<false>();
     }
-    //! Returns the angle bending energy
+    /// @return The UFF angle bending energy in kJ/mol.
     template<bool> double E_Angle();
+    /// @param gradients Whether the evaluation should also accumulate coordinate gradients.
+    /// @return The UFF angle bending energy in kJ/mol.
     double E_Angle(bool gradients = true)
     {
       return gradients ? E_Angle<true>() : E_Angle<false>();
     }
-    //! Returns the torsional energy
+    /// @return The UFF torsion energy in kJ/mol.
     template<bool> double E_Torsion();
+    /// @param gradients Whether the evaluation should also accumulate coordinate gradients.
+    /// @return The UFF torsion energy in kJ/mol.
     double E_Torsion(bool gradients = true)
     {
       return gradients ? E_Torsion<true>() : E_Torsion<false>();
     }
-    //! Returns the out-of-plane bending energy
+    /// @return The UFF out-of-plane bending energy in kJ/mol.
     template<bool> double E_OOP();
+    /// @param gradients Whether the evaluation should also accumulate coordinate gradients.
+    /// @return The UFF out-of-plane bending energy in kJ/mol.
     double E_OOP(bool gradients = true)
     {
       return gradients ? E_OOP<true>() : E_OOP<false>();
     }
-    //! Returns the Van der Waals energy (Buckingham potential)
+    /// @return The UFF van der Waals energy in kJ/mol.
     template<bool> double E_VDW();
+    /// @param gradients Whether the evaluation should also accumulate coordinate gradients.
+    /// @return The UFF van der Waals energy in kJ/mol.
     double E_VDW(bool gradients = true)
     {
       return gradients ? E_VDW<true>() : E_VDW<false>();
     }
-    //! Returns the dipole-dipole interaction energy
+    /// @return The UFF electrostatic energy in kJ/mol.
     template<bool> double E_Electrostatic();
+    /// @param gradients Whether the evaluation should also accumulate coordinate gradients.
+    /// @return The UFF electrostatic energy in kJ/mol.
     double E_Electrostatic(bool gradients = true)
     {
       return gradients ? E_Electrostatic<true>() : E_Electrostatic<false>();
     }
 
-    //! Compare and print the numerical and analytical gradients
+    /// Report whether analytical derivatives agree with numerical derivatives in the gradient check.
+    /// @return True when every component passes the numerical gradient check.
     bool ValidateGradients();
 
   }; // class MolgrForceFieldUFF
 
+  /// Clear stored UFF atom-type assignments and their cache counters.
   void ClearMolgrUffAtomTypeAssignmentCache();
+  /// @return Atom-typing cache hits, misses and current entry count, in that order.
   std::tuple<std::size_t, std::size_t, std::size_t> MolgrUffAtomTypeAssignmentCacheInfo();
 
 }// namespace OpenBabel

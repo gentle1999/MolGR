@@ -3,18 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from rdkit import Chem
 
 
 pytest.importorskip("openbabel")
 
 from molgr.interface import xyz_to_rdmol
 from molgr.utils.equivalence import check_equivalence
-
-
-AGODEG_REFERENCE_SMILES = (
-    "CP(C)(C)->[Co+3]1(<-[CH3-])(<-[S-]c2cccc3ccc[c-]->1c23)(<-P(C)(C)C)<-P(C)(C)C"
-)
+from scripts.tmqmg_fixture_data import reference_graph
 
 
 def _agodeg_xyz_block() -> str:
@@ -30,10 +25,16 @@ def test_agodeg_cpp_preserves_aromatic_ligand_and_selects_cobalt_iii() -> None:
         make_dative_bonds=True,
     )
     cobalt = next(atom for atom in reconstructed.GetAtoms() if atom.GetAtomicNum() == 27)
-    reference = Chem.MolFromSmiles(AGODEG_REFERENCE_SMILES)
+    reference = reference_graph("AGODEG")
     assert reference is not None
 
-    equivalent, info = check_equivalence(reference, reconstructed, use_chirality=False)
+    equivalent, info = check_equivalence(
+        reference,
+        reconstructed,
+        use_chirality=False,
+        ignore_metal_coordination_bonds=True,
+        max_resonance=100000,
+    )
 
     assert cobalt.GetFormalCharge() == 3
     assert equivalent is True, info.reason

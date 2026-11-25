@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 from openbabel import openbabel as ob
 
 
@@ -10,8 +12,27 @@ LONE_PAIR_COUNT_PROP = "MOLGR_LONE_PAIR_COUNT"
 UNRESOLVED_TWO_ELECTRON_CENTER_PROP = "MOLGR_UNRESOLVED_TWO_ELECTRON_CENTER"
 
 
+def has_cationic_lewis_pair(
+    outer_electron_count: int,
+    formal_charge: int,
+    covalent_valence: float,
+    unpaired_electrons: int,
+    unresolved: bool,
+) -> bool:
+    """Count a resolved cation's Lewis pairs, not reconstruction-active pairs.
+
+    Each covalent bond-order unit uses one of the atom's electrons. Subtract
+    unpaired electrons before identifying pairs; deferred occupancies and
+    fractional bond-order sums cannot establish an available pair.
+    """
+    if formal_charge <= 0 or covalent_valence < 0 or unpaired_electrons < 0 or unresolved:
+        return False
+    paired_electrons = outer_electron_count - formal_charge - covalent_valence - unpaired_electrons
+    return paired_electrons >= 2 and paired_electrons % 2 == 0
+
+
 def _get_int_data(atom: ob.OBAtom, attribute: str) -> int:
-    data = atom.GetData(attribute)
+    data = cast("ob.OBGenericData | None", atom.GetData(attribute))
     if data is None:
         return 0
     try:
@@ -33,6 +54,7 @@ def _set_int_data(atom: ob.OBAtom, attribute: str, value: int) -> None:
 
 
 def get_unpaired_electron_count(atom: ob.OBAtom) -> int:
+    """Read the explicit radical count used in the global spin budget."""
     return _get_int_data(atom, UNPAIRED_ELECTRON_COUNT_PROP)
 
 
@@ -45,6 +67,7 @@ def set_unpaired_electron_count(atom: ob.OBAtom, value: int) -> None:
 
 
 def get_lone_pair_count(atom: ob.OBAtom) -> int:
+    """Read the search-active lone pairs available for local bond rearrangements."""
     return _get_int_data(atom, LONE_PAIR_COUNT_PROP)
 
 
@@ -57,11 +80,12 @@ def set_lone_pair_count(atom: ob.OBAtom, value: int) -> None:
 
 
 def has_unresolved_two_electron_center(atom: ob.OBAtom) -> bool:
+    """Check whether the radical budget still has to resolve a two-electron center."""
     return bool(_get_int_data(atom, UNRESOLVED_TWO_ELECTRON_CENTER_PROP))
 
 
 def set_unresolved_two_electron_center(atom: ob.OBAtom, value: bool) -> None:
-    """Mark a C/N/P-like two-electron deficit whose spin occupancy is deferred."""
+    """Mark a C/N/Si/P-like two-electron deficit whose spin occupancy is deferred."""
 
     _set_int_data(atom, UNRESOLVED_TWO_ELECTRON_CENTER_PROP, int(value))
 
@@ -72,6 +96,7 @@ __all__ = [
     "UNRESOLVED_TWO_ELECTRON_CENTER_PROP",
     "get_lone_pair_count",
     "get_unpaired_electron_count",
+    "has_cationic_lewis_pair",
     "has_unresolved_two_electron_center",
     "set_lone_pair_count",
     "set_unpaired_electron_count",

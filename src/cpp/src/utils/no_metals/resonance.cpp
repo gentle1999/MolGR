@@ -32,6 +32,7 @@ namespace
     using RawStateKey = molgr::no_metals::resonance::RawStateKey;
     using ProcessedStateKey = molgr::no_metals::resonance::ProcessedStateKey;
 
+    /// A ligand graph before validation, with indices back to its seed and traversal order.
     struct RawResonanceCandidate
     {
         std::size_t seed_index = 0;
@@ -40,6 +41,9 @@ namespace
         std::shared_ptr<OpenBabel::OBMol> omol;
     };
 
+    /// Retain one representative of each distinct ligand electronic state.
+    /// @param states Ligand states from which to generate or select electronic alternatives.
+    /// @return Unique states in order of first occurrence.
     std::vector<molgr::state::ReconstructionState> DeduplicateStates(
         std::vector<molgr::state::ReconstructionState> states)
     {
@@ -59,6 +63,9 @@ namespace
         return unique;
     }
 
+    /// Sum explicitly assigned unpaired electrons across the molecular graph.
+    /// @param mol Ligand graph supplying the atom labels, coordinates and bond orders.
+    /// @return Number of real unpaired electrons, excluding deferred pairs.
     int RealUnpairedElectrons(const OpenBabel::OBMol &mol)
     {
         int count = 0;
@@ -70,6 +77,9 @@ namespace
         return count;
     }
 
+    /// Find boron-neighbor bonds eligible for radical-generating bond reduction.
+    /// @param mol Ligand graph supplying the atom labels, coordinates and bond orders.
+    /// @return Pairs of boron and neighboring atom indices eligible for reduction.
     std::vector<std::pair<int, int>> BoronNeighborRadicalBonds(const OpenBabel::OBMol &mol)
     {
         std::vector<std::pair<int, int>> pairs;
@@ -92,6 +102,8 @@ namespace
             {
                 continue;
             }
+            /// Require zero unpaired electrons and no deferred two-electron marker on the proposed boron
+            /// partner.
             const auto closed_shell = [](OpenBabel::OBAtom &atom)
             {
                 return molgr::utils::GetUnpairedElectronCount(atom) == 0 &&
@@ -107,6 +119,13 @@ namespace
         return pairs;
     }
 
+    /// Turn B-=X into B- radical-X+ using one positive-charge/radical unit.
+    /// @param mol Ligand graph supplying the atom labels, coordinates and bond orders.
+    /// @param charge Signed formal charge used for this electronic assignment.
+    /// @param target_radicals Target number of unpaired electrons.
+    /// @param boron_idx One-based atom index in the ligand graph.
+    /// @param neighbor_idx One-based atom index in the ligand graph.
+    /// @return True when the requested edit was applied to the graph.
     bool ReduceBoronNeighborBond(
         OpenBabel::OBMol &mol, int &charge, int target_radicals,
         int boron_idx, int neighbor_idx)
@@ -123,6 +142,8 @@ namespace
         auto *boron = mol.GetAtom(boron_idx);
         auto *neighbor = mol.GetAtom(neighbor_idx);
         auto *bond = mol.GetBond(boron, neighbor);
+        /// Restore the original boron bond and endpoint labels when the proposed reduction fails
+        /// validation.
         const auto restore = [&]()
         {
             bond->SetBondOrder(2);
@@ -145,6 +166,7 @@ namespace
         neighbor->SetFormalCharge(1);
         molgr::reconstruct::AssignChargeRadicalForAtom(*boron);
         molgr::reconstruct::AssignChargeRadicalForAtom(*neighbor);
+        /// Check the rebuilt endpoint's formal charge, unpaired count and resolved electron classification.
         const auto matches = [](OpenBabel::OBAtom &atom, int expected_charge, int radicals)
         {
             return atom.GetFormalCharge() == expected_charge &&
@@ -162,6 +184,9 @@ namespace
         return true;
     }
 
+    /// Keep original seeds and enumerate budgeted B=X reductions before traversal.
+    /// @param states Ligand states from which to generate or select electronic alternatives.
+    /// @return Seed pool including admissible boron-neighbor radical alternatives.
     std::vector<molgr::state::ReconstructionState> ExpandBoronNeighborRadicalSeeds(
         std::vector<molgr::state::ReconstructionState> states)
     {
@@ -216,19 +241,32 @@ namespace
         return pool;
     }
 
-    template <typename Stage>
-    void AppendOmolStageVariants(
-        std::vector<molgr::state::ReconstructionState> &pool,
-        const std::string &phase,
-        Stage stage)
+    /// Append carbene electronic alternatives to the current resonance candidate pool.
+    /// @param pool Ligand candidate pool extended in place.
+    void AppendCarbeneVariants(
+        std::vector<molgr::state::ReconstructionState> &pool)
     {
         std::vector<molgr::state::ReconstructionState> additions;
         for (const auto &state : pool)
         {
+            // This move consumes an unresolved two-electron center at its source.
+            // A seed without one cannot produce a variant and needs no graph copy.
+            bool has_center = false;
+            const auto &mol = state.Mol();
+            for (unsigned int i = 1; i <= mol.NumAtoms(); ++i)
+            {
+                if (molgr::utils::HasUnresolvedTwoElectronCenter(*mol.GetAtom(i)))
+                {
+                    has_center = true;
+                    break;
+                }
+            }
+            if (!has_center) continue;
             auto machine = molgr::state::OmolStateMachine::FromReconstructionState(state);
             auto next_mol = molgr::utils::CloneMolTopologyShared(state.Mol());
             machine = machine.Branch(std::nullopt, std::move(next_mol));
-            if (machine.RunOmolStage(phase, stage))
+            if (machine.RunOmolStage("relocate_carbene_radical_for_resonance",
+                                     molgr::reconstruct::CleanCarbeneNeighborUnsaturated))
             {
                 additions.push_back(machine.FreezeLike(state));
             }
@@ -240,6 +278,11 @@ namespace
         pool = DeduplicateStates(std::move(pool));
     }
 
+    /// Retain a traversal label only if an existing path to this state does not dominate it.
+    /// @param labels_by_state Nondominated traversal labels already associated with each state.
+    /// @param state_key Fingerprint of the current resonance state.
+    /// @param label Proposed traversal cost label for this graph.
+    /// @return True if the new label survives dominance pruning.
     bool RegisterTraversalLabel(
         std::map<RawStateKey, std::vector<std::pair<int, int>>> &labels_by_state,
         const RawStateKey &state_key,
@@ -266,11 +309,20 @@ namespace
         return true;
     }
 
+    /// Normalize, deduplicate and validate a raw resonance graph against the ligand seed's targets.
+    /// @param raw Resonance graph before charge cleanup and validation.
+    /// @param seed Initial ligand state for this search.
+    /// @param seen_processed_states Fingerprints of already normalized ligand graphs.
+    /// @param config Settings for the current reconstruction or scoring operation.
+    /// @param metal_distances Nearest eligible metal-contact distances indexed by ligand atom, in
+    ///     milliangstroms.
+    /// @return Prepared, distinct candidate states ready for evaluation.
     std::vector<molgr::state::ReconstructionState> PrepareCandidate(
         RawResonanceCandidate &raw,
         const molgr::state::ReconstructionState &seed,
         std::set<ProcessedStateKey> &seen_processed_states,
-        const molgr::config::MolGRConfig &config)
+        const molgr::config::MolGRConfig &config,
+        const std::vector<int> &metal_distances)
     {
         auto machine = molgr::state::OmolStateMachine::FromReconstructionState(seed);
         machine = machine.Branch(
@@ -283,7 +335,7 @@ namespace
         machine.RunOmolChargeStage(
             "process_resonance_eliminate_possible_cp_like_radical_anion",
             molgr::reconstruct::EliminatePossibleCPLikeRadicalAnion,
-            machine.total_radical_electrons);
+            machine.total_radical_electrons, metal_distances);
         machine.RunOmolStage(
             "process_resonance_clean_possible_1_3_dipole",
             molgr::reconstruct::CleanPossible13Dipole,
@@ -313,12 +365,12 @@ namespace
             });
         machine.RunOmolChargeStage(
             "process_resonance_eliminate_negative_charges",
-            [target_radical_electrons](OpenBabel::OBMol &mol, int &charge)
+            [target_radical_electrons, &metal_distances](OpenBabel::OBMol &mol, int &charge)
             {
                 return molgr::reconstruct::EliminateNegativeCharges(
                     mol,
                     charge,
-                    target_radical_electrons);
+                    target_radical_electrons, metal_distances);
             });
         machine.RunOmolChargeStage(
             "process_resonance_eliminate_positive_charges_2",
@@ -343,7 +395,7 @@ namespace
             }
         }
         ProcessedStateKey processed_key{
-            molgr::resonance::BuildProcessedResonanceKey(validated_mol),
+            molgr::resonance::BuildResonanceStateKey(validated_mol),
             machine.given_charge,
         };
         if (!seen_processed_states.insert(std::move(processed_key)).second)
@@ -406,10 +458,7 @@ namespace molgr
                 std::vector<molgr::state::ReconstructionState> neighbor_seeds)
             {
                 auto pool = ExpandBoronNeighborRadicalSeeds(std::move(neighbor_seeds));
-                AppendOmolStageVariants(
-                    pool,
-                    "relocate_carbene_radical_for_resonance",
-                    reconstruct::CleanCarbeneNeighborUnsaturated);
+                AppendCarbeneVariants(pool);
                 return pool;
             }
 
@@ -420,7 +469,8 @@ namespace molgr
                 const std::vector<molgr::state::ReconstructionState> &states,
                 const molgr::config::MolGRConfig &config,
                 molgr::pipeline::perf::RunTimingReducer *timing_reducer,
-                ResonanceSearchSession *session)
+                ResonanceSearchSession *session,
+                const std::vector<int> &metal_distances, std::set<RawStateKey> *budget_raw_keys)
             {
                 ResonanceSearchSession local_session;
                 auto &search_session = session == nullptr ? local_session : *session;
@@ -456,11 +506,16 @@ namespace molgr
                             }
                             if (search_session.seen_raw_states.insert(raw_key).second)
                             {
+                                const auto evaluation_index = search_session.next_raw_index++;
+                                if (budget_raw_keys && !budget_raw_keys->insert(raw_key).second) {
+                                    ++resonance_index;
+                                    return should_expand;
+                                }
                                 raw_candidates.push_back(
                                     RawResonanceCandidate{
                                         seed_index,
                                         resonance_index,
-                                        search_session.next_raw_index++,
+                                        evaluation_index,
                                         node.omol_owner,
                                     });
                             }
@@ -490,7 +545,7 @@ namespace molgr
                         raw,
                         seed,
                         search_session.seen_processed_states,
-                        config);
+                        config, metal_distances);
                     for (auto &candidate : prepared_candidates)
                     {
                         candidates.push_back(std::move(candidate));

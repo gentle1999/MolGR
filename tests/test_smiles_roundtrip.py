@@ -4,6 +4,7 @@ import csv
 from pathlib import Path
 
 import pytest
+from fixture_reconstruction import fixture_marks
 from rdkit import Chem
 
 from molgr import (
@@ -20,6 +21,7 @@ from molgr import (
 from molgr.interface import xyz_to_rdmol
 from molgr.utils.converter import _sanitize_preserving_explicit_bonds, refresh_rdkit_aromaticity
 from molgr.utils.smiles import _compare_mapped_graph, normalize_smiles_hydrogens
+from scripts.tmqmg_fixture_data import fixture
 
 
 DATA = Path(__file__).parent / "data"
@@ -31,16 +33,37 @@ WATER_XYZ = "3\nwater\nO 0 0 0\nH 0.9572 0 0\nH -0.2390 0.9270 0\n"
 
 
 @pytest.mark.parametrize("backend", ["cpp", "python"])
-@pytest.mark.parametrize("case", CASES, ids=lambda case: case["case_id"])
-def test_existing_public_inputs_preserve_the_explicit_h_graph(case, backend):
-    xyz = (DATA / case["xyz_file"]).read_text()
-    mol = xyz_to_rdmol(xyz, int(case["charge"]), int(case["spin_multiplicity"]), backend=backend)
+@pytest.mark.parametrize(
+    "frame",
+    [
+        pytest.param(
+            ReconstructionBatchRequest(
+                (DATA / case["xyz_file"]).read_text(encoding="utf-8"),
+                int(case["charge"]),
+                int(case["spin_multiplicity"]),
+            ),
+            id=case["case_id"],
+            marks=fixture_marks(Path(case["xyz_file"]).stem),
+        )
+        for case in CASES
+    ],
+)
+@pytest.mark.parametrize("kekulize", [True, False])
+def test_existing_public_inputs_preserve_the_explicit_h_graph(
+    frame, backend, kekulize, rebuild_fixture
+):
+    xyz = frame.xyz_block
+    mol = rebuild_fixture(frame, backend, kekulize)
     before = mol.ToBinary(Chem.PropertyPickleOptions.AllProps)
-    smiles = validate_smiles_roundtrip(mol)
+    smiles = validate_smiles_roundtrip(mol, kekulize=kekulize)
     assert smiles == Chem.MolToSmiles(Chem.Mol(mol))
     params = Chem.SmilesParserParams()
     params.removeHs = False
-    parsed = Chem.MolFromSmiles(smiles, params)
+
+    def read(text):
+        return mol_from_smiles(text) if kekulize else Chem.MolFromSmiles(text, params)
+
+    parsed = read(smiles)
     assert parsed is not None
     assert parsed.GetNumAtoms() == mol.GetNumAtoms() == int(xyz.splitlines()[0])
     assert parsed.GetNumBonds() == mol.GetNumBonds()
@@ -50,10 +73,9 @@ def test_existing_public_inputs_preserve_the_explicit_h_graph(case, backend):
         a.GetAtomicNum() == 1 for a in mol.GetAtoms()
     )
     assert all(a.GetNumImplicitHs() == 0 and a.GetNumExplicitHs() == 0 for a in parsed.GetAtoms())
-    # Further native readbacks must remain stable without restoring MolGR
-    # electron annotations or relying on the reader's inferred radical count.
+    # Check repeated readback in the selected representation.
     for _ in range(2):
-        parsed = Chem.MolFromSmiles(validate_smiles_roundtrip(parsed), params)
+        parsed = read(validate_smiles_roundtrip(parsed, kekulize=kekulize))
     assert mol.ToBinary(Chem.PropertyPickleOptions.AllProps) == before
 
 
@@ -95,7 +117,7 @@ def test_aromaticity_refresh_preserves_electron_state(integer_bonds):
     assert center.GetIntProp("MOLGR_LONE_PAIR_COUNT") == 1
     assert all(mol.GetAtomWithIdx(i).GetIsAromatic() for i in range(6))
     normalize_smiles_hydrogens(mol)
-    validate_smiles_roundtrip(mol)
+    validate_smiles_roundtrip(mol, kekulize=False)
 
 
 def test_aromaticity_refresh_rolls_back_graph_and_radicals_on_failure(monkeypatch):
@@ -171,10 +193,10 @@ def test_validation_does_not_ignore_hydrogen_changes():
 
 
 @pytest.mark.parametrize("backend", ["cpp", "python"])
-def test_default_output_checks_aromaticity_without_stereo_perception(backend):
+def test_aromatic_output_checks_aromaticity_without_stereo_perception(backend):
     xyz = (DATA / "xyz" / "aromatic_sulfur_oxide.xyz").read_text()
-    mol = xyz_to_rdmol(xyz, 0, 1, backend=backend, make_stereochemistry=False)
-    validate_smiles_roundtrip(mol)
+    mol = xyz_to_rdmol(xyz, 0, 1, backend=backend, make_stereochemistry=False, kekulize=False)
+    validate_smiles_roundtrip(mol, kekulize=False)
     assert any(bond.GetIsAromatic() for bond in mol.GetBonds())
 
 
@@ -183,9 +205,9 @@ def test_aromatic_triple_bond_retains_order_after_refresh_and_readback():
     Chem.Kekulize(mol)
     refresh_rdkit_aromaticity(mol)
     normalize_smiles_hydrogens(mol)
-    smiles = validate_smiles_roundtrip(mol)
+    smiles = validate_smiles_roundtrip(mol, kekulize=False)
     assert "#" in smiles
-    for graph in (mol, mol_from_smiles(smiles)):
+    for graph in (mol, mol_from_smiles(smiles, kekulize=False)):
         triples = [bond for bond in graph.GetBonds() if bond.GetBondType() == Chem.BondType.TRIPLE]
         assert len(triples) == 1
         assert triples[0].GetIsAromatic()
@@ -204,12 +226,15 @@ def test_aromatic_triple_bond_retains_order_after_refresh_and_readback():
         "[13CH4]",
     ],
 )
-def test_valid_graphs_and_stereo_round_trip(smiles):
+@pytest.mark.parametrize("kekulize", [True, False])
+def test_valid_graphs_and_stereo_round_trip(smiles, kekulize):
     mol = Chem.AddHs(Chem.MolFromSmiles(smiles))
+    if kekulize:
+        Chem.Kekulize(mol, clearAromaticFlags=True)
     # Existing labels must survive, without using them to change the traversal.
     for i, atom in enumerate(mol.GetAtoms()):
         atom.SetAtomMapNum(100 + i)
-    validate_smiles_roundtrip(mol, check_stereochemistry=True)
+    validate_smiles_roundtrip(mol, kekulize=kekulize, check_stereochemistry=True)
 
 
 @pytest.mark.parametrize("smiles", ["C", "[CH4]"])
@@ -260,7 +285,9 @@ def test_enhanced_relative_stereo_is_not_silently_projected_as_absolute():
 def test_lossy_outputs_follow_failure_policy_and_preserve_opt_out(backend, monkeypatch):
     bad = Chem.AddHs(Chem.MolFromSmiles("CC"))
     bad.GetBondBetweenAtoms(0, 1).SetBondType(Chem.BondType.ZERO)
-    monkeypatch.setattr("molgr.interface.restore_stereochemistry", lambda mol: Chem.Mol(bad))
+    monkeypatch.setattr(
+        "molgr.interface.restore_stereochemistry", lambda mol, **kwargs: Chem.Mol(bad)
+    )
     xyz = WATER_XYZ
     config = MolGRConfig()
     with pytest.raises(ReconstructionError) as raised:
@@ -285,9 +312,9 @@ def test_batch_reports_lossy_items_and_continues(backend, monkeypatch):
 
     calls = iter([True, False])
 
-    def perceive(mol):
+    def perceive(mol, *, kekulize):
         if not next(calls):
-            return make_stereochemistry(mol)
+            return make_stereochemistry(mol, kekulize=kekulize)
         bad = Chem.AddHs(Chem.MolFromSmiles("CC"))
         bad.GetBondBetweenAtoms(0, 1).SetBondType(Chem.BondType.ZERO)
         return bad
@@ -351,9 +378,10 @@ def test_transition_metals_keep_native_dative_representation(ion, coordination):
         "c1cccc1",  # failed Kekulization is still fatal
     ],
 )
-def test_native_reader_rejects_invalid_valence_and_aromaticity(invalid):
+@pytest.mark.parametrize("kekulize", [True, False])
+def test_native_reader_rejects_invalid_valence_and_aromaticity(invalid, kekulize):
     with pytest.raises(SmilesRoundtripError):
-        mol_from_smiles(invalid)
+        mol_from_smiles(invalid, kekulize=kekulize)
 
 
 def test_coordination_reader_rejects_malformed_smiles():
@@ -373,8 +401,39 @@ def test_native_reader_perceives_organic_stereo_and_aromaticity(fragment):
     params = Chem.SmilesParserParams()
     params.removeHs = False
     reference = Chem.MolFromSmiles(fragment, params)
-    mol = mol_from_smiles(fragment + ".[Fe+3]" + "(<-[O]([H])[H])" * 4)
+    mol = mol_from_smiles(fragment + ".[Fe+3]" + "(<-[O]([H])[H])" * 4, kekulize=False)
     restored = Chem.GetMolFrags(mol, asMols=True, sanitizeFrags=False)[0]
     _compare_mapped_graph(reference, restored, list(range(reference.GetNumAtoms())))
-    native = mol_from_smiles(fragment)
+    native = mol_from_smiles(fragment, kekulize=False)
     _compare_mapped_graph(reference, native, list(range(reference.GetNumAtoms())))
+
+
+@pytest.mark.parametrize("backend", ["cpp", "python"])
+@pytest.mark.parametrize("stereo", [False, True])
+def test_libzom_default_keeps_localized_ring_across_single_batch_and_readback(backend, stereo):
+    xyz = fixture("LIBZOM")["xyz"]
+    mol = xyz_to_rdmol(xyz, backend=backend, make_stereochemistry=stereo)
+    (item,) = iter_xyz_to_rdmol_batch(
+        [(xyz, 0, 1)], backend=backend, make_stereochemistry=stereo, max_workers=1
+    )
+    assert item.status is None
+    assert mol.GetNumAtoms() == 42
+    ring = [4, 5, 6, 7, 8, 4]
+    orders = [mol.GetBondBetweenAtoms(i, j).GetBondTypeAsDouble() for i, j in zip(ring, ring[1:])]
+    assert orders == [1, 2, 1, 2, 2]
+    assert not any(b.GetIsAromatic() for b in mol.GetBonds())
+    smiles = validate_smiles_roundtrip(mol)
+    assert validate_smiles_roundtrip(item.result) == smiles
+    for _ in range(5):
+        mol = mol_from_smiles(smiles)
+        assert validate_smiles_roundtrip(mol) == smiles
+
+
+@pytest.mark.parametrize("backend", ["cpp", "python"])
+def test_batch_can_request_aromatic_output(backend):
+    xyz = (DATA / "xyz" / "aromatic_sulfur_oxide.xyz").read_text()
+    (item,) = iter_xyz_to_rdmol_batch([(xyz, 0, 1)], backend=backend, kekulize=False)
+    assert item.status is None
+    assert any(b.GetBondType() == Chem.BondType.AROMATIC for b in item.result.GetBonds())
+    smiles = validate_smiles_roundtrip(item.result, kekulize=False)
+    assert any(b.GetIsAromatic() for b in mol_from_smiles(smiles, kekulize=False).GetBonds())

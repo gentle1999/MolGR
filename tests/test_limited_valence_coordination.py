@@ -107,6 +107,17 @@ def test_bridging_oxide_distributes_charge_across_both_main_group_metals():
     _assert_native_roundtrip(result)
 
 
+def test_mixed_hydride_bridge_uses_one_covalent_hydrogen_valence():
+    source = _contacts(
+        [("Al", 3), ("H", -1), ("Fe", 2)], [(-1.55, 0, 0), (0, 0.42, 0), (1.57, 0, 0)]
+    )
+    result = make_dative_bond(source)
+    assert result.GetBondBetweenAtoms(1, 0).GetBondType() == Chem.BondType.SINGLE
+    assert result.GetBondBetweenAtoms(1, 2).GetBondType() == Chem.BondType.DATIVE
+    assert [a.GetFormalCharge() for a in result.GetAtoms()] == [2, 0, 2]
+    _assert_native_roundtrip(result)
+
+
 @pytest.mark.parametrize(
     "metal", ["Li", "Na", "K", "Mg", "Ca", "Tl", "Fe", "Cu", "Zn", "Cd", "Hg", "Pt", "La"]
 )

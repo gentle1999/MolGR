@@ -9,11 +9,16 @@ from openbabel import openbabel as ob
 
 from molgr.config import CONFIG, MolGRConfig
 from molgr.fallback.state import ReconstructionState
+from molgr.fallback.utils.bond_geometry import (
+    azinium_geometry_conflict_count,
+    is_elongated_carbonyl_pair,
+)
 from molgr.fallback.utils.electrons import (
     get_lone_pair_count,
     get_unpaired_electron_count,
     has_unresolved_two_electron_center,
 )
+from molgr.fallback.utils.ob_graph import mol_atoms, mol_bonds
 from molgr.fallback.utils.organic_topology import (
     OrganicTopologyMetrics,
     compute_organic_topology_metrics,
@@ -60,24 +65,26 @@ def _annotate_no_metal_candidate_topology(
 
 
 def _formal_charge_absolute_sum(candidate: ReconstructionState) -> int:
+    """Measure charge separation on the ligand, counting both ends of each formal ion pair."""
     return int(
         candidate.get_cached_omol_value(
             "organic_formal_charge_absolute_sum",
             lambda omol: sum(
-                abs(int(cast(ob.OBAtom, atom_iter).GetFormalCharge()))
-                for atom_iter in ob.OBMolAtomIter(cast(ob.OBMol, omol.OBMol))
+                abs(int(atom_iter.GetFormalCharge()))
+                for atom_iter in mol_atoms(cast(ob.OBMol, omol.OBMol))
             ),
         )
     )
 
 
 def _excess_radical_labels(candidate: ReconstructionState) -> int:
+    """Count explicit unpaired electrons above the requested ligand radical budget."""
     radical_sum = int(
         candidate.get_cached_omol_value(
             "organic_radical_label_sum",
             lambda omol: sum(
-                get_unpaired_electron_count(cast(ob.OBAtom, atom_iter))
-                for atom_iter in ob.OBMolAtomIter(cast(ob.OBMol, omol.OBMol))
+                get_unpaired_electron_count(atom_iter)
+                for atom_iter in mol_atoms(cast(ob.OBMol, omol.OBMol))
             ),
         )
     )
@@ -91,7 +98,8 @@ def _no_metal_candidate_selection_key(
     candidate: ReconstructionState,
     *,
     config: MolGRConfig | None = None,
-) -> tuple[int, int, int, float, float, float, float, int, int, float]:
+) -> tuple[int, int, int, int, int, float, float, float, float, int, int, float]:
+    """Rank azinium geometry, charge separation and stretched carbonyls before conjugation and energy."""
     metrics = _annotate_no_metal_candidate_topology(candidate, config=config)
     score = float(candidate.metadata.get("score", float("inf")))
     formal_charge_absolute_sum = _formal_charge_absolute_sum(candidate)
@@ -109,8 +117,18 @@ def _no_metal_candidate_selection_key(
     )
     candidate.metadata["organic_adjusted_conjugated_atom_count"] = adjusted_conjugated_atom_count
     candidate.metadata["organic_adjusted_conjugated_bond_count"] = adjusted_conjugated_bond_count
+    long_carbonyl_count = sum(
+        bond.GetBondOrder() == 2
+        and is_elongated_carbonyl_pair(bond.GetBeginAtom(), bond.GetEndAtom())
+        for bond in mol_bonds(cast(ob.OBMol, candidate.omol.OBMol))
+    )
+    candidate.metadata["organic_long_carbonyl_multiple_bond_count"] = long_carbonyl_count
+    azinium_count = azinium_geometry_conflict_count(candidate.omol.OBMol)
+    candidate.metadata["organic_azinium_geometry_conflict_count"] = azinium_count
     selection_key = (
+        azinium_count,
         formal_charge_absolute_sum,
+        long_carbonyl_count,
         -metrics.aromatic_atom_count,
         -metrics.aromatic_ring_count,
         -metrics.aromatic_stability_score,
@@ -135,16 +153,17 @@ def _no_metal_candidate_graph_tie_break_key(
     iterator order, coordinates, or resonance indices.
     """
 
+    obmol = cast(ob.OBMol, candidate.omol.OBMol)
     atoms = tuple(
         value
-        for atom in candidate.omol
+        for atom in mol_atoms(obmol)
         for value in (
-            int(atom.idx),
-            int(atom.OBAtom.GetAtomicNum()),
-            int(atom.OBAtom.GetFormalCharge()),
-            int(get_unpaired_electron_count(atom.OBAtom)),
-            int(get_lone_pair_count(atom.OBAtom)),
-            int(has_unresolved_two_electron_center(atom.OBAtom)),
+            int(atom.GetIdx()),
+            int(atom.GetAtomicNum()),
+            int(atom.GetFormalCharge()),
+            int(get_unpaired_electron_count(atom)),
+            int(get_lone_pair_count(atom)),
+            int(has_unresolved_two_electron_center(atom)),
         )
     )
     bonds = tuple(
@@ -155,11 +174,11 @@ def _no_metal_candidate_graph_tie_break_key(
                 max(int(bond.GetBeginAtomIdx()), int(bond.GetEndAtomIdx())),
                 int(bond.GetBondOrder()),
             )
-            for bond in ob.OBMolBondIter(candidate.omol.OBMol)
+            for bond in mol_bonds(obmol)
         )
         for value in (begin_idx, end_idx, order)
     )
-    return (len(candidate.omol.atoms), *atoms, len(bonds) // 3, *bonds)
+    return (int(obmol.NumAtoms()), *atoms, len(bonds) // 3, *bonds)
 
 
 def select_best_no_metal_candidate(

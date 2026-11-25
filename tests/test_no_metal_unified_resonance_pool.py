@@ -334,7 +334,7 @@ def test_resonance_seed_pool_preserves_charge_separated_oxygen_state(monkeypatch
     set_unpaired_electron_count(carbon, 0)
     obmol.AddBond(1, 2, 1)
 
-    state = _state(pybel.Molecule(obmol), source="ADEQOS-charge-separation")
+    state = _state(pybel.Molecule(obmol), source="synthetic-charge-separation")
     seeds = no_metal_resonance.build_resonance_seed_pool([state])
 
     assert seeds

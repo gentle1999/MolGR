@@ -10,10 +10,15 @@ from openbabel import pybel
 from molgr.fallback.stages.fresh import assign_charge_radical_for_atom
 from molgr.fallback.state import OmolStateMachine, ReconstructionState
 from molgr.fallback.utils import resonance as resonance_utils
+from molgr.fallback.utils.bond_geometry import (
+    is_elongated_carbonyl_pair,
+    would_form_bent_ring_allene,
+)
 from molgr.fallback.utils.electrons import (
     get_unpaired_electron_count,
     set_unpaired_electron_count,
 )
+from molgr.fallback.utils.ob_graph import atom_neighbors, mol_bonds
 
 
 NeighborRadicalMode = Literal["bond_order", "charge_separation"]
@@ -21,20 +26,69 @@ _MAX_NEIGHBOR_RADICAL_SEEDS = 256
 _CHARGE_SEPARATION_DISCREPANCY_KEY = "neighbor_radical_charge_separation_discrepancy"
 
 
+def has_substituted_n_o_radical_pair(omol: pybel.Molecule) -> bool:
+    """Keep a charge-aware alternative to closing an organic N--O radical pair.
+
+    A terminal oxygen attached to a substituted nitrogen can become oximate
+    after resonance/charge assignment. Closing N=O first can make that state
+    unreachable. Isolated NO and O-H groups are outside this seed alternative.
+    """
+    for bond in mol_bonds(cast(ob.OBMol, omol.OBMol)):
+        nitrogen = cast(ob.OBAtom, bond.GetBeginAtom())
+        oxygen = cast(ob.OBAtom, bond.GetEndAtom())
+        if nitrogen.GetAtomicNum() == 8:
+            nitrogen, oxygen = oxygen, nitrogen
+        if (
+            nitrogen.GetAtomicNum() == 7
+            and oxygen.GetAtomicNum() == 8
+            and bond.GetBondOrder() == 1
+            and oxygen.GetExplicitDegree() == 1
+            and oxygen.GetImplicitHCount() == 0
+            and get_unpaired_electron_count(nitrogen) > 0
+            and get_unpaired_electron_count(oxygen) > 0
+            and any(
+                atom.GetAtomicNum() != 1 and atom.GetIdx() != oxygen.GetIdx()
+                for atom in atom_neighbors(nitrogen)
+            )
+        ):
+            return True
+    return False
+
+
 def _clone_omol(omol: pybel.Molecule) -> pybel.Molecule:
     return pybel.Molecule(ob.OBMol(cast(ob.OBMol, omol.OBMol)))
 
 
 def neighbor_radical_bond_pairs(omol: pybel.Molecule) -> list[tuple[int, int]]:
-    """Return canonically oriented bonds whose endpoints both carry radicals."""
+    """Defer elongated O2 and carbonyl pairs to charge/spin-aware normalization."""
 
     pairs: list[tuple[int, int]] = []
-    for bond in ob.OBMolBondIter(cast(ob.OBMol, omol.OBMol)):
+    for bond in mol_bonds(cast(ob.OBMol, omol.OBMol)):
         begin_atom = cast(ob.OBAtom, bond.GetBeginAtom())
         end_atom = cast(ob.OBAtom, bond.GetEndAtom())
         if (
             get_unpaired_electron_count(begin_atom) <= 0
             or get_unpaired_electron_count(end_atom) <= 0
+        ):
+            continue
+        # Keep elongated, isolated O2 radicals for the charge/spin-aware
+        # normalization. Resolving every pair here would offer only O=O or
+        # O+/O-, losing the O-/O- candidate before charge assignment can run.
+        if (
+            begin_atom.GetAtomicNum() == end_atom.GetAtomicNum() == 8
+            and begin_atom.GetExplicitDegree() == end_atom.GetExplicitDegree() == 1
+            and begin_atom.GetImplicitHCount() == end_atom.GetImplicitHCount() == 0
+            and bond.GetBondOrder() == 1
+            and 1.40 <= begin_atom.GetDistance(end_atom) <= 1.65
+        ):
+            continue
+        if bond.GetBondOrder() == 1 and is_elongated_carbonyl_pair(begin_atom, end_atom):
+            # Preserve the reduced carbonyl hypothesis instead of irreversibly
+            # closing C=O before the available charge can be assigned.
+            continue
+        if bond.GetBondOrder() == 1 and (
+            would_form_bent_ring_allene(begin_atom, end_atom)
+            or would_form_bent_ring_allene(end_atom, begin_atom)
         ):
             continue
         pairs.append(tuple(sorted((begin_atom.GetIdx(), end_atom.GetIdx()))))
@@ -75,6 +129,9 @@ def _resolve_neighbor_radical_pair(
     if mode == "bond_order":
         bond = cast(ob.OBBond, obmol.GetBond(begin_idx, end_idx))
         if bond is None:
+            return omol, False
+        spin_to_consume = min(spin_to_consume, 3 - bond.GetBondOrder())
+        if spin_to_consume <= 0:
             return omol, False
     elif positive_atom_idx not in (begin_idx, end_idx):
         raise ValueError("positive_atom_idx must identify one endpoint of the radical bond")
@@ -165,7 +222,7 @@ def enumerate_neighbor_radical_seeds(
     *,
     exact_discrepancy: int | None = None,
 ) -> list[ReconstructionState]:
-    """Enumerate complete local resolutions of all adjacent radical pairs."""
+    """Resolve eligible radical pairs before charge/spin-aware normalization."""
 
     if exact_discrepancy is not None and exact_discrepancy < 0:
         return []
@@ -173,11 +230,11 @@ def enumerate_neighbor_radical_seeds(
     if not neighbor_radical_bond_pairs(state.omol):
         machine = OmolStateMachine.from_reconstruction_state(state)
         machine.annotate("neighbor_radicals_not_present", neighbor_radical_resolution="none")
-        candidate = machine.freeze_like(state)
-        candidate.metadata[_CHARGE_SEPARATION_DISCREPANCY_KEY] = 0
+        unchanged = machine.freeze_like(state)
+        unchanged.metadata[_CHARGE_SEPARATION_DISCREPANCY_KEY] = 0
         if exact_discrepancy not in (None, 0):
             return []
-        return [candidate]
+        return [unchanged]
 
     pending = [state]
     finished: dict[tuple[object, int], ReconstructionState] = {}
@@ -226,5 +283,6 @@ def enumerate_neighbor_radical_seeds(
 
 __all__ = [
     "enumerate_neighbor_radical_seeds",
+    "has_substituted_n_o_radical_pair",
     "neighbor_radical_bond_pairs",
 ]

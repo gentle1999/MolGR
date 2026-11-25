@@ -3,6 +3,7 @@
 #include "molgr/stages/internal_helpers.h"
 
 #include "molgr/utils/consts.h"
+#include "molgr/utils/bond_geometry.h"
 #include "molgr/utils/electrons.h"
 
 #include <openbabel/atom.h>
@@ -52,6 +53,10 @@ namespace molgr
         // slots derived from sigma degree and pi bond increments. The pair is
         // {real unpaired electrons, reconstruction-active lone pairs}; it is not
         // inferred from atom-wide parity and does not use cached hybridization.
+        /// Classify active electrons into unpaired electrons and active lone pairs.
+        /// @param atom Atom whose local chemical environment is examined.
+        /// @param electron_count Number of locally available active electrons to classify.
+        /// @return Pair of unpaired-electron and active lone-pair counts, respectively.
         std::pair<int, int> InferActiveElectronOccupancy(
             OBAtom &atom,
             int electron_count)
@@ -94,6 +99,9 @@ namespace molgr
         // Electron bookkeeping: completely overwrite unpaired and active-lone-pair
         // counts from one local deficit. The unresolved marker is managed by the
         // higher-level atom assignment function.
+        /// Replace both explicit occupancy fields from one local electron deficit.
+        /// @param atom Atom whose local chemical environment is examined.
+        /// @param electron_count Number of locally available active electrons to classify.
         void AssignActiveElectronOccupancy(OBAtom &atom, int electron_count)
         {
             const auto occupancy = InferActiveElectronOccupancy(atom, electron_count);
@@ -102,7 +110,7 @@ namespace molgr
         }
 
         // Electron bookkeeping: rebuild one atom's charge and explicit electron
-        // classification. Neutral C/N/P two-electron deficits become unresolved;
+        // classification. Neutral C/N/Si/P two-electron deficits become unresolved;
         // already resolved (unpaired=0, lone_pair=1) and (2,0) states survive while
         // the same topology remains. Other states overwrite both occupancy fields
         // and may also normalize formal charge.
@@ -113,6 +121,7 @@ namespace molgr
             const int before_lone_pairs = molgr::utils::GetLonePairCount(atom);
             const bool before_unresolved_center =
                 molgr::utils::HasUnresolvedTwoElectronCenter(atom);
+            /// Compare charge and active electron labels with their values before local valence rebuilding.
             auto changed = [&]() -> bool
             {
                 return atom.GetFormalCharge() != before_charge ||
@@ -123,6 +132,15 @@ namespace molgr
             };
 
             const int atomic_num = atom.GetAtomicNum();
+            if (before_charge == -1 && molgr::bond_geometry::AllowsSeesawPhosphoranide(atom))
+            {
+                // Preserve an explored P- hypothesis and its inactive closed-shell
+                // pair. The ordinary seed remains P+ until a branch is requested.
+                molgr::utils::SetUnpairedElectronCount(atom, 0);
+                molgr::utils::SetLonePairCount(atom, 0);
+                molgr::utils::SetUnresolvedTwoElectronCenter(atom, false);
+                return changed();
+            }
             const int current_val = atom.GetTotalValence();
             const ElementInfo *info = GetElementInfo(atomic_num);
             if (!info)
@@ -147,7 +165,7 @@ namespace molgr
 
             const int rad = AssignRadicalDots(atom);
             const bool is_two_electron_center =
-                (atomic_num == 6 || atomic_num == 7 || atomic_num == 15) &&
+                (atomic_num == 6 || atomic_num == 7 || atomic_num == 14 || atomic_num == 15) &&
                 atom.GetFormalCharge() == 0 && rad == 2;
             if (is_two_electron_center)
             {

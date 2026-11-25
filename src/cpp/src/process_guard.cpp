@@ -11,6 +11,7 @@
 
 namespace
 {
+    /// @return The operating-system process identifier of the caller.
     unsigned long CurrentProcessId()
     {
 #if defined(_WIN32)
@@ -20,6 +21,7 @@ namespace
 #endif
     }
 
+    /// @return The process identifier stored when the native backend initialized.
     unsigned long &InitializedProcessId()
     {
         static unsigned long process_id = 0;

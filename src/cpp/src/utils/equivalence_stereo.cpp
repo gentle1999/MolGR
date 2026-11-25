@@ -13,11 +13,20 @@ namespace molgr::equivalence
     using namespace utils;
     namespace
     {
+        /// Test whether the one-based reference identifies a metal in the molecular records.
+        /// @param d Input atom, bond and stereo records.
+        /// @param index One-based molecular atom index.
+        /// @return True for a metal atom at the given molecular index.
         bool Metal(const MoleculeData &d, int index)
         {
             return kNonMetalDict.count(d.atoms.at(index - 1).atomic_num) == 0;
         }
 
+        /// @param kind Stereochemical geometry selecting the permutation table.
+        /// @param p Permutation index before rearranging ligands.
+        /// @param x Ligand positions to exchange in the stereo reference order.
+        /// @param y Ligand positions to exchange in the stereo reference order.
+        /// @return The coordination permutation after exchanging two ligand positions.
         int SwapPermutation(StereoKind kind, int p, int x, int y)
         {
             if (x == y || !p)
@@ -37,13 +46,20 @@ namespace molgr::equivalence
             }
         }
 
+        /// Test whether a reordering of matching ligands gives the target stereochemical permutation.
+        /// @param kind Stereochemical geometry selecting the permutation table.
+        /// @param from Initial order of the ligand references.
+        /// @param to Target order of the ligand references.
+        /// @param p Permutation index before rearranging ligands.
+        /// @param target Required final permutation index.
+        /// @return True when at least one allowed ligand correspondence yields the target permutation.
         bool SameConfiguration(StereoKind kind, std::vector<int> from,
                                const std::vector<int> &to, int p, int target)
         {
             if (from.size() != to.size())
                 return false;
-            // Repeated virtual references denote indistinguishable vacant sites.
-            // Consider their permutations, rather than choosing an arbitrary one.
+            /// Repeated virtual references denote indistinguishable vacant sites.
+            /// Consider their permutations, rather than choosing an arbitrary one.
             std::function<bool(int, int)> visit = [&](int depth, int perm)
             {
                 if (depth == static_cast<int>(from.size()))
@@ -82,6 +98,8 @@ namespace molgr::equivalence
     int CompareStereo(const MoleculeData &left, const MoleculeData &right,
                       const std::vector<int> &mapping, bool ignore)
     {
+        /// Translate a one-based ligand reference through the zero-based atom mapping, preserving virtual
+        /// ligand 0.
         auto mapped = [&](int i) { return i ? mapping.at(i - 1) + 1 : 0; };
         using GroupKey = std::pair<int, std::vector<int>>;
         std::set<GroupKey> groups_left, groups_right;
@@ -119,8 +137,17 @@ namespace molgr::equivalence
             if (!atoms.empty())
                 groups_right.emplace(static_cast<int>(g.kind), atoms);
         }
-        if (groups_left != groups_right)
-            return -1; // Different specified sets, not proof of disjoint configurations.
+        // A different relative group is incomplete evidence at its members.
+        // Absolute centers elsewhere can still rule out this mapping.
+        bool incomplete = groups_left != groups_right;
+        std::set<int> uncertain_group_atoms;
+        if (incomplete)
+        {
+            for (const auto &group : groups_left)
+                if (!groups_right.count(group)) uncertain_group_atoms.insert(group.second.begin(), group.second.end());
+            for (const auto &group : groups_right)
+                if (!groups_left.count(group)) uncertain_group_atoms.insert(group.second.begin(), group.second.end());
+        }
 
         std::vector<bool> used(right.stereo.size(), false);
         std::map<GroupKey, int> flips;
@@ -142,13 +169,16 @@ namespace molgr::equivalence
                 }
             }
             if (found < 0)
-                return -1;
+            {
+                incomplete = true;
+                continue;
+            }
             used[found] = true;
             const auto &b = right.stereo[found];
+            if (!a.end && uncertain_group_atoms.count(b.center)) continue;
             if (!a.configuration || !b.configuration)
             {
-                if (a.configuration != b.configuration)
-                    return -1;
+                if (a.configuration != b.configuration) incomplete = true;
                 continue;
             }
             std::vector<int> refs;
@@ -169,14 +199,22 @@ namespace molgr::equivalence
                     if (refs[offset] == other[offset] && refs[offset + 1] == other[offset + 1])
                         continue;
                     if (refs[offset] != other[offset + 1] || refs[offset + 1] != other[offset])
-                        return -1;
+                    {
+                        orientation = 0;
+                        break;
+                    }
                     orientation = 3 - orientation;
+                }
+                if (!orientation)
+                {
+                    incomplete = true;
+                    continue;
                 }
                 match = orientation == b.configuration;
             }
             else
                 match = SameConfiguration(a.kind, refs, b.refs, a.configuration, b.configuration);
-            auto relative = relative_members.find(b.center);
+            auto relative = a.end ? relative_members.end() : relative_members.find(b.center);
             if (relative != relative_members.end() && a.kind == StereoKind::Tetrahedral)
             {
                 int flip = match ? 0 : 1;
@@ -185,11 +223,14 @@ namespace molgr::equivalence
                     return 0;
             }
             else if (!match)
-                return relative == relative_members.end() ? 0 : -1;
+            {
+                if (relative == relative_members.end()) return 0;
+                incomplete = true;
+            }
         }
         for (int j = 0; j < static_cast<int>(right.stereo.size()); ++j)
             if (!used[j] && ActiveStereo(right, right.stereo[j], ignore))
                 return -1;
-        return 1;
+        return incomplete ? -1 : 1;
     }
 }

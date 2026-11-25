@@ -28,7 +28,11 @@
 #include <array>
 #include <limits>
 #include <memory>
+#include <stdexcept>
 
+/// Parse one SMILES string into an independently owned OBMol; return null on reader failure.
+/// @param smiles SMILES representation of the input molecular graph.
+/// @return Newly owned molecule, or null on a parse failure.
 static std::unique_ptr<OpenBabel::OBMol> mol_from_smiles(const std::string &smiles)
 {
     auto mol = std::make_unique<OpenBabel::OBMol>();
@@ -37,14 +41,33 @@ static std::unique_ptr<OpenBabel::OBMol> mol_from_smiles(const std::string &smil
                : nullptr;
 }
 
+/// Parse an XYZ block into an owned molecular graph, returning null if the coordinates cannot be read.
+/// @param xyz XYZ text containing the declared atom count and Cartesian coordinates in angstroms.
+/// @return Newly owned molecule, or null on a parse failure.
 static std::unique_ptr<OpenBabel::OBMol> mol_from_xyz(const std::string &xyz)
 {
     auto mol = std::make_unique<OpenBabel::OBMol>();
     return molgr::utils::ReadXyzBlockToMol(xyz, mol.get()) ? std::move(mol) : nullptr;
 }
 
+/// @param xyz_block XYZ text containing the declared atom count and Cartesian coordinates in angstroms.
+/// @return The native XYZ seed topology as transferable molecule records; reject malformed XYZ.
+static molgr::utils::MoleculeData xyz_seed_molecule_data(const std::string &xyz_block)
+{
+    OpenBabel::OBMol mol;
+    py::gil_scoped_release release;
+    if (!molgr::utils::ReadXyzBlockToMol(xyz_block, &mol))
+    {
+        throw std::invalid_argument("failed to parse XYZ block");
+    }
+    return molgr::utils::MoleculeDataFromOBMol(mol);
+}
+
 void molgr::bind::bind_utils(py::module_ &m)
 {
+    m.def("xyz_seed_molecule_data", &xyz_seed_molecule_data,
+          "Read XYZ using the shared seed bond-perception implementation. Returns owned data, not an OBMol pointer.",
+          py::arg("xyz_block"));
     m.def("get_possible_metal_radicals", &molgr::GetPossibleMetalRadicals,
           R"pbdoc(
             Get possible radical electron counts for a metal given its valence.
@@ -98,19 +121,31 @@ void molgr::bind::bind_utils(py::module_ &m)
         )pbdoc",
           py::arg("p1"), py::arg("p2"), py::arg("p3"), py::arg("p4"));
 
-    py::class_<molgr::utils::AtomData>(m, "AtomData")
+    py::class_<molgr::utils::AtomData>(m, "AtomData",
+        "Element, isotope, Cartesian coordinates and explicit electron labels for one graph atom.")
         .def(py::init<>())
-        .def_readwrite("atomic_num", &molgr::utils::AtomData::atomic_num)
-        .def_readwrite("isotope", &molgr::utils::AtomData::isotope)
-        .def_readwrite("formal_charge", &molgr::utils::AtomData::formal_charge)
-        .def_readwrite("radical_num", &molgr::utils::AtomData::radical_num)
-        .def_readwrite("lone_pair_count", &molgr::utils::AtomData::lone_pair_count)
-        .def_readwrite("unresolved_two_electron_center", &molgr::utils::AtomData::unresolved_two_electron_center)
-        .def_readwrite("electron_property_presence", &molgr::utils::AtomData::electron_property_presence)
-        .def_readwrite("hybridization", &molgr::utils::AtomData::hybridization)
-        .def_readwrite("x", &molgr::utils::AtomData::x)
-        .def_readwrite("y", &molgr::utils::AtomData::y)
-        .def_readwrite("z", &molgr::utils::AtomData::z)
+        .def_readwrite("atomic_num", &molgr::utils::AtomData::atomic_num,
+                       "Atomic number of the element.")
+        .def_readwrite("isotope", &molgr::utils::AtomData::isotope,
+                       "Isotope mass number, or zero for the default isotope.")
+        .def_readwrite("formal_charge", &molgr::utils::AtomData::formal_charge,
+                       "Signed formal charge in elementary-charge units.")
+        .def_readwrite("radical_num", &molgr::utils::AtomData::radical_num,
+                       "Explicit count of unpaired electrons on this atom.")
+        .def_readwrite("lone_pair_count", &molgr::utils::AtomData::lone_pair_count,
+                       "Number of reconstruction-active lone pairs tracked on this atom.")
+        .def_readwrite("unresolved_two_electron_center", &molgr::utils::AtomData::unresolved_two_electron_center,
+                       "Whether two electrons still require a singlet or triplet assignment.")
+        .def_readwrite("electron_property_presence", &molgr::utils::AtomData::electron_property_presence,
+                       "Presence mask for unpaired electrons (1), active lone pairs (2) and unresolved occupancy (4).")
+        .def_readwrite("hybridization", &molgr::utils::AtomData::hybridization,
+                       "Hybridization code carried by the Open Babel atom.")
+        .def_readwrite("x", &molgr::utils::AtomData::x,
+                       "Cartesian x coordinate in angstroms.")
+        .def_readwrite("y", &molgr::utils::AtomData::y,
+                       "Cartesian y coordinate in angstroms.")
+        .def_readwrite("z", &molgr::utils::AtomData::z,
+                       "Cartesian z coordinate in angstroms.")
         .def("__repr__", [](const molgr::utils::AtomData &a)
              { return "<AtomData Z=" + std::to_string(a.atomic_num) +
                       " charge=" + std::to_string(a.formal_charge) +
@@ -123,55 +158,81 @@ void molgr::bind::bind_utils(py::module_ &m)
                       std::to_string(a.y) + "," + std::to_string(a.z) + ")>"; },
              "Return a concise debug representation of AtomData.");
 
-    py::enum_<molgr::utils::BondKind>(m, "BondKind")
+    py::enum_<molgr::utils::BondKind>(m, "BondKind",
+        "Distinguishes covalent order, directed dative donation and unspecified coordination.")
         .value("Covalent", molgr::utils::BondKind::Covalent)
         .value("Dative", molgr::utils::BondKind::Dative)
         .value("CoordinationUnspecified", molgr::utils::BondKind::CoordinationUnspecified);
 
-    py::class_<molgr::utils::BondData>(m, "BondData")
+    py::class_<molgr::utils::BondData>(m, "BondData",
+        "An edge with one-based atom indices. A dative edge runs from donor to acceptor.")
         .def(py::init<>())
-        .def_readwrite("begin_atom_idx", &molgr::utils::BondData::begin_atom_idx)
-        .def_readwrite("end_atom_idx", &molgr::utils::BondData::end_atom_idx)
-        .def_readwrite("order", &molgr::utils::BondData::order)
-        .def_readwrite("aromatic", &molgr::utils::BondData::aromatic)
-        .def_readwrite("kind", &molgr::utils::BondData::kind)
+        .def_readwrite("begin_atom_idx", &molgr::utils::BondData::begin_atom_idx,
+                       "One-based start atom index, the donor for a dative edge.")
+        .def_readwrite("end_atom_idx", &molgr::utils::BondData::end_atom_idx,
+                       "One-based end atom index, the acceptor for a dative edge.")
+        .def_readwrite("order", &molgr::utils::BondData::order,
+                       "Integer covalent bond order. Coordination uses the kind field.")
+        .def_readwrite("aromatic", &molgr::utils::BondData::aromatic,
+                       "Whether the source graph marked this bond aromatic.")
+        .def_readwrite("kind", &molgr::utils::BondData::kind,
+                       "Covalent, dative or unspecified coordination edge.")
         .def("__repr__", [](const molgr::utils::BondData &b)
              { return "<BondData " + std::to_string(b.begin_atom_idx) + "-" +
                       std::to_string(b.end_atom_idx) + " order=" + std::to_string(b.order) +
                       " aromatic=" + (b.aromatic ? "true" : "false") + ">"; },
              "Return a concise debug representation of BondData.");
 
-    py::enum_<molgr::utils::StereoKind>(m, "StereoKind")
+    py::enum_<molgr::utils::StereoKind>(m, "StereoKind",
+        "Geometry that determines how a stereo frame interprets its ordered neighbor references.")
         .value("Tetrahedral", molgr::utils::StereoKind::Tetrahedral)
         .value("DoubleBond", molgr::utils::StereoKind::DoubleBond)
         .value("SquarePlanar", molgr::utils::StereoKind::SquarePlanar)
         .value("TrigonalBipyramidal", molgr::utils::StereoKind::TrigonalBipyramidal)
         .value("Octahedral", molgr::utils::StereoKind::Octahedral);
-    py::class_<molgr::utils::StereoData>(m, "StereoData")
+    py::class_<molgr::utils::StereoData>(m, "StereoData",
+        "One atom or double-bond stereo frame. References are one-based and zero denotes a virtual non-hydrogen ligand.")
         .def(py::init<>())
-        .def_readwrite("kind", &molgr::utils::StereoData::kind)
-        .def_readwrite("center", &molgr::utils::StereoData::center)
-        .def_readwrite("end", &molgr::utils::StereoData::end)
-        .def_readwrite("refs", &molgr::utils::StereoData::refs)
-        .def_readwrite("configuration", &molgr::utils::StereoData::configuration);
-    py::enum_<molgr::utils::StereoGroupKind>(m, "StereoGroupKind")
+        .def_readwrite("kind", &molgr::utils::StereoData::kind,
+                       "Stereo geometry of this atom or double bond.")
+        .def_readwrite("center", &molgr::utils::StereoData::center,
+                       "One-based atom center or first endpoint of a double bond.")
+        .def_readwrite("end", &molgr::utils::StereoData::end,
+                       "One-based second endpoint for double-bond stereo.")
+        .def_readwrite("refs", &molgr::utils::StereoData::refs,
+                       "Ordered one-based ligand references. Zero is a virtual non-hydrogen ligand.")
+        .def_readwrite("configuration", &molgr::utils::StereoData::configuration,
+                       "Zero denotes unspecified stereo. Tetrahedral uses 1=CW or 2=CCW, double bonds use 1=cis or 2=trans, and SP/TB/OH use SMILES permutation numbers.");
+    py::enum_<molgr::utils::StereoGroupKind>(m, "StereoGroupKind",
+        "Absolute, relative (AND) or alternative (OR) stereochemistry of a group of centers.")
         .value("Absolute", molgr::utils::StereoGroupKind::Absolute)
         .value("And", molgr::utils::StereoGroupKind::And)
         .value("Or", molgr::utils::StereoGroupKind::Or);
-    py::class_<molgr::utils::StereoGroupData>(m, "StereoGroupData")
+    py::class_<molgr::utils::StereoGroupData>(m, "StereoGroupData",
+        "Enhanced stereo group with one-based atom members and the group identifier read from the input.")
         .def(py::init<>())
-        .def_readwrite("kind", &molgr::utils::StereoGroupData::kind)
-        .def_readwrite("atoms", &molgr::utils::StereoGroupData::atoms)
-        .def_readwrite("read_id", &molgr::utils::StereoGroupData::read_id);
+        .def_readwrite("kind", &molgr::utils::StereoGroupData::kind,
+                       "Absolute, AND or OR relation among member centers.")
+        .def_readwrite("atoms", &molgr::utils::StereoGroupData::atoms,
+                       "One-based indices of the atom stereocenters in this group.")
+        .def_readwrite("read_id", &molgr::utils::StereoGroupData::read_id,
+                       "Group identifier from the input stereo annotation.");
 
-    py::class_<molgr::utils::MoleculeData>(m, "MoleculeData")
+    py::class_<molgr::utils::MoleculeData>(m, "MoleculeData",
+        "Molecular graph exchanged by the native and Python backends, with explicit atoms, bonds, electron totals and stereo frames.")
         .def(py::init<>())
-        .def_readwrite("atoms", &molgr::utils::MoleculeData::atoms)
-        .def_readwrite("bonds", &molgr::utils::MoleculeData::bonds)
-        .def_readwrite("total_charge", &molgr::utils::MoleculeData::total_charge)
-        .def_readwrite("total_radical_num", &molgr::utils::MoleculeData::total_radical_num)
-        .def_readwrite("stereo", &molgr::utils::MoleculeData::stereo)
-        .def_readwrite("stereo_groups", &molgr::utils::MoleculeData::stereo_groups);
+        .def_readwrite("atoms", &molgr::utils::MoleculeData::atoms,
+                       "Atom records in input order. Bond and stereo references count from one in this array.")
+        .def_readwrite("bonds", &molgr::utils::MoleculeData::bonds,
+                       "Edge records including covalent and coordination bonds.")
+        .def_readwrite("total_charge", &molgr::utils::MoleculeData::total_charge,
+                       "Net molecular charge in elementary-charge units.")
+        .def_readwrite("total_radical_num", &molgr::utils::MoleculeData::total_radical_num,
+                       "Total unpaired-electron count recorded for the molecule.")
+        .def_readwrite("stereo", &molgr::utils::MoleculeData::stereo,
+                       "Sparse, ordered stereo frames for specified or explicitly unknown centers and bonds.")
+        .def_readwrite("stereo_groups", &molgr::utils::MoleculeData::stereo_groups,
+                       "Enhanced stereo relations between atom centers.");
 
     // Transfer primitive rows once instead of allocating Python AtomData /
     // BondData wrappers and crossing the binding for every field assignment.
@@ -224,7 +285,8 @@ void molgr::bind::bind_utils(py::module_ &m)
             }
         }
         return data;
-    }, py::arg("atoms"), py::arg("bonds"), py::arg("coordinates") = py::none());
+    }, "Build a molecular graph from electron-labeled atom rows and one-based bond rows. Optional XYZ coordinates have shape (N, 3).",
+       py::arg("atoms"), py::arg("bonds"), py::arg("coordinates") = py::none());
 
     m.def("apply_molecule_data_stereo_to_obmol",
           [](const molgr::utils::MoleculeData &data, intptr_t mol_ptr)
@@ -278,20 +340,7 @@ void molgr::bind::bind_dev_utils(py::module_ &m)
           py::arg("xyz_block"));
 
     m.def("debug_xyz_seed_molecule_data",
-          [](const std::string &xyz_block)
-          {
-              OpenBabel::OBMol mol;
-              molgr::utils::MoleculeData molecule_data;
-              {
-                  py::gil_scoped_release release;
-                  if (!molgr::utils::ReadXyzBlockToMol(xyz_block, &mol))
-                  {
-                      throw std::runtime_error("failed to parse XYZ block");
-                  }
-                  molecule_data = molgr::utils::MoleculeDataFromOBMol(mol);
-              }
-              return molecule_data;
-          },
+          &xyz_seed_molecule_data,
           "Return the C++ vendor-perceived seed molecule data for an XYZ block.",
           py::arg("xyz_block"));
 
@@ -318,6 +367,7 @@ void molgr::bind::bind_dev_utils(py::module_ &m)
               out["conjugated_bond_count"] = metrics.conjugated_bond_count;
               out["max_conjugated_component_size"] = metrics.max_conjugated_component_size;
               out["conjugated_atom_indices"] = metrics.conjugated_atom_indices;
+              out["conjugated_atom_components"] = metrics.conjugated_atom_components;
               out["hyperconjugative_donor_count"] = metrics.hyperconjugative_donor_count;
               out["hyperconjugation_score"] = metrics.hyperconjugation_score;
               return out;

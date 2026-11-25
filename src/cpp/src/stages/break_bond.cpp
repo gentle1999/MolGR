@@ -6,6 +6,7 @@
 
 #include <openbabel/atom.h>
 #include <openbabel/bond.h>
+#include <openbabel/elements.h>
 #include "molgr/compat/openbabel_iter.h"
 
 #include <algorithm>
@@ -20,6 +21,9 @@ namespace molgr
 
         namespace
         {
+            /// Count the electronic defects available to a bond-breaking step.
+            /// @param mol Molecular graph on which the operation acts.
+            /// @return Total bond-breaking electron budget for the graph.
             int CurrentBondBreakingElectronBudget(OBMol &mol)
             {
                 int sum = 0;
@@ -43,6 +47,7 @@ namespace molgr
         {
             bool hit = false;
 
+            /// Candidate strained alkene with the indices and geometry used to rank a bond-order reduction.
             struct EneCandidate
             {
                 int idx1;
@@ -112,34 +117,18 @@ namespace molgr
         // the neutral endpoint and lowers the positive endpoint charge, an explicit
         // charge-transfer heuristic. Deferred two-electron centers count toward
         // the stopping budget but remain unresolved and are not consumed here.
+        // Recover overbonded N/P cations before cleaving neutral multiple bonds;
+        // otherwise an intact carbonyl can absorb an unrelated electron deficit.
         bool BreakOneBond(OBMol &mol, int &charge, int allowed_radical)
         {
             bool hit = false;
+            /// Stop breaking bonds when the graph already supplies the radicals and charge reserve
+            /// required.
             auto check_cond = [&]()
             {
                 return CurrentBondBreakingElectronBudget(mol) >=
                        std::abs(charge) + allowed_radical;
             };
-
-            while (true)
-            {
-                auto matches = molgr::smarts::FindAll(mol, molgr::smarts::PatternId::BREAK_ONE_BOND_MULTIPLE);
-                if (matches.empty())
-                    break;
-                if (check_cond())
-                    return hit;
-                const auto &idxs = matches.front();
-                OBBond *bond = mol.GetBond(idxs[0], idxs[1]);
-                if (!bond)
-                    break;
-                bond->SetBondOrder(bond->GetBondOrder() - 1);
-                OBAtom *begin_atom = bond->GetBeginAtom();
-                OBAtom *end_atom = bond->GetEndAtom();
-                molgr::utils::SetUnpairedElectronCount(*begin_atom, molgr::utils::GetUnpairedElectronCount(*begin_atom) + 1);
-                molgr::utils::SetUnpairedElectronCount(*end_atom, molgr::utils::GetUnpairedElectronCount(*end_atom) + 1);
-                hit = true;
-                LOG_DEBUG("[BreakOneBond] Broken triple/double candidate");
-            }
 
             while (true)
             {
@@ -162,6 +151,26 @@ namespace molgr
                 charge += 1;
                 hit = true;
                 LOG_DEBUG("[BreakOneBond] Broken charge-transfer candidate");
+            }
+
+            while (true)
+            {
+                auto matches = molgr::smarts::FindAll(mol, molgr::smarts::PatternId::BREAK_ONE_BOND_MULTIPLE);
+                if (matches.empty())
+                    break;
+                if (check_cond())
+                    return hit;
+                const auto &idxs = matches.front();
+                OBBond *bond = mol.GetBond(idxs[0], idxs[1]);
+                if (!bond)
+                    break;
+                bond->SetBondOrder(bond->GetBondOrder() - 1);
+                OBAtom *begin_atom = bond->GetBeginAtom();
+                OBAtom *end_atom = bond->GetEndAtom();
+                molgr::utils::SetUnpairedElectronCount(*begin_atom, molgr::utils::GetUnpairedElectronCount(*begin_atom) + 1);
+                molgr::utils::SetUnpairedElectronCount(*end_atom, molgr::utils::GetUnpairedElectronCount(*end_atom) + 1);
+                hit = true;
+                LOG_DEBUG("[BreakOneBond] Broken triple/double candidate");
             }
 
             {
@@ -199,9 +208,26 @@ namespace molgr
             if (all_single)
             {
                 std::vector<OBBond *> single_bonds;
+                /// Rank a stretched bond by length beyond the sum of its endpoint covalent radii, in
+                /// angstroms.
+                const auto excess_length = [](OBBond *bond)
+                {
+                    return bond->GetLength() -
+                           OBElements::GetCovalentRad(bond->GetBeginAtom()->GetAtomicNum()) -
+                           OBElements::GetCovalentRad(bond->GetEndAtom()->GetAtomicNum());
+                };
                 FOR_BONDS_OF_MOL(b, mol)
                 {
-                    single_bonds.push_back(&*b);
+                    // An electronic target does not justify cleaving compact
+                    // XYZ sigma bonds (e.g. producing hydride from a methyl).
+                    if (mol.GetDimension() != 3 || excess_length(&*b) > 0.20)
+                        single_bonds.push_back(&*b);
+                }
+                if (mol.GetDimension() == 3)
+                {
+                    std::stable_sort(single_bonds.begin(), single_bonds.end(),
+                                     [&](OBBond *a, OBBond *b)
+                                     { return excess_length(a) > excess_length(b); });
                 }
                 if (!single_bonds.empty())
                 {

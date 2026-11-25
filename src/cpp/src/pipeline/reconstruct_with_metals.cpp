@@ -5,6 +5,7 @@
 #include "molgr/pipeline/reconstruct_without_metals.h"
 #include "molgr/state.h"
 #include "molgr/utils/conversions.h"
+#include "molgr/utils/coordination_seeds.h"
 #include "molgr/utils/consts.h"
 #include "molgr/utils/metals/preparation.h"
 #include "molgr/utils/metals/scoring.h"
@@ -31,18 +32,25 @@ namespace molgr
         {
             namespace
             {
+                /// @param value Character from the XYZ input.
+                /// @return True for an ASCII separator accepted by the XYZ reader.
                 bool IsXyzWhitespace(char value)
                 {
                     return value == ' ' || value == '\t' || value == '\r' ||
                            value == '\n' || value == '\f' || value == '\v';
                 }
 
+                /// @param text Input text to examine.
+                /// @param offset Byte position at which to begin scanning.
+                /// @return The next line boundary or the end of the input.
                 std::size_t FindLineEnd(const std::string &text, std::size_t offset)
                 {
                     const std::size_t line_end = text.find('\n', offset);
                     return line_end == std::string::npos ? text.size() : line_end;
                 }
 
+                /// @param symbol Element symbol from the XYZ atom line.
+                /// @return True when the element symbol is in the fast path's nonmetal list.
                 bool IsKnownNonMetalSymbol(std::string_view symbol)
                 {
                     for (const auto &entry : molgr::kNonMetalDict)
@@ -56,6 +64,12 @@ namespace molgr
                     return false;
                 }
 
+                /// Read the leading XYZ atom count and advance the line cursor.
+                /// @param xyz_block XYZ text containing the declared atom count and Cartesian coordinates
+                ///     in angstroms.
+                /// @param cursor Current input position, advanced as tokens are consumed.
+                /// @param atom_count Destination for the declared number of XYZ atoms.
+                /// @return True when the requested XYZ field could be read.
                 bool ParseAtomCountLine(
                     const std::string &xyz_block,
                     std::size_t *cursor,
@@ -94,6 +108,12 @@ namespace molgr
                     return true;
                 }
 
+                /// Read the first whitespace-delimited token and advance past the atom line.
+                /// @param xyz_block XYZ text containing the declared atom count and Cartesian coordinates
+                ///     in angstroms.
+                /// @param cursor Current input position, advanced as tokens are consumed.
+                /// @param token Output view of the first field in the current XYZ atom line.
+                /// @return True when the requested XYZ field could be read.
                 bool ReadFirstTokenFromLine(
                     const std::string &xyz_block,
                     std::size_t *cursor,
@@ -130,6 +150,10 @@ namespace molgr
                     return true;
                 }
 
+                /// @param xyz_block XYZ text containing the declared atom count and Cartesian coordinates
+                ///     in angstroms.
+                /// @return True only when every declared atom can be identified as a nonmetal without graph
+                ///     perception.
                 bool XyzBlockIsDefinitelyMetalFree(const std::string &xyz_block)
                 {
                     std::size_t cursor = 0;
@@ -167,7 +191,8 @@ namespace molgr
                 int total_charge,
                 int total_radical_electrons,
                 const molgr::config::MolGRConfig &config,
-                molgr::diagnostics::ReconstructionDiagnostics *diagnostics)
+                molgr::diagnostics::ReconstructionDiagnostics *diagnostics,
+                std::vector<molgr::state::MetalCandidateState> *candidate_pool)
             {
                 molgr::EnsureCurrentProcess("molgr.pipeline.reconstruct_with_metals.xyz2omol");
                 if (diagnostics != nullptr)
@@ -177,6 +202,8 @@ namespace molgr
                     diagnostics->details["total_radical_electrons"] =
                         std::to_string(total_radical_electrons);
                 }
+                /// Preserve the failure stage and reason so a rejected metal assignment can be inspected by
+                /// the caller.
                 const auto fail =
                     [diagnostics](
                         const std::string &code,
@@ -310,9 +337,11 @@ namespace molgr
                                 "The no-metal XYZ seed could not be parsed.");
                             return nullptr;
                         }
+                        molgr::coordination::DetachCarbonylHydrideContacts(
+                            *no_metal_seed_omol, base_state.metal_sites);
                     }
 
-                    std::vector<std::optional<molgr::metal::search::PreparedTargetBucket>> prepared_buckets(
+                    std::vector<std::vector<std::shared_ptr<molgr::state::ReconstructionState>>> organic_pools(
                         target_bucket_tasks.size());
                     std::vector<std::shared_ptr<OpenBabel::OBMol>> bucket_seed_omols;
                     bucket_seed_omols.reserve(target_bucket_tasks.size());
@@ -350,23 +379,14 @@ namespace molgr
                             molgr::pipeline::perf::ActiveRunTimingReducerScope active_timing(
                                 &timing_reducer);
                             const auto &task = target_bucket_tasks[bucket_index];
-                            auto no_metal_state =
-                                molgr::pipeline::reconstruct_without_metals::SeedOmolCopyToOmolNoMetalState(
+                            auto alternatives =
+                                molgr::pipeline::reconstruct_without_metals::CollectLigandCandidates(
                                     std::move(bucket_seed_omols[bucket_index]),
-                                    task.target.no_metal_charge,
-                                    task.target.no_metal_radicals,
-                                    run_config,
-                                    &timing_reducer,
-                                    false);
-                            if (!no_metal_state.has_value())
-                            {
-                                return;
-                            }
-
-                            prepared_buckets[bucket_index] = molgr::metal::search::PreparedTargetBucket{
-                                task.target,
-                                std::make_shared<molgr::state::ReconstructionState>(std::move(*no_metal_state)),
-                            };
+                                    task.target.no_metal_charge, task.target.no_metal_radicals,
+                                    run_config, &timing_reducer, base_state.metal_sites);
+                            for (auto &alternative : alternatives)
+                                organic_pools[bucket_index].push_back(
+                                    std::make_shared<molgr::state::ReconstructionState>(std::move(alternative)));
                         });
 
                     std::vector<molgr::metal::search::CandidateScoreJob> score_jobs;
@@ -374,14 +394,14 @@ namespace molgr
                         target_bucket_tasks.size());
                     for (std::size_t bucket_index = 0; bucket_index < target_bucket_tasks.size(); ++bucket_index)
                     {
-                        if (!prepared_buckets[bucket_index].has_value())
+                        if (organic_pools[bucket_index].empty())
                         {
                             continue;
                         }
                         auto &scored_bucket = scored_buckets[bucket_index];
-                        scored_bucket.resize(target_bucket_tasks[bucket_index].candidates.size());
+                        scored_bucket.resize(target_bucket_tasks[bucket_index].candidates.size() * organic_pools[bucket_index].size());
                         for (std::size_t candidate_index = 0;
-                             candidate_index < target_bucket_tasks[bucket_index].candidates.size();
+                             candidate_index < scored_bucket.size();
                              ++candidate_index)
                         {
                             score_jobs.push_back(molgr::metal::search::CandidateScoreJob{
@@ -411,11 +431,11 @@ namespace molgr
                             molgr::pipeline::perf::ActiveRunTimingReducerScope active_timing(
                                 &timing_reducer);
                             const auto &job = score_jobs[job_index];
-                            const auto &prepared_bucket = *prepared_buckets[job.bucket_index];
+                            const auto candidate_count = target_bucket_tasks[job.bucket_index].candidates.size();
                             scored_buckets[job.bucket_index][job.candidate_index] =
                                 molgr::metal::scoring::PrepareCandidateWithNoMetalState(
-                                    target_bucket_tasks[job.bucket_index].candidates[job.candidate_index],
-                                    prepared_bucket.no_metal_state,
+                                    target_bucket_tasks[job.bucket_index].candidates[job.candidate_index % candidate_count],
+                                    organic_pools[job.bucket_index][job.candidate_index / candidate_count],
                                     run_config);
                         });
 
@@ -434,9 +454,9 @@ namespace molgr
                             "no_metal_reconstruction_successes",
                             static_cast<long long>(
                                 std::count_if(
-                                    prepared_buckets.begin(),
-                                    prepared_buckets.end(),
-                                    [](const auto &bucket) { return bucket.has_value(); })));
+                                    organic_pools.begin(),
+                                    organic_pools.end(),
+                                    [](const auto &pool) { return !pool.empty(); })));
                         diagnostics->Count(
                             "metal_candidates_scored",
                             static_cast<long long>(current_layer_scored_candidates.size()));
@@ -446,7 +466,8 @@ namespace molgr
                         continue;
                     }
 
-                    possible_candidates = std::move(current_layer_scored_candidates);
+                    possible_candidates = molgr::metal::scoring::SelectLigandAlternatives(
+                        std::move(current_layer_scored_candidates), run_config);
                     winning_layer_index = static_cast<int>(layer_index);
                     break;
                 }
@@ -487,8 +508,9 @@ namespace molgr
                     scored_candidate.metadata["search_layer_index"] = winning_layer_index;
                 }
 
-                auto selected_candidate =
-                    molgr::metal::scoring::SelectBestCandidate(possible_candidates, run_config);
+                auto selected_candidate = candidate_pool
+                    ? molgr::metal::scoring::SelectBestCandidateInPlace(&possible_candidates, run_config)
+                    : molgr::metal::scoring::SelectBestCandidate(possible_candidates, run_config);
                 if (!selected_candidate.has_value())
                 {
                     fail(
@@ -498,6 +520,19 @@ namespace molgr
                     return nullptr;
                 }
 
+                if (candidate_pool != nullptr)
+                {
+                    for (auto &candidate : possible_candidates)
+                    {
+                        candidate.metadata["selected"] =
+                            candidate.no_metal_state == selected_candidate->no_metal_state &&
+                            molgr::metal::scoring::CandidateCombinationIndex(candidate) ==
+                            molgr::metal::scoring::CandidateCombinationIndex(*selected_candidate);
+                    }
+                    *candidate_pool = std::move(possible_candidates);
+                }
+
+                selected_candidate->metadata["search_layer_index"] = winning_layer_index;
                 auto best_candidate = *selected_candidate;
                 int candidate_total_charge = best_candidate.no_metal_charge_target;
                 int candidate_total_radicals = best_candidate.no_metal_radical_target;

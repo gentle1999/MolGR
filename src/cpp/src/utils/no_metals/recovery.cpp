@@ -14,6 +14,9 @@ namespace
 {
     using StateKey = std::pair<molgr::resonance::ResonanceStateKey, int>;
 
+    /// Retain one representative of each distinct ligand electronic state.
+    /// @param states Ligand states from which to generate or select electronic alternatives.
+    /// @return Unique states in order of first occurrence.
     std::vector<molgr::state::ReconstructionState> Deduplicate(
         std::vector<molgr::state::ReconstructionState> states)
     {

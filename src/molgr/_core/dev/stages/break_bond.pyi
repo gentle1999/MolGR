@@ -15,7 +15,7 @@ def break_deformed_ene_ptr(
     tolerance: typing.SupportsFloat | typing.SupportsIndex = 5.0,
 ) -> bool:
     """
-    Apply break_bond.break_deformed_ene to an existing OBMol.
+    Homolytically reduce deformed multiple bonds by one bond-order unit.
 
     Args:
         mol_ptr: int address of OpenBabel::OBMol
@@ -30,7 +30,7 @@ def break_one_bond_ptr(
     given_radical: typing.SupportsInt | typing.SupportsIndex = 0,
 ) -> tuple:
     """
-    Apply break_bond.break_one_bond to an existing OBMol.
+    Apply last-resort homolytic and charge-transfer bond-breaking templates.
 
     Args:
         mol_ptr: int address of OpenBabel::OBMol

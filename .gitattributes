@@ -1,0 +1,3 @@
+# Preserve published fixture bytes for cross-platform provenance checks.
+tests/data/tmqmg/published/release-manifest.json text eol=lf
+tests/data/**/*.xyz text eol=lf

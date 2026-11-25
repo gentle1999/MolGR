@@ -36,6 +36,7 @@ def test_failed_no_metal_target_trace_remains_renderable(monkeypatch) -> None:
     base_state = SimpleNamespace(
         available_valence_radical_states=[[_metal_state(1, 2)]],
         no_metal_xyz_block="organic xyz",
+        metal_sites=(_metal_state(1, 2).site,),
         phase_history=["prepare_metal_state"],
         metadata={"metal_atom_count": 1},
     )
@@ -195,7 +196,7 @@ def test_equal_negative_charge_does_not_require_metal_visibility() -> None:
 
 
 def test_metal_selection_basis_explains_filter_and_lexicographic_rejection() -> None:
-    selected_key = [0, 0, 0, 0, 0, 0, 0.0, 0.0, 0, 10.0, 0]
+    selected_key = [0, 0, 0, 0, 0, 0, 0.0, 0.0, 0, 0.0, 0, 10.0, 0]
     candidates = [
         {
             "candidate_index": 0,
@@ -242,7 +243,7 @@ def test_metal_selection_basis_explains_filter_and_lexicographic_rejection() -> 
                 "passes_metal_discordance_filter": True,
                 "organic_charge_localization_penalty": 2.0,
                 "organic_charge_localization_margin_exceeded": True,
-                "selection_key": [0, 1, 0, 0, 0, 0, 0.0, 0.0, 0, 8.0, 2],
+                "selection_key": [0, 1, 0, 0, 0, 0, 0.0, 0.0, 0, 0.0, 0, 8.0, 2],
             },
         },
     ]
@@ -257,6 +258,17 @@ def test_metal_selection_basis_explains_filter_and_lexicographic_rejection() -> 
     assert decisions[2]["decision"] == "rejected_by_lexicographic_key"
     assert decisions[2]["decisive_field"] == "organic_charge_localization_margin_exceeded"
     assert basis["assignment_rank_policy"]["participates_in_final_selection_key"] is False
+
+
+def test_nitrosyl_selection_evidence_survives_trace_export() -> None:
+    from scripts.reconstruction_trace import _score_details
+
+    evidence = {
+        "nitrosyl_geometry_penalty": 0.5,
+        "nitrosyl_geometry_site_count": 1,
+        "nitrosonium_redistribution_exception": 0,
+    }
+    assert _score_details(evidence) == evidence
 
 
 def test_review_fixture_accepts_any_approved_answer() -> None:
@@ -318,7 +330,9 @@ def test_resonance_selection_report_compares_every_scored_candidate() -> None:
     assert report["candidates"][1]["decisive_field"] == "score"
     assert report["candidates"][1]["dof_image"] == {"render_id": "dof-1"}
     assert [field["key"] for field in report["selection_key_fields"]] == [
+        "organic_azinium_geometry_conflict_count",
         "organic_formal_charge_absolute_sum",
+        "organic_long_carbonyl_multiple_bond_count",
         "organic_aromatic_atom_count",
         "organic_aromatic_ring_count",
         "organic_aromatic_stability_score",

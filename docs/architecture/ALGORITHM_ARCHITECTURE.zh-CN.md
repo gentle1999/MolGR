@@ -464,7 +464,6 @@ C++ 后端是 Python fallback 语义的加速实现。下面这些优化可以�
      - post-reinsertion base components
      - 固定 UFF force-field 元数据
    - 金属桶内多个候选共享同一个 no-metal state 时，可以避免重复构建这些派生数据。
-   - `enable_target_bucket_score_bundle_preheat` 默认开启，可单独关闭以排查行为差异。
 
 7. 全局 force-field evaluation LRU
    - `ForceFieldEvaluationCache` 使用线程安全 LRU，key 对应固定 UFF 结构评分。

@@ -1,4 +1,4 @@
-from typing import List, cast
+from typing import List, Optional, Protocol, Sequence, SupportsInt, Tuple, cast
 
 from openbabel import openbabel as ob
 from openbabel import pybel
@@ -17,11 +17,18 @@ from molgr.fallback.utils.electrons import (
     set_unpaired_electron_count,
     set_unresolved_two_electron_center,
 )
+from molgr.fallback.utils.ob_graph import mol_atoms, mol_bonds
 from molgr.utils._molecule_stereo import (
     apply_rdkit_stereo,
     extract_rdkit_stereo,
     stereo_ordered_bonds,
 )
+
+
+class _SwigMolecule(Protocol):
+    """Native molecule handle exposed by the Open Babel Python proxy."""
+
+    this: SupportsInt
 
 
 OB_RDKIT_BOND_ORDER_MAPPING = {
@@ -45,11 +52,12 @@ def _explicit_bond_copy(rdmol: Chem.Mol) -> Chem.Mol:
     a partially modified graph.
     """
     explicit = Chem.Mol(rdmol)
-    if any(b.GetBondType() == Chem.BondType.AROMATIC for b in explicit.GetBonds()):
+    bonds = [explicit.GetBondWithIdx(i) for i in range(explicit.GetNumBonds())]
+    if any(b.GetBondType() == Chem.BondType.AROMATIC for b in bonds):
         Chem.Kekulize(explicit, clearAromaticFlags=True)
-    for atom in explicit.GetAtoms():
-        atom.SetIsAromatic(False)
-    for bond in explicit.GetBonds():
+    for i in range(explicit.GetNumAtoms()):
+        explicit.GetAtomWithIdx(i).SetIsAromatic(False)
+    for bond in bonds:
         bond.SetIsAromatic(False)
     explicit.ClearComputedProps()
     explicit.UpdatePropertyCache(strict=False)
@@ -65,33 +73,37 @@ def _sanitize_preserving_explicit_bonds(rdmol: Chem.Mol, *, kekulize: bool) -> C
     return sanitized
 
 
-def _perceive_rdkit_aromaticity(rdmol: Chem.Mol) -> None:
-    Chem.SanitizeMol(
-        rdmol,
-        sanitizeOps=(
-            Chem.SanitizeFlags.SANITIZE_SYMMRINGS
-            | Chem.SanitizeFlags.SANITIZE_FINDRADICALS
-            | Chem.SanitizeFlags.SANITIZE_SETAROMATICITY
-            | Chem.SanitizeFlags.SANITIZE_SETCONJUGATION
-        ),
-    )
+def _perceive_rdkit_bond_properties(rdmol: Chem.Mol, *, kekulize: bool) -> None:
+    flags = Chem.SanitizeFlags
+    ops = flags.SANITIZE_SYMMRINGS | flags.SANITIZE_FINDRADICALS | flags.SANITIZE_SETCONJUGATION
+    if not kekulize:
+        ops |= flags.SANITIZE_SETAROMATICITY
+    Chem.SanitizeMol(rdmol, sanitizeOps=ops)
 
 
-def refresh_rdkit_aromaticity(rdmol: Chem.Mol) -> None:
-    """Refresh serialization-facing aromaticity, preserving MolGR electron states.
+def refresh_rdkit_aromaticity(rdmol: Chem.Mol, *, kekulize: bool = False) -> None:
+    """Refresh ring, conjugation and aromaticity properties in place.
 
-    Reconstruction supplies integer bond orders, so its normal path needs no
-    molecule copy or Kekulization. Save only the fields perception can change;
-    restore radicals in all cases and roll back graph fields on failure.
-    Actual AROMATIC bond inputs still require a disposable Kekulization copy.
+    Parameters
+    ----------
+    rdmol : Chem.Mol
+        Reconstructed graph whose radical counts must be preserved. Inputs
+        with aromatic bond types are first Kekulized on a temporary copy.
+    kekulize : bool, default False
+        True retains localized integer bond orders while refreshing ring and
+        conjugation data. False also runs RDKit aromaticity perception.
+
+    The integer-bond path saves the fields perception can change and restores
+    the graph labels on failure. Callers keep using the same molecule.
     """
     bonds = [rdmol.GetBondWithIdx(i) for i in range(rdmol.GetNumBonds())]
     if any(bond.GetBondType() == Chem.BondType.AROMATIC for bond in bonds):
         perceived = _explicit_bond_copy(rdmol)
-        _perceive_rdkit_aromaticity(perceived)
-        for atom, normalized in zip(rdmol.GetAtoms(), perceived.GetAtoms()):
-            atom.SetIsAromatic(normalized.GetIsAromatic())
-        for bond, normalized in zip(bonds, perceived.GetBonds()):
+        _perceive_rdkit_bond_properties(perceived, kekulize=kekulize)
+        for i in range(rdmol.GetNumAtoms()):
+            rdmol.GetAtomWithIdx(i).SetIsAromatic(perceived.GetAtomWithIdx(i).GetIsAromatic())
+        for i, bond in enumerate(bonds):
+            normalized = perceived.GetBondWithIdx(i)
             bond.SetBondType(normalized.GetBondType())
             bond.SetIsAromatic(normalized.GetIsAromatic())
             bond.SetIsConjugated(normalized.GetIsConjugated())
@@ -110,7 +122,7 @@ def refresh_rdkit_aromaticity(rdmol: Chem.Mol) -> None:
             bond.SetIsAromatic(False)
         rdmol.ClearComputedProps()
         rdmol.UpdatePropertyCache(strict=False)
-        _perceive_rdkit_aromaticity(rdmol)
+        _perceive_rdkit_bond_properties(rdmol, kekulize=kekulize)
     except Exception:
         for atom, (_, aromatic) in zip(atoms, atom_state):
             atom.SetIsAromatic(aromatic)
@@ -277,14 +289,14 @@ def rdkit_to_mol_data(
 
 
 def _convert_rdkit_graph(
-    rdmol,
+    rdmol: Chem.Mol,
     *,
-    perceive_radicals,
-    include_stereo,
-    include_coordinates,
-    atom_rows=None,
-    ignore_metal_stereo=False,
-):
+    perceive_radicals: bool,
+    include_stereo: bool,
+    include_coordinates: bool,
+    atom_rows: Optional[Sequence[Tuple[int, int, int, Optional[int], int, bool, int]]] = None,
+    ignore_metal_stereo: bool = False,
+) -> core.utils.MoleculeData:
     """Convert an atom-validated input, optionally consuming decoded atom rows.
 
     Only the evaluator supplies rows, from its source diagnostics scan. They
@@ -327,16 +339,22 @@ def _convert_rdkit_graph(
         Chem.SanitizeMol(explicit, sanitizeOps=Chem.SanitizeFlags.SANITIZE_FINDRADICALS)
     atoms = [explicit.GetAtomWithIdx(i) for i in range(explicit.GetNumAtoms())]
     bonds = [explicit.GetBondWithIdx(i) for i in range(explicit.GetNumBonds())]
-    cached_rows = atom_rows
-    atom_rows = []
+    native_rows: List[Tuple[int, int, int, int, int, bool, int]] = []
     for i, atom in enumerate(atoms):
         if atom.GetNumImplicitHs() or atom.GetNumExplicitHs():
             raise ValueError("MoleculeData requires all hydrogens to be atom nodes")
-        if cached_rows is not None:
-            if i < len(cached_rows):
-                row = cached_rows[i]
-                if row[3] is None:
-                    row = (*row[:3], atom.GetNumRadicalElectrons(), *row[4:])
+        if atom_rows is not None:
+            if i < len(atom_rows):
+                z, isotope, charge, unpaired, pairs, unresolved, presence = atom_rows[i]
+                row = (
+                    z,
+                    isotope,
+                    charge,
+                    atom.GetNumRadicalElectrons() if unpaired is None else unpaired,
+                    pairs,
+                    unresolved,
+                    presence,
+                )
             else:
                 # AddHs may restore isotopic H retained by RemoveHs. Read its
                 # actual isotope instead of assuming every new node is 1H.
@@ -349,7 +367,7 @@ def _convert_rdkit_graph(
                     False,
                     0,
                 )
-            atom_rows.append(row)
+            native_rows.append(row)
             continue
         atomic_num = atom.GetAtomicNum()
         metal = atomic_num not in NON_METAL_DICT
@@ -362,7 +380,7 @@ def _convert_rdkit_graph(
             if known_unpaired
             else (0 if metal else atom.GetNumRadicalElectrons())
         )
-        atom_rows.append(
+        native_rows.append(
             (
                 atomic_num,
                 atom.GetIsotope(),
@@ -388,7 +406,7 @@ def _convert_rdkit_graph(
             )
         )
     coordinates = explicit.GetConformer().GetPositions() if keep_coordinates else None
-    data = core.utils._molecule_data_from_rows(atom_rows, bond_rows, coordinates)
+    data = core.utils._molecule_data_from_rows(native_rows, bond_rows, coordinates)
     if include_stereo:
         data.stereo, data.stereo_groups = extract_rdkit_stereo(
             explicit,
@@ -431,7 +449,9 @@ def mol_data_to_pybel(mol_data: core.utils.MoleculeData) -> pybel.Molecule:
             obmol.GetBond(bond.begin_atom_idx, bond.end_atom_idx).SetAromatic()
     obmol.EndModify()
     if mol_data.stereo:
-        core.utils.apply_molecule_data_stereo_to_obmol(mol_data, int(obmol.this))
+        core.utils.apply_molecule_data_stereo_to_obmol(
+            mol_data, int(cast(_SwigMolecule, obmol).this)
+        )
     return pybel.Molecule(obmol)
 
 
@@ -440,12 +460,32 @@ def mol_data_to_rdkit(
     sanitize: bool = True,
     kekulize: bool = True,
 ) -> Chem.Mol:
-    """Convert MoleculeData while preserving independent electron classifications.
+    """Build an RDKit molecule from the native backend's atom and bond records.
 
-    Nonmetal unpaired electrons use RDKit radicals plus explicit-count provenance;
-    metals use ``MOLGR_METAL_UNPAIRED_ELECTRONS``. The presence mask distinguishes
-    known zero/false from unknown for all three independent classifications.
-    Sanitization is not allowed to redefine stored MolGR assignments.
+    Parameters
+    ----------
+    mol_data : MoleculeData
+        Native atoms in input order with coordinates, isotopes, formal charges
+        and electron assignments. Bond endpoints in these records are one-based.
+        Known lone-pair counts and unresolved-center flags are transferred using
+        their presence bits, including known zero and False values.
+    sanitize : bool, default True
+        Run RDKit sanitization while preserving the stored electron assignments.
+    kekulize : bool, default True
+        Keep localized bond orders during sanitization. With sanitization
+        disabled, True still requests best-effort Kekulization.
+
+    Returns
+    -------
+    Chem.Mol
+        New graph with a conformer and any supplied stereo records. Nonmetal
+        unpaired electrons are represented as RDKit radicals. Metal unpaired
+        counts are carried by the ``MOLGR_METAL_UNPAIRED_ELECTRONS`` property.
+
+    Raises
+    ------
+    ValueError
+        A coordination bond has no direction for conversion to an RDKit dative bond.
     """
     unpaired_electrons = [int(atom.radical_num) for atom in mol_data.atoms]
     rwmol = Chem.RWMol()
@@ -508,25 +548,33 @@ def pybel_to_rdmol(
     sanitize: bool = True,
     kekulize: bool = True,
 ) -> Chem.Mol:
-    """Convert Open Babel topology while preserving all MolGR electron fields.
+    """Convert a Pybel molecule to an RDKit graph in Open Babel atom order.
 
-    Real unpaired electrons, active lone pairs, and unresolved centers are read
-    before RDKit sanitization and restored independently afterwards.
+    Parameters
+    ----------
+    omol : pybel.Molecule
+        Source of the XYZ geometry, bond orders, formal charges and MolGR
+        electron annotations. Stored Open Babel stereo is transferred if present.
+    sanitize : bool, default True
+        Run RDKit sanitization and restore the source unpaired-electron counts.
+    kekulize : bool, default True
+        Retain localized bond orders during sanitization. With sanitization
+        disabled, True still requests best-effort Kekulization.
+
+    Returns
+    -------
+    Chem.Mol
+        New graph with explicit atom nodes and a conformer read from the Pybel
+        XYZ export. Real unpaired electrons, active lone pairs and unresolved
+        centers retain their separate MolGR representations.
     """
+    obmol = cast(ob.OBMol, omol.OBMol)
     bonds = [
-        (
-            cast(ob.OBBond, bond).GetBeginAtomIdx() - 1,
-            cast(ob.OBBond, bond).GetEndAtomIdx() - 1,
-            cast(ob.OBBond, bond).GetBondOrder(),
-        )
-        for bond in ob.OBMolBondIter(omol.OBMol)
+        (bond.GetBeginAtomIdx() - 1, bond.GetEndAtomIdx() - 1, bond.GetBondOrder())
+        for bond in mol_bonds(obmol)
     ]
-    formal_charges: List[int] = [
-        cast(ob.OBAtom, atom).GetFormalCharge() for atom in ob.OBMolAtomIter(omol.OBMol)
-    ]
-    formal_radicals: List[int] = [
-        get_unpaired_electron_count(cast(ob.OBAtom, atom)) for atom in ob.OBMolAtomIter(omol.OBMol)
-    ]
+    formal_charges: List[int] = [atom.GetFormalCharge() for atom in mol_atoms(obmol)]
+    formal_radicals: List[int] = [get_unpaired_electron_count(atom) for atom in mol_atoms(obmol)]
     rwmol = Chem.RWMol(Chem.MolFromXYZBlock(omol.write("xyz")))
     for bond in bonds:
         rwmol.AddBond(
@@ -534,7 +582,8 @@ def pybel_to_rdmol(
         )
     for atom_id, (charge, radical) in enumerate(zip(formal_charges, formal_radicals)):
         atom = rwmol.GetAtomWithIdx(atom_id)
-        atom.SetIsotope(omol.OBMol.GetAtom(atom_id + 1).GetIsotope())
+        source = cast(ob.OBAtom, obmol.GetAtom(atom_id + 1))
+        atom.SetIsotope(source.GetIsotope())
         atom.SetNoImplicit(True)
         atom.SetFormalCharge(charge)
         _set_rdkit_unpaired_electrons(atom, radical)
@@ -545,8 +594,7 @@ def pybel_to_rdmol(
     elif kekulize:
         Chem.KekulizeIfPossible(rdmol)
     _restore_rdkit_unpaired_electrons(rdmol, formal_radicals)
-    for atom_id, source in enumerate(ob.OBMolAtomIter(omol.OBMol)):
-        source = cast(ob.OBAtom, source)
+    for atom_id, source in enumerate(mol_atoms(obmol)):
         atom = rdmol.GetAtomWithIdx(atom_id)
         if source.HasData(LONE_PAIR_COUNT_PROP):
             _set_rdkit_lone_pair_count(atom, get_lone_pair_count(source))
@@ -563,7 +611,7 @@ def pybel_to_rdmol(
             atom.ClearProp(prop)
     _finalize_metal_unpaired_electrons(rdmol)
     if omol.OBMol.HasData(ob.StereoData):
-        data = core.utils.extract_molecule_data(int(omol.OBMol.this))
+        data = core.utils.extract_molecule_data(int(cast(_SwigMolecule, omol.OBMol).this))
         rwmol = Chem.RWMol(rdmol)
         apply_rdkit_stereo(rwmol, data)
         rdmol = rwmol.GetMol()

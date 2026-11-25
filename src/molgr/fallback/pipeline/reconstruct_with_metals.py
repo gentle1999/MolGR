@@ -14,13 +14,17 @@ The production path is:
 from __future__ import annotations
 
 from collections.abc import MutableMapping
-from typing import List, Optional, cast
+from typing import List, Optional
 
 from openbabel import pybel
 
 from molgr.config import MolGRConfig
 from molgr.diagnostics import ReconstructionDiagnosticCollector, ReconstructionFailureCode
-from molgr.fallback.state import MetalCandidateState, MetalCandidateStateMachine
+from molgr.fallback.state import (
+    MetalCandidateState,
+    MetalCandidateStateMachine,
+    ReconstructionState,
+)
 from molgr.fallback.utils.metals import preparation, scoring, search
 from molgr.fallback.utils.no_metals import preparation as no_metal_preparation
 from molgr.process_guard import ensure_current_process
@@ -33,6 +37,7 @@ def _candidate_matches_global_electronic_state(
     total_charge: int,
     total_radical_electrons: int,
 ) -> bool:
+    """Check that metal and ligand assignments jointly account for input charge and unpaired electrons."""
     return (
         candidate.no_metal_charge_target
         + sum(int(state.valence) for state in candidate.metal_states)
@@ -116,7 +121,7 @@ def xyz2omol_state(
         if no_metal_seed_omol is None:
             try:
                 no_metal_seed_omol = no_metal_preparation._seed_omol_from_xyz(
-                    base_state.no_metal_xyz_block
+                    base_state.no_metal_xyz_block, base_state.metal_sites
                 )
             except (OSError, ValueError) as exc:
                 if diagnostics is not None:
@@ -133,12 +138,17 @@ def xyz2omol_state(
             if not candidates:
                 continue
             prototype = candidates[0]
+            organic_candidates: list[ReconstructionState] = []
             try:
                 no_metal_state = reconstruct_without_metals._seed_omol_to_omol_no_metal_state(
                     no_metal_seed_omol,
                     prototype.no_metal_charge_target,
                     prototype.no_metal_radical_target,
                     config=config,
+                    candidate_pool=(
+                        organic_candidates if base_state.available_valence_radical_states else None
+                    ),
+                    metal_sites=base_state.metal_sites,
                 )
             except (OSError, ValueError):
                 if diagnostics is not None:
@@ -151,28 +161,32 @@ def xyz2omol_state(
             if diagnostics is not None:
                 diagnostics.count("no_metal_reconstruction_successes")
 
-            for candidate in candidates:
-                try:
-                    scored_candidate = scoring._prepare_candidate_with_no_metal_state(
-                        candidate,
-                        no_metal_state,
-                        config=config,
-                    )
-                except ValueError:
+            # Keep ligand alternatives until metal geometry and electronic state can
+            # participate in selection; the isolated-ligand winner is insufficient.
+            for organic_state in organic_candidates or [no_metal_state]:
+                for candidate in candidates:
+                    try:
+                        scored_candidate = scoring._prepare_candidate_with_no_metal_state(
+                            candidate,
+                            organic_state,
+                            config=config,
+                        )
+                    except ValueError:
+                        if diagnostics is not None:
+                            diagnostics.count("metal_candidate_scoring_rejections")
+                        continue
+                    if scored_candidate.score is None:
+                        if diagnostics is not None:
+                            diagnostics.count("metal_candidate_missing_scores")
+                        continue
                     if diagnostics is not None:
-                        diagnostics.count("metal_candidate_scoring_rejections")
-                    continue
-                if cast(Optional[float], scored_candidate.score) is None:
-                    if diagnostics is not None:
-                        diagnostics.count("metal_candidate_missing_scores")
-                    continue
-                if diagnostics is not None:
-                    diagnostics.count("metal_candidates_scored")
-                current_layer_scored_candidates.append(scored_candidate)
-
+                        diagnostics.count("metal_candidates_scored")
+                    current_layer_scored_candidates.append(scored_candidate)
         if not current_layer_scored_candidates:
             continue
-        scored_candidates = current_layer_scored_candidates
+        scored_candidates = scoring.select_ligand_alternatives(
+            current_layer_scored_candidates, config=config
+        )
         winning_layer_index = layer_index
         break
 
@@ -249,7 +263,30 @@ def xyz2omol(
     config: MolGRConfig | None = None,
     _diagnostics: MutableMapping[str, object] | None = None,
 ) -> Optional[pybel.Molecule]:
-    """Materialize the winning metal-aware reconstruction."""
+    """Reconstruct an Open Babel molecule using the Python backend.
+
+    Parameters
+    ----------
+    xyz_block : str
+        One XYZ frame including all hydrogen atoms, with coordinates in angstroms.
+    total_charge : int, default 0
+        Net charge shared by the metal centers and organic fragments.
+    total_radical_electrons : int, default 0
+        Target count of unpaired electrons. From the public interface this
+        is ``spin_multiplicity - 1`` (zero for a singlet).
+    config : MolGRConfig, optional
+        Reconstruction settings passed to the candidate search.
+    _diagnostics : mutable mapping, optional
+        Internal output mapping populated with the failure record when the
+        search raises or returns no candidate.
+
+    Returns
+    -------
+    pybel.Molecule or None
+        The selected candidate's combined graph, or None if no reconstruction
+        was found. Use ``molgr.interface.xyz_to_rdmol`` for the finalized RDKit
+        graph with coordination and stereo processing.
+    """
 
     collector = ReconstructionDiagnosticCollector() if _diagnostics is not None else None
     try:

@@ -1,3 +1,5 @@
+from typing import get_args, get_origin, get_type_hints
+
 import pytest
 
 
@@ -9,12 +11,23 @@ from openbabel import pybel
 # isort: on
 
 from molgr import _core
+from molgr.utils._molecule_stereo import stereo_ordered_bonds
 from molgr.utils.converter import (
     mol_data_to_pybel,
     mol_data_to_rdkit,
     pybel_to_rdmol,
     rdkit_to_mol_data,
 )
+
+
+def test_stereo_adapter_exposes_native_graph_types_and_reference_docs():
+    hints = get_type_hints(stereo_ordered_bonds)
+    assert hints["data"] is _core.utils.MoleculeData
+    assert get_origin(hints["return"]) is list
+    assert get_args(hints["return"]) == (_core.utils.BondData,)
+    assert _core.utils.StereoData.__doc__
+    assert _core.utils.StereoData.refs.__doc__
+    assert _core.utils.StereoData.configuration.__doc__
 
 
 def _smiles(mol):

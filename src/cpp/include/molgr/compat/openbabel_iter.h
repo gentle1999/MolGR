@@ -2,11 +2,17 @@
 
 #include <openbabel/obiter.h>
 
-// OpenBabel 3.2 switched these convenience macros to range-based wrappers that
-// expand through an unqualified `impl::...` namespace. That works inside
-// OpenBabel's own namespace, but breaks when the macros are expanded from our
-// nested namespaces during normal project builds. Rebind them to the classic
-// fully-qualified iterator types so both 3.1 and 3.2 behave the same way.
+// Qualify the Open Babel 3.2 range helpers so they also work in MolGR namespaces.
+#if OB_VERSION >= OB_VERSION_CHECK(3, 2, 0)
+#undef FOR_ATOMS_OF_MOL
+#undef FOR_BONDS_OF_MOL
+#undef FOR_NBORS_OF_ATOM
+#undef FOR_BONDS_OF_ATOM
+#define FOR_ATOMS_OF_MOL(a, m) for (auto *a : ::OpenBabel::impl::MolGetAtoms(m))
+#define FOR_BONDS_OF_MOL(b, m) for (auto *b : ::OpenBabel::impl::MolGetBonds(m))
+#define FOR_NBORS_OF_ATOM(a, p) for (auto *a : ::OpenBabel::impl::AtomGetNbrs(p))
+#define FOR_BONDS_OF_ATOM(b, p) for (auto *b : ::OpenBabel::impl::AtomGetBonds(p))
+#else
 #ifdef FOR_ATOMS_OF_MOL
 #undef FOR_ATOMS_OF_MOL
 #endif
@@ -26,6 +32,8 @@
 #undef FOR_BONDS_OF_ATOM
 #endif
 #define FOR_BONDS_OF_ATOM(b, p) for (OpenBabel::OBAtomBondIter b(p); b; ++b)
+
+#endif
 
 #ifdef FOR_RESIDUES_OF_MOL
 #undef FOR_RESIDUES_OF_MOL

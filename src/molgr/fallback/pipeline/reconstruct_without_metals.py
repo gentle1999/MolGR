@@ -14,7 +14,8 @@ controls phase ordering, fallback policy, caching, and result materialization.
 
 from __future__ import annotations
 
-from dataclasses import astuple, dataclass, field
+from collections.abc import Sequence
+from dataclasses import astuple, dataclass, field, replace
 from typing import Optional, cast
 
 from openbabel import openbabel as ob
@@ -34,10 +35,14 @@ from molgr.fallback.stages.fresh import fresh_omol_charge_radical
 from molgr.fallback.stages.preprocess import make_connections, pre_clean, validate_omol
 from molgr.fallback.state import OmolStateMachine, ReconstructionState
 from molgr.fallback.utils import resonance as resonance_utils
+from molgr.fallback.utils.coordination_geometry import metal_contact_distances
+from molgr.fallback.utils.coordination_seeds import expand_coordination_seeds
+from molgr.fallback.utils.dataclasses import MetalSite
 from molgr.fallback.utils.no_metals import neighbor_radicals, preparation, recovery, selection
 from molgr.fallback.utils.no_metals import (
     resonance as no_metal_resonance,
 )
+from molgr.fallback.utils.ob_graph import mol_atoms
 from molgr.fallback.utils.tools import typed_lru_cache
 from molgr.process_guard import ensure_current_process
 
@@ -86,7 +91,7 @@ def _run_linear_preparation(seed_state: ReconstructionState) -> ReconstructionSt
     machine.set_given_charge(
         "initialize_charge_budget",
         seed_state.total_charge
-        - sum(cast(ob.OBAtom, atom.OBAtom).GetFormalCharge() for atom in machine.omol.atoms),
+        - sum(atom.GetFormalCharge() for atom in mol_atoms(cast(ob.OBMol, machine.omol.OBMol))),
     )
 
     # Deterministic local charge reconstruction; order is chemically significant.
@@ -94,9 +99,14 @@ def _run_linear_preparation(seed_state: ReconstructionState) -> ReconstructionSt
     machine.run_omol_charge_stage(
         "eliminate_high_positive_charge_atoms",
         eliminate_high_positive_charge_atoms,
+        seed_state.metadata.get("metal_contact_distances", ()),
     )
     machine.run_omol_charge_stage("eliminate_NNN_positive", eliminate_NNN, True)
-    machine.run_omol_charge_stage("eliminate_carboxyl", eliminate_carboxyl)
+    machine.run_omol_charge_stage(
+        "eliminate_carboxyl",
+        eliminate_carboxyl,
+        seed_state.metadata.get("metal_contact_distances", ()),
+    )
 
     # Resolve deterministic carbene patterns before any candidate branching.
     machine.run_omol_stage(
@@ -166,6 +176,13 @@ def _search_discrepancy_layers(
             prepared_seed,
             exact_discrepancy=discrepancy,
         )
+        if discrepancy == 0 and neighbor_radicals.has_substituted_n_o_radical_pair(
+            prepared_seed.omol
+        ):
+            # Retain the unclosed hypothesis alongside normal closure branches.
+            # The common resonance/validation path must still satisfy the same
+            # charge and spin budgets before this seed can compete.
+            neighbor_seeds.append(prepared_seed)
         layer = _expand_resonance_layer(
             neighbor_seeds,
             traversal_policy=traversal_policy,
@@ -239,22 +256,56 @@ def _find_no_metal_candidates(
     """Run primary resonance search, escalating to recovery only if necessary."""
 
     resolved_config = CONFIG if config is None else config
-    traversal_policy = no_metal_resonance._default_resonance_traversal_policy(config)
+    shallow_config = replace(
+        resolved_config,
+        resonance=replace(
+            resolved_config.resonance,
+            limited_discrepancy_max_discrepancy=min(
+                1, resolved_config.resonance.limited_discrepancy_max_discrepancy
+            ),
+        ),
+    )
+    traversal_policy = no_metal_resonance._default_resonance_traversal_policy(shallow_config)
     max_discrepancy = max(
         0,
-        int(resolved_config.resonance.limited_discrepancy_max_discrepancy),
+        int(resolved_config.resonance.neighbor_radical_max_discrepancy),
+    )
+    # Preserve the established shallow solution when one exists. Spend the
+    # larger configured depth only before destructive recovery becomes necessary.
+    primary_config = replace(
+        shallow_config,
+        resonance=replace(
+            shallow_config.resonance, max_depth=min(2, resolved_config.resonance.max_depth)
+        ),
     )
     primary = _search_discrepancy_layers(
         prepared_seed,
         max_discrepancy=max_discrepancy,
         traversal_policy=traversal_policy,
-        config=config,
+        config=primary_config,
     )
     if primary.validated_candidates:
         return primary.validated_candidates
+    if resolved_config.resonance.max_depth > 2:
+        deeper = no_metal_resonance.search_resonance_candidates(
+            primary.attempted_resonance_seeds,
+            resonance_traversal_policy=traversal_policy,
+            config=resolved_config,
+        )
+        if deeper:
+            return deeper
+    full_policy = no_metal_resonance._default_resonance_traversal_policy(resolved_config)
+    if resolved_config.resonance.limited_discrepancy_max_discrepancy > 1:
+        widened = no_metal_resonance.search_resonance_candidates(
+            primary.attempted_resonance_seeds,
+            resonance_traversal_policy=full_policy,
+            config=resolved_config,
+        )
+        if widened:
+            return widened
     return _search_recovery_tiers(
         primary.attempted_resonance_seeds,
-        traversal_policy=traversal_policy,
+        traversal_policy=full_policy,
         config=config,
     )
 
@@ -269,14 +320,39 @@ def _run_no_metal_pipeline_from_state(
     seed_state: ReconstructionState,
     *,
     config: MolGRConfig | None = None,
+    candidate_pool: list[ReconstructionState] | None = None,
+    metal_sites: Sequence[MetalSite] = (),
 ) -> Optional[ReconstructionState]:
+    """Search each ligand occupation allowed by geometry, retaining validated alternatives for metal scoring."""
     if seed_state.total_radical_electrons < 0:
         return None
 
+    if metal_sites:
+        distances = metal_contact_distances(
+            seed_state.omol.OBMol, metal_sites, (CONFIG if config is None else config).metal_scoring
+        )
+        seed_state = replace(
+            seed_state, metadata={**seed_state.metadata, "metal_contact_distances": distances}
+        )
     prepared_seed = _run_linear_preparation(seed_state)
-    candidates = _find_no_metal_candidates(prepared_seed, config=config)
+    seeds = preparation.expand_geometry_electronic_seeds(prepared_seed)
+    if metal_sites:
+        geometry_config = (CONFIG if config is None else config).metal_scoring
+        seeds = [
+            alternative
+            for seed in seeds
+            for alternative in expand_coordination_seeds(seed, metal_sites, geometry_config)
+        ]
+    candidates = [
+        candidate
+        for local_seed in seeds
+        for candidate in _find_no_metal_candidates(local_seed, config=config)
+    ]
     if not candidates:
         return None
+
+    if candidate_pool is not None:
+        candidate_pool.extend(candidates)
 
     best_candidate = selection.select_best_no_metal_candidate(candidates, config=config)
     if best_candidate is None:
@@ -298,10 +374,21 @@ def xyz_to_omol_no_metal_state(
     total_radical_electrons: int = 0,
     *,
     config: MolGRConfig | None = None,
+    metal_sites: Sequence[MetalSite] = (),
+    candidate_pool: list[ReconstructionState] | None = None,
 ) -> Optional[ReconstructionState]:
     """Return the best no-metal reconstruction state for the requested charge/radicals."""
 
     ensure_current_process("molgr.fallback.xyz_to_omol_no_metal_state")
+    if metal_sites or candidate_pool is not None:
+        return _seed_omol_to_omol_no_metal_state(
+            preparation._seed_omol_from_xyz(xyz_block, metal_sites),
+            total_charge,
+            total_radical_electrons,
+            config=config,
+            candidate_pool=candidate_pool,
+            metal_sites=metal_sites,
+        )
     seed_state = preparation._seed_state(
         xyz_block,
         total_charge,
@@ -317,6 +404,8 @@ def _seed_omol_to_omol_no_metal_state(
     total_radical_electrons: int = 0,
     *,
     config: MolGRConfig | None = None,
+    candidate_pool: list[ReconstructionState] | None = None,
+    metal_sites: Sequence[MetalSite] = (),
 ) -> Optional[ReconstructionState]:
     """Return the best no-metal state from a shared parsed seed molecule."""
 
@@ -326,6 +415,13 @@ def _seed_omol_to_omol_no_metal_state(
         total_radical_electrons,
     )
     resolved_config = CONFIG if config is None else config
+    if candidate_pool is not None or metal_sites:
+        return _run_no_metal_pipeline_from_state(
+            seed_state,
+            config=resolved_config,
+            candidate_pool=candidate_pool,
+            metal_sites=metal_sites,
+        )
     return _run_no_metal_pipeline_cached(seed_state, _config_cache_token(resolved_config))
 
 

@@ -36,6 +36,8 @@ namespace
         "score",
     };
 
+    /// Discard metadata calculated from molecular labels or topology after the ligand graph changes.
+    /// @param metadata Reconstruction annotations and cached scoring terms for this state.
     void InvalidateOmolDerivedMetadata(molgr::state::MetadataMap &metadata)
     {
         for (const char *key : kOmolDerivedMetadataKeys)
@@ -44,6 +46,8 @@ namespace
         }
     }
 
+    /// Discard scores and derived properties invalidated by a new ligand or metal assignment.
+    /// @param metadata Reconstruction annotations and cached scoring terms for this state.
     void InvalidateCandidateDerivedMetadata(molgr::state::MetadataMap &metadata)
     {
         for (const char *key : kCandidateDerivedMetadataKeys)
@@ -52,6 +56,10 @@ namespace
         }
     }
 
+    /// Store the ligand-only force-field score together with its molecular cache key.
+    /// @param metadata Reconstruction annotations and cached scoring terms for this state.
+    /// @param score_key Molecular fingerprint for reusing an evaluation with the same electronic state.
+    /// @param score Calculated ligand score to retain in metadata.
     void StoreNoMetalForceFieldMetadata(
         molgr::state::MetadataMap &metadata,
         const std::string &score_key,

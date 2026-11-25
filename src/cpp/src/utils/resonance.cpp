@@ -36,6 +36,10 @@ namespace
     constexpr double kKcalToKj = 4.184;
     constexpr double kDegreesToRadians = 3.14159265358979323846 / 180.0;
 
+    /// Check whether the new valence requires restoring an unresolved two-electron marker.
+    /// @param atom Atom whose local chemical environment is examined.
+    /// @param post_target_valence Valence of the endpoint after the resonance move.
+    /// @return True when a deferred two-electron label must be regenerated at the endpoint.
     bool ShouldRegenerateUnresolvedTarget(
         const OpenBabel::OBAtom &atom,
         int post_target_valence)
@@ -46,7 +50,7 @@ namespace
             post_target_valence,
             atom.GetFormalCharge()));
         return molgr::utils::GetUnpairedElectronCount(atom) == 1 &&
-               (atomic_num == 6 || atomic_num == 7 || atomic_num == 15) &&
+               (atomic_num == 6 || atomic_num == 7 || atomic_num == 14 || atomic_num == 15) &&
                atom.GetFormalCharge() == 0 &&
                molgr::utils::GetLonePairCount(atom) == 0 &&
                std::max(0, typical_valence - post_target_valence) == 2;
@@ -54,6 +58,9 @@ namespace
 
     using BondOrderOverrides = std::map<std::pair<int, int>, int>;
 
+    /// @param atom_idx_a One-based atom index in the ligand graph.
+    /// @param atom_idx_b One-based atom index in the ligand graph.
+    /// @return The two atom indices in canonical order for undirected bond lookup.
     std::pair<int, int> BondPair(int atom_idx_a, int atom_idx_b)
     {
         if (atom_idx_a <= atom_idx_b)
@@ -63,6 +70,9 @@ namespace
         return {atom_idx_b, atom_idx_a};
     }
 
+    /// @param bond Bond whose endpoints and order define the local environment.
+    /// @param bond_order_overrides Proposed local bond orders keyed by sorted endpoint indices.
+    /// @return The proposed integer bond order, falling back to the molecular bond order.
     int GetBondOrderWithOverrides(
         const OpenBabel::OBBond &bond,
         const BondOrderOverrides &bond_order_overrides)
@@ -77,6 +87,9 @@ namespace
         return bond.GetBondOrder();
     }
 
+    /// @param bond Bond whose endpoints and order define the local environment.
+    /// @param bond_order_overrides Proposed local bond orders keyed by sorted endpoint indices.
+    /// @return The effective fractional bond order used in the local strain estimate.
     double NormalizedBondOrderWithOverrides(
         const OpenBabel::OBBond &bond,
         const BondOrderOverrides &bond_order_overrides)
@@ -100,18 +113,27 @@ namespace
         return static_cast<double>(std::max(static_cast<int>(bond.GetBondOrder()), 1));
     }
 
+    /// @param atomic_num Atomic number of the element.
+    /// @return An electronegativity bounded away from zero for UFF-like length estimates.
     double ClampedElectronegativity(int atomic_num)
     {
         const double value = OpenBabel::OBElements::GetElectroNeg(atomic_num);
         return std::max(value, 0.25);
     }
 
+    /// @param atomic_num Atomic number of the element.
+    /// @return The covalent radius used in the distance estimate with invalid values guarded.
     double ClampedCovalentRadius(int atomic_num)
     {
         const double value = OpenBabel::OBElements::GetCovalentRad(atomic_num);
         return value > 0.0 ? value : 0.75;
     }
 
+    /// Estimate the equilibrium bond length in angstroms from the elements and effective bond order.
+    /// @param atomic_num_a Atomic number of the indicated bond partner or site.
+    /// @param atomic_num_b Atomic number of the indicated bond partner or site.
+    /// @param bond_order Bond multiplicity under consideration.
+    /// @return Equilibrium interatomic distance in angstroms.
     double EstimateUffEquilibriumBondLength(
         int atomic_num_a,
         int atomic_num_b,
@@ -133,6 +155,9 @@ namespace
         return std::max(ri + rj + rbo - ren, 0.4);
     }
 
+    /// Estimate the harmonic stretching coefficient from the equilibrium bond length.
+    /// @param equilibrium_distance Estimated unstretched bond length in angstroms.
+    /// @return Harmonic stretching coefficient for the estimated equilibrium distance.
     double EstimateUffBondForceConstant(double equilibrium_distance)
     {
         // UFF folds the 1/2 into kb and scales approximately as 1/r0^3. We omit
@@ -141,6 +166,10 @@ namespace
                std::max(equilibrium_distance * equilibrium_distance * equilibrium_distance, 1.0e-6);
     }
 
+    /// Estimate the harmonic strain of a bond under the proposed bond orders.
+    /// @param bond Bond whose endpoints and order define the local environment.
+    /// @param bond_order_overrides Proposed local bond orders keyed by sorted endpoint indices.
+    /// @return Estimated stretching energy under the proposed bond-order changes.
     double UffLiteBondStretchEnergy(
         const OpenBabel::OBBond &bond,
         const BondOrderOverrides &bond_order_overrides)
@@ -164,6 +193,11 @@ namespace
         return EstimateUffBondForceConstant(r0) * delta * delta;
     }
 
+    /// Sum the stretching strain over bonds affected by the local resonance shift.
+    /// @param mol Molecular graph supplying the coordinates, connectivity and atom labels.
+    /// @param affected_bonds Bonds whose local stretching terms must be recomputed.
+    /// @param bond_order_overrides Proposed local bond orders keyed by sorted endpoint indices.
+    /// @return Estimated stretching energy under the proposed bond-order changes.
     double LocalBondStretchEnergy(
         const OpenBabel::OBMol &mol,
         const std::set<std::pair<int, int>> &affected_bonds,
@@ -182,6 +216,10 @@ namespace
         return energy;
     }
 
+    /// Infer an ideal coordination angle in radians from the proposed local bond orders.
+    /// @param atom Atom whose local chemical environment is examined.
+    /// @param bond_order_overrides Proposed local bond orders keyed by sorted endpoint indices.
+    /// @return Ideal bond angle in radians.
     double IdealAngleRadiansForAtom(
         const OpenBabel::OBAtom &atom,
         const BondOrderOverrides &bond_order_overrides)
@@ -217,6 +255,13 @@ namespace
         return 109.5 * kDegreesToRadians;
     }
 
+    /// Estimate bending strain for the specified three-atom angle under the proposed bond orders.
+    /// @param mol Molecular graph supplying the coordinates, connectivity and atom labels.
+    /// @param left First atom.
+    /// @param center Atom or site occupying this position in the local chemical motif.
+    /// @param right Second atom.
+    /// @param bond_order_overrides Proposed local bond orders keyed by sorted endpoint indices.
+    /// @return Estimated angle-bending energy under the proposed bond-order changes.
     double UffLiteAngleEnergy(
         const OpenBabel::OBMol &mol,
         const OpenBabel::OBAtom &left,
@@ -260,6 +305,11 @@ namespace
         return stiffness * cos_delta * cos_delta;
     }
 
+    /// Sum local bending strain around the centers affected by a resonance move.
+    /// @param mol Molecular graph supplying the coordinates, connectivity and atom labels.
+    /// @param affected_center_indices Centers whose local bending terms must be recomputed.
+    /// @param bond_order_overrides Proposed local bond orders keyed by sorted endpoint indices.
+    /// @return Estimated angle-bending energy under the proposed bond-order changes.
     double LocalAngleStrainEnergy(
         const OpenBabel::OBMol &mol,
         const std::set<int> &affected_center_indices,
@@ -296,6 +346,11 @@ namespace
         return energy;
     }
 
+    /// Estimate the penalty for radical localization from element, unpaired count and heavy-atom degree.
+    /// @param atomic_num Atomic number of the element.
+    /// @param radical_num Unpaired-electron assignment at the site.
+    /// @param heavy_degree Number of nonhydrogen neighbors of the atom.
+    /// @return Estimated radical localization penalty.
     double RadicalPenaltyForAtom(int atomic_num, int radical_num, int heavy_degree)
     {
         if (radical_num <= 0)
@@ -310,6 +365,10 @@ namespace
                std::max(0.0, 3.0 - static_cast<double>(heavy_degree)) * 1.5;
     }
 
+    /// Classify a bond for traversing the alternating pi system under the proposed bond orders.
+    /// @param bond Bond whose endpoints and order define the local environment.
+    /// @param bond_order_overrides Proposed local bond orders keyed by sorted endpoint indices.
+    /// @return 0 for an absent bond order, 1 for a single bond and 2 for a multiple or aromatic bond.
     int ConjugatedBondKind(
         const OpenBabel::OBBond &bond,
         const BondOrderOverrides &bond_order_overrides)
@@ -331,6 +390,11 @@ namespace
         return 2;
     }
 
+    /// Count atoms reachable by conjugation from the proposed radical site.
+    /// @param mol Molecular graph supplying the coordinates, connectivity and atom labels.
+    /// @param radical_atom_idx One-based atom index in the ligand graph.
+    /// @param bond_order_overrides Proposed local bond orders keyed by sorted endpoint indices.
+    /// @return Size of the conjugated region accessible from the radical site.
     int EstimateRadicalConjugationSize(
         const OpenBabel::OBMol &mol,
         int radical_atom_idx,
@@ -378,6 +442,10 @@ namespace
 
         return static_cast<int>(visited_atoms.size());
     }
+    /// Estimate changes in local stretching, bending, radical and conjugation terms for one move.
+    /// @param mol Molecular graph supplying the coordinates, connectivity and atom labels.
+    /// @param move_path Atom indices along the proposed electron-shift path.
+    /// @return Local gain vector for the proposed move.
     molgr::resonance::UffLiteGainMetrics ComputeUffLiteGainResonanceMetrics(
         const OpenBabel::OBMol &mol,
         const std::tuple<int, int, int> &move_path)
@@ -450,11 +518,17 @@ namespace
         };
     }
 
+    /// @param metrics Local energy and electronic gain estimates for the move.
+    /// @return True if any estimated score component improves.
     bool HasPositiveUffLiteGain(const molgr::resonance::UffLiteGainMetrics &metrics)
     {
         return std::any_of(metrics.begin(), metrics.end(), [](double value) { return value > 0.0; });
     }
 
+    /// Add the two vectors of local resonance gains component by component.
+    /// @param left First vector of local resonance gains.
+    /// @param right Second vector of local resonance gains.
+    /// @return Componentwise gain estimates for the indicated sum, maximum or bounded search.
     molgr::resonance::UffLiteGainMetrics AddUffLiteGainMetrics(
         const molgr::resonance::UffLiteGainMetrics &left,
         const molgr::resonance::UffLiteGainMetrics &right)
@@ -467,6 +541,10 @@ namespace
         return result;
     }
 
+    /// Take the larger estimate in each resonance-gain component.
+    /// @param left First vector of local resonance gains.
+    /// @param right Second vector of local resonance gains.
+    /// @return Componentwise gain estimates for the indicated sum, maximum or bounded search.
     molgr::resonance::UffLiteGainMetrics ComponentwiseMaxUffLiteGainMetrics(
         const molgr::resonance::UffLiteGainMetrics &left,
         const molgr::resonance::UffLiteGainMetrics &right)
@@ -479,6 +557,12 @@ namespace
         return result;
     }
 
+    /// Bound attainable gains by exploring the remaining steps with memoized molecular states.
+    /// @param mol Molecular graph supplying the coordinates, connectivity and atom labels.
+    /// @param state_key Fingerprint of the current resonance state.
+    /// @param remaining_steps Remaining depth budget in one-step electron shifts.
+    /// @param cache Stored evaluations or bounds indexed by the molecular fingerprint.
+    /// @return Componentwise gain estimates for the indicated sum, maximum or bounded search.
     molgr::resonance::UffLiteGainMetrics ComputeNStepUffLiteGainUpperBound(
         const OpenBabel::OBMol &mol,
         const molgr::resonance::ResonanceStateKey &state_key,
@@ -528,6 +612,10 @@ namespace
         return upper_bound;
     }
 
+    /// Convert componentwise gain bounds into a score improvement bound for pruning.
+    /// @param metrics Local energy and electronic gain estimates for the move.
+    /// @param remaining_steps Remaining depth budget in one-step electron shifts.
+    /// @return Upper bound on the score improvement over the remaining steps.
     double EstimateUffLiteGainScoreImprovementUpperBound(
         const molgr::resonance::UffLiteGainMetrics &metrics,
         int remaining_steps)
@@ -541,6 +629,9 @@ namespace
                 static_cast<double>(std::max(remaining_steps, 0)) * kUffLiteBranchBoundStepSlack);
     }
 
+    /// Combine the gain estimates into the ordering score for one resonance move.
+    /// @param metrics Local energy and electronic gain estimates for the move.
+    /// @return Numeric move-ordering score.
     double UffLiteGainMoveScore(const molgr::resonance::UffLiteGainMetrics &metrics)
     {
         return -(
@@ -550,6 +641,9 @@ namespace
             metrics[3] * kUffLiteConjugationScoreWeight);
     }
 
+    /// Encode the resonance fingerprint for use as a string key.
+    /// @param state_key Fingerprint of the current resonance state.
+    /// @return Serialized atom and bond fingerprint.
     std::string SerializeResonanceStateKey(
         const molgr::resonance::ResonanceStateKey &state_key)
     {
@@ -726,7 +820,7 @@ namespace molgr
 
         // Electron bookkeeping: enumerate migration of exactly one real
         // monoradical across an adjacent pi bond. When a monoradical target becomes
-        // a neutral C/N/P two-electron deficit after losing its pi bond, defer its
+        // a neutral C/N/Si/P two-electron deficit after losing its pi bond, defer its
         // resulting occupancy instead of forcing a triplet state.
         std::vector<IndexedResonanceTraversalMove> EnumerateOneStepResonanceMoves(
             const OpenBabel::OBMol &mol,
@@ -734,6 +828,21 @@ namespace molgr
             const ResonanceBondIndexMap &bond_index_map)
         {
             OpenBabel::OBMol &query_mol = const_cast<OpenBabel::OBMol &>(mol);
+            // Exactly one unpaired electron is required at the source of a move.
+            bool has_source = false;
+            FOR_ATOMS_OF_MOL(atom, query_mol)
+            {
+                if (molgr::utils::GetUnpairedElectronCount(*atom) == 1)
+                {
+                    has_source = true;
+                    break;
+                }
+            }
+            if (!has_source)
+            {
+                molgr::vendor::openbabel_threading::PrepareForSmartsMatching(query_mol);
+                return {};
+            }
             const auto matches =
                 molgr::smarts::FindAll(query_mol, molgr::smarts::PatternId::RESONANCE_ONE_STEP);
             std::vector<IndexedResonanceTraversalMove> result;
@@ -783,7 +892,7 @@ namespace molgr
 
         // Electron bookkeeping: move one real unpaired electron from the source
         // to the target while swapping the coupled bond-order pattern by one.
-        // A newly formed neutral C/N/P two-electron deficit is regenerated as an
+        // A newly formed neutral C/N/Si/P two-electron deficit is regenerated as an
         // unresolved center so validation can choose singlet versus triplet.
         OpenBabel::OBMol MaterializeOneStepResonance(
             const OpenBabel::OBMol &mol,
@@ -867,6 +976,10 @@ namespace molgr
             return result;
         }
 
+        /// Rank one-step moves by their estimated local gains and deterministic atom-index tie-breakers.
+        /// @param mol Molecular graph supplying the coordinates, connectivity and atom labels.
+        /// @param moves Candidate one-step electron shifts to select or order.
+        /// @return Moves paired with their scores in traversal order.
         std::vector<std::pair<IndexedResonanceTraversalMove, double>> OrderUffLiteGainMoves(
             const OpenBabel::OBMol &mol,
             const std::vector<IndexedResonanceTraversalMove> &moves)
@@ -905,6 +1018,7 @@ namespace molgr
             std::vector<std::pair<IndexedResonanceTraversalMove, double>> ordered_moves;
             if (config.resonance.traversal_score == "uff_lite_gain")
             {
+                if (moves.size() < 2) return moves;
                 ordered_moves = OrderUffLiteGainMoves(mol, moves);
             }
             else
@@ -968,7 +1082,7 @@ namespace molgr
             hit = machine.RunOmolChargeStage(
                       std::nullopt,
                       molgr::reconstruct::EliminatePossibleCPLikeRadicalAnion,
-                      machine.total_radical_electrons) ||
+                      machine.total_radical_electrons, std::vector<int>{}) ||
                   hit;
             hit = machine.RunOmolStage(
                       std::nullopt,

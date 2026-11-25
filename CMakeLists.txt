@@ -77,6 +77,7 @@ add_library(molgr STATIC
     src/cpp/src/state.cpp
     src/cpp/src/utils/consts.cpp
     src/cpp/src/utils/utils.cpp
+    src/cpp/src/utils/coordination_seeds.cpp
     src/cpp/src/utils/conversions.cpp
     src/cpp/src/utils/stereo.cpp
     src/cpp/src/utils/equivalence.cpp
@@ -90,6 +91,8 @@ add_library(molgr STATIC
     src/cpp/src/vendor/openbabel_threading.cpp
     src/cpp/src/utils/metals/preparation.cpp
     src/cpp/src/utils/metals/scoring.cpp
+    src/cpp/src/utils/metals/conjugated_geometry.cpp
+    src/cpp/src/utils/metals/hydrazido_geometry.cpp
     src/cpp/src/utils/metals/search.cpp
     src/cpp/src/utils/no_metals/neighbor_radicals.cpp
     src/cpp/src/utils/no_metals/preparation.cpp

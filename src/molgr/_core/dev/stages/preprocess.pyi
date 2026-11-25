@@ -13,7 +13,7 @@ def make_connections_ptr(
     extra_tolerance_angstrom: typing.SupportsFloat | typing.SupportsIndex = 0.15,
 ) -> bool:
     """
-    Apply preprocess.make_connections to an existing OBMol.
+    Remove overlong seed bonds and reconnect partners using their updated valences.
 
     Args:
         mol_ptr: int address of OpenBabel::OBMol
@@ -22,7 +22,7 @@ def make_connections_ptr(
 
 def pre_clean_ptr(mol_ptr: typing.SupportsInt | typing.SupportsIndex) -> bool:
     """
-    Apply preprocess.pre_clean to an existing OBMol.
+    Normalize labile seed bonds and charge-separated groups before assigning electrons.
     """
 
 def validate_omol_ptr(

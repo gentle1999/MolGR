@@ -8,10 +8,12 @@ is retained in _legacy_equivalence for comparison only.
 from __future__ import annotations
 
 from collections import Counter
+from typing import Mapping
 
 from rdkit import Chem, rdBase
 
 from molgr import _core
+from molgr._native_types import NativeEquivalenceResult, NativeGraphSummary
 from molgr.fallback.utils.consts import NON_METAL_DICT
 from molgr.utils._equivalence_types import (
     UNKNOWN_ELECTRON_METADATA,
@@ -66,7 +68,7 @@ _FIELDS = (
 )
 
 
-def _read_field(atom, name, boolean=False):
+def _read_field(atom: Chem.Atom, name: str, boolean: bool = False) -> int | None:
     """Decode a property whose presence has already been checked."""
     try:
         value = atom.GetProp(name).strip().lower()
@@ -78,15 +80,17 @@ def _read_field(atom, name, boolean=False):
         return None
 
 
-def _prepare_input(mol, use_chirality, ignore_metal_coordination_bonds=True):
+def _prepare_input(
+    mol: Chem.Mol, use_chirality: bool, ignore_metal_coordination_bonds: bool = True
+) -> tuple[_core.utils.MoleculeData, RawMoleculeDiagnostics]:
     """Validate atoms and capture diagnostics/transfer rows in one source scan."""
     # AddHs creates the private graph. Only a changed radical assignment needs
     # an earlier copy; decoded MolGR annotations go directly into native rows.
     prepared = mol
-    counts = Counter()
+    counts: Counter[str] = Counter()
     explicit_h = total_h = charge = radicals = 0
     metals = []
-    properties = [[] for _ in _FIELDS]
+    properties: list[list[tuple[int, int | str]]] = [[] for _ in _FIELDS]
     atom_rows = []
     for i in range(mol.GetNumAtoms()):
         atom = mol.GetAtomWithIdx(i)
@@ -128,7 +132,7 @@ def _prepare_input(mol, use_chirality, ignore_metal_coordination_bonds=True):
                 lone_pairs = value
                 presence |= 2
             elif index == 2:
-                unresolved = value
+                unresolved = bool(value)
                 presence |= 4
         atom_rows.append(
             (z, atom.GetIsotope(), atom_charge, unpaired, lone_pairs, unresolved, presence)
@@ -162,7 +166,13 @@ def _prepare_input(mol, use_chirality, ignore_metal_coordination_bonds=True):
     ), raw
 
 
-def _package(result, raw_left, raw_right, max_resonance):
+def _package(
+    result: NativeEquivalenceResult,
+    raw_left: RawMoleculeDiagnostics,
+    raw_right: RawMoleculeDiagnostics,
+    max_resonance: int,
+) -> EquivalenceResult:
+    """Attach the native atom mapping, resonance witness and raw input invariants to one comparison."""
     left, right = result["left"], result["right"]
     decision = EquivalenceDecision(result["decision"])
     method = EquivalenceMethod(result["method"]) if result["method"] else None
@@ -179,6 +189,8 @@ def _package(result, raw_left, raw_right, max_resonance):
     invariants = {
         name: InvariantResult(statuses[status]) for name, status in result["invariants"].items()
     }
+    left_fields: Mapping[str, object] = left
+    right_fields: Mapping[str, object] = right
     for name, key in (
         ("raw_total_formal_charge", "charge"),
         ("heavy_atom_formula", "heavy_formula"),
@@ -188,9 +200,9 @@ def _package(result, raw_left, raw_right, max_resonance):
         ("radical_electrons", "organic_radicals"),
         ("metal_state", "metal_states"),
     ):
-        invariants[name].mol1, invariants[name].mol2 = left[key], right[key]
+        invariants[name].mol1, invariants[name].mol2 = left_fields[key], right_fields[key]
 
-    def coverage(summary):
+    def coverage(summary: NativeGraphSummary) -> dict[str, int]:
         return {
             "known_fields": summary["known_fields"],
             "unknown_fields": 3 * summary["atom_count"] - summary["known_fields"],
@@ -237,9 +249,12 @@ def _package(result, raw_left, raw_right, max_resonance):
             "standardized_rdkit_radical_electrons": summary["organic_radicals"],
         }
     effects["candidate"], effects["reference"] = effects["mol1"], effects["mol2"]
+    reported_fields: Mapping[str, object] = result
     return EquivalenceResult(
         decision=decision,
-        relation=relations.get(method, EquivalenceRelation.NONE),
+        relation=relations.get(method, EquivalenceRelation.NONE)
+        if method is not None
+        else EquivalenceRelation.NONE,
         equivalent=decision == EquivalenceDecision.EQUIVALENT,
         method=method,
         reason=result["reason"],
@@ -278,7 +293,7 @@ def _package(result, raw_left, raw_right, max_resonance):
         atom_mapping=tuple(result["mapping"]),
         resonance_witness=tuple(result["witness"]),
         native_stats={
-            key: result[key]
+            key: reported_fields[key]
             for key in (
                 "mappings",
                 "mapping_nodes",
@@ -310,10 +325,10 @@ def evaluate_equivalence(
     Stereo comparison is disabled by default; set ``use_chirality=True`` to
     require compatible stereochemical information under the accepted mapping.
 
-    ``max_resonance`` permits twice that many visited states across both BFS
-    sides, all regions and mappings. ``max_resonance_steps`` bounds each region's
-    path. Legacy SMILES diagnostics stay None; native mappings and moves
-    replace them.
+    Compatible atom mappings first receive shallow resonance searches and can
+    be retried at greater depths. ``max_resonance`` permits twice that many
+    generated states across both sides, all regions, mappings and retries.
+    ``max_resonance_steps`` bounds the path length in each region.
     """
     try:
         if not 0 <= max_resonance <= 1000000 or not 0 <= max_resonance_steps <= 10000:
@@ -347,8 +362,11 @@ def check_equivalence(
     max_resonance: int = 5000,
     *,
     ignore_metal_coordination_bonds: bool = True,
-    **native_options,
-):
+    max_mappings: int | None = None,
+    max_mapping_nodes: int = 100000,
+    max_resonance_steps: int = 24,
+) -> tuple[bool, EquivalenceResult]:
+    """Return the equivalence flag and the native evidence under the requested search limits."""
     with rdBase.BlockLogs():
         result = evaluate_equivalence(
             mol1,
@@ -356,6 +374,8 @@ def check_equivalence(
             use_chirality=use_chirality,
             max_resonance=max_resonance,
             ignore_metal_coordination_bonds=ignore_metal_coordination_bonds,
-            **native_options,
+            max_mappings=max_mappings,
+            max_mapping_nodes=max_mapping_nodes,
+            max_resonance_steps=max_resonance_steps,
         )
     return result.equivalent, result

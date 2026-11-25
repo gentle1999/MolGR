@@ -11,6 +11,7 @@ import molgr.config
 
 __all__: list[str] = [
     "compute_organic_topology_metrics_ptr",
+    "debug_roundtrip_xyz_block",
     "debug_vendor_uff_ptr",
     "debug_xyz_seed_molecule_data",
     "organic_force_field_energy_ptr",
@@ -19,6 +20,9 @@ __all__: list[str] = [
     "test_symmetry_penalty",
     "test_total_score",
 ]
+
+def debug_roundtrip_xyz_block(xyz_block: str) -> str:
+    """Read and write an XYZ block with the native plugin-free converter."""
 
 def compute_organic_topology_metrics_ptr(
     mol_ptr: typing.SupportsInt | typing.SupportsIndex,

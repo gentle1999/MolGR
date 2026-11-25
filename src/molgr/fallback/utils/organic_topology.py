@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
+from itertools import combinations, product
 from typing import Dict, Iterable, Set, Tuple, cast
 
 from openbabel import openbabel as ob
@@ -13,6 +15,14 @@ from molgr.fallback.utils.electrons import (
     get_unpaired_electron_count,
     has_unresolved_two_electron_center,
 )
+from molgr.fallback.utils.ob_graph import (
+    atom_bonds,
+    atom_neighbors,
+    mol_atoms,
+    mol_bonds,
+    mol_rings,
+    neighbor_bond_order,
+)
 
 
 _AROMATIC_RING_FORMAL_CHARGE_ABS_REJECTION_THRESHOLD = 4
@@ -20,6 +30,8 @@ _AROMATIC_RING_FORMAL_CHARGE_ABS_REJECTION_THRESHOLD = 4
 
 @dataclass(frozen=True)
 class OrganicTopologyMetrics:
+    """Aromatic, conjugated and hyperconjugative features used to compare ligand electronic assignments."""
+
     aromatic_atom_count: int
     aromatic_ring_count: int
     aromatic_stability_score: float
@@ -29,17 +41,19 @@ class OrganicTopologyMetrics:
     conjugated_atom_indices: Tuple[int, ...]
     hyperconjugative_donor_count: int
     hyperconjugation_score: int
+    # Zero-based atom sets; orthogonal cumulene pi systems remain separate.
+    conjugated_atom_components: Tuple[Tuple[int, ...], ...] = ()
 
 
 def _prepare_topology_working_molecule(omol: pybel.Molecule) -> pybel.Molecule:
-    working = omol.clone
+    working = cast(pybel.Molecule, omol.clone)
     working_obmol = cast(ob.OBMol, working.OBMol)
     working_obmol.FindRingAtomsAndBonds()
     working_obmol.SetAromaticPerceived(False)
     ob.OBAromaticTyper().AssignAromaticFlags(working_obmol)
     working_obmol.SetHybridizationPerceived(False)
-    for atom in ob.OBMolAtomIter(working_obmol):
-        cast(ob.OBAtom, atom).GetHyb()
+    for atom in mol_atoms(working_obmol):
+        atom.GetHyb()
     return working
 
 
@@ -50,7 +64,7 @@ def _ring_atom_indices(ring: ob.OBRing) -> Tuple[int, ...]:
 def _ring_formal_charge_sum(obmol: ob.OBMol, ring: ob.OBRing) -> int:
     charge_sum = 0
     for atom_idx in _ring_atom_indices(ring):
-        atom = obmol.GetAtom(atom_idx)
+        atom = cast("ob.OBAtom | None", obmol.GetAtom(atom_idx))
         if atom is None:
             continue
         charge_sum += cast(int, atom.GetFormalCharge())
@@ -88,6 +102,7 @@ def _additional_atom_pi_electrons(atom: ob.OBAtom, *, incident_to_ring_multiple_
 
 
 def _ring_pi_electron_count(obmol: ob.OBMol, ring: ob.OBRing) -> int | None:
+    """Sum ring pi bonds and eligible atomic contributions without counting a pi-bonded atom twice."""
     ring_atom_indices = _ring_atom_indices(ring)
     if len(ring_atom_indices) < 3:
         return None
@@ -105,7 +120,7 @@ def _ring_pi_electron_count(obmol: ob.OBMol, ring: ob.OBRing) -> int | None:
             atoms_incident_to_ring_multiple_bond.add(end_idx)
 
     for atom_idx in ring_atom_indices:
-        atom = obmol.GetAtom(atom_idx)
+        atom = cast("ob.OBAtom | None", obmol.GetAtom(atom_idx))
         if atom is None:
             continue
         pi_electron_count += _additional_atom_pi_electrons(
@@ -134,10 +149,8 @@ def _rings_share_fused_bond(lhs: ob.OBRing, rhs: ob.OBRing) -> bool:
 
 
 def _aromatic_ring_systems(obmol: ob.OBMol) -> list[list[ob.OBRing]]:
-    sssr_rings = obmol.GetSSSR()
-    aromatic_rings = [
-        cast(ob.OBRing, ring) for ring in sssr_rings if cast(ob.OBRing, ring).IsAromatic()
-    ]
+    sssr_rings = mol_rings(obmol)
+    aromatic_rings = [ring for ring in sssr_rings if ring.IsAromatic()]
     systems: list[list[ob.OBRing]] = []
     assigned: Set[int] = set()
     for ring_index, ring in enumerate(aromatic_rings):
@@ -165,6 +178,7 @@ def _ring_system_atom_indices(rings: Iterable[ob.OBRing]) -> Set[int]:
 
 
 def _is_accepted_aromatic_ring_system(obmol: ob.OBMol, rings: list[ob.OBRing]) -> bool:
+    """Check isolated rings by electron count and fused aromatic systems by their net formal charge."""
     if not rings:
         return False
     if len(rings) == 1:
@@ -172,7 +186,7 @@ def _is_accepted_aromatic_ring_system(obmol: ob.OBMol, rings: list[ob.OBRing]) -
     charge_sum = sum(
         int(atom.GetFormalCharge())
         for atom_idx in _ring_system_atom_indices(rings)
-        for atom in [obmol.GetAtom(atom_idx)]
+        for atom in [cast("ob.OBAtom | None", obmol.GetAtom(atom_idx))]
         if atom is not None
     )
     return abs(charge_sum) < _AROMATIC_RING_FORMAL_CHARGE_ABS_REJECTION_THRESHOLD
@@ -183,7 +197,7 @@ def _aromatic_ring_stability_weight(
     ring_atom_indices: Iterable[int],
     config: OrganicTopologyConfig,
 ) -> float:
-    atoms = [obmol.GetAtom(atom_idx) for atom_idx in ring_atom_indices]
+    atoms = [cast("ob.OBAtom | None", obmol.GetAtom(atom_idx)) for atom_idx in ring_atom_indices]
     heavy_atoms = [atom for atom in atoms if atom is not None and atom.GetAtomicNum() != 1]
     if not heavy_atoms:
         return 0.0
@@ -224,7 +238,7 @@ def _aromatic_ring_stability_weight(
 
 
 def _atom_has_unpaired_electrons(atom: ob.OBAtom) -> bool:
-    return cast(int, get_unpaired_electron_count(atom)) > 0
+    return get_unpaired_electron_count(atom) > 0
 
 
 def _is_multiple_like_bond(bond: ob.OBBond) -> bool:
@@ -241,7 +255,16 @@ def _is_pi_active_electron_center(atom: ob.OBAtom) -> bool:
         and lone_pair_count == 0
         and not has_unresolved_two_electron_center(atom)
     ):
-        return False
+        # Search-active pairs are not the full Lewis inventory. An ordinary
+        # neutral sp2 heteroatom can supply a p pair even after reconstruction
+        # has consumed every active pair (e.g. phenol, enamine, or amide).
+        element_info = NON_METAL_DICT.get(int(atom.GetAtomicNum()))
+        if element_info is None or atom.GetAtomicNum() == 6 or int(atom.GetHyb()) != 2:
+            return False
+        valence = int(atom.GetTotalValence())
+        outer = int(element_info.num_outer_electrons)
+        paired = outer - valence
+        return outer + valence == 8 and paired >= 2 and paired % 2 == 0
 
     element_info = NON_METAL_DICT.get(cast(int, atom.GetAtomicNum()))
     is_under_saturated = bool(
@@ -291,8 +314,7 @@ def _hyperconjugation_metrics(omol: pybel.Molecule) -> tuple[int, int]:
     obmol = cast(ob.OBMol, omol.OBMol)
     atoms_incident_to_multiple_like_bond: Set[int] = set()
     bonds: list[ob.OBBond] = []
-    for bond_iter in ob.OBMolBondIter(obmol):
-        bond = cast(ob.OBBond, bond_iter)
+    for bond in mol_bonds(obmol):
         bonds.append(bond)
         if not _is_multiple_like_bond(bond):
             continue
@@ -386,6 +408,7 @@ def _normalized_tetrahedron_volume(
     third: ob.OBAtom,
     fourth: ob.OBAtom,
 ) -> float:
+    """Measure nonplanarity using tetrahedron volume normalized by the cube of its RMS edge length."""
     points = tuple(
         (float(atom.GetX()), float(atom.GetY()), float(atom.GetZ()))
         for atom in (first, second, third, fourth)
@@ -422,22 +445,72 @@ def _normalized_tetrahedron_volume(
     return max(0.0, min(1.0, 6.0 * (2.0**0.5) * volume / rms_edge_cubed))
 
 
-def _first_outer_single_bond_neighbor(
-    atom: ob.OBAtom,
-    excluded_neighbor_idx: int,
-) -> ob.OBAtom | None:
-    candidates: list[ob.OBAtom] = []
-    for bond_iter in ob.OBAtomBondIter(atom):
-        bond = cast(ob.OBBond, bond_iter)
-        if bond.IsAromatic() or int(bond.GetBondOrder()) != 1:
-            continue
-        neighbor = cast(ob.OBAtom, bond.GetNbrAtom(atom))
-        if neighbor.GetIdx() == excluded_neighbor_idx:
-            continue
-        candidates.append(neighbor)
-    if not candidates:
+def _strongly_pyramidal_pi_endpoint(atom: ob.OBAtom) -> bool:
+    """A tetrahedral second-row center cannot supply a trigonal pi plane.
+
+    Restrict this scoring guard to three explicit neighbors with resolved,
+    nondegenerate geometry. It does not assign bond orders or metal charges.
+    """
+    if (
+        atom.GetAtomicNum() not in (6, 7)
+        or atom.GetExplicitDegree() != 3
+        or atom.GetImplicitHCount()
+    ):
+        return False
+    neighbors = list(atom_neighbors(atom))
+    if any(atom.GetDistance(neighbor) < 1e-8 for neighbor in neighbors):
+        return False
+    angles = [atom.GetParent().GetAngle(a, atom, b) for a, b in combinations(neighbors, 2)]
+    return all(80 < angle < 125 for angle in angles) and math.fsum(angles) < 330
+
+
+def _local_pi_plane_tensor(
+    center: ob.OBAtom, partner: ob.OBAtom, *, single_bonds_only: bool = True
+) -> tuple[float, ...] | None:
+    """Average unoriented plane normals over the neighboring bonds.
+
+    Each local plane contains the multiple-bond axis and one substituent bond.
+    Outer products remove normal-sign ambiguity; explicit H contributes just
+    like other neighbors. Missing or collinear coordinates provide no plane.
+    """
+    axis = (
+        partner.GetX() - center.GetX(),
+        partner.GetY() - center.GetY(),
+        partner.GetZ() - center.GetZ(),
+    )
+    length = math.sqrt(sum(x * x for x in axis))
+    if length < 1e-12:
         return None
-    return min(candidates, key=lambda candidate: int(candidate.GetIdx()))
+    axis = tuple(x / length for x in axis)
+    tensors = []
+    for bond in atom_bonds(center):
+        if single_bonds_only and (bond.IsAromatic() or bond.GetBondOrder() != 1):
+            continue
+        neighbor = cast(ob.OBAtom, bond.GetNbrAtom(center))
+        if neighbor.GetIdx() == partner.GetIdx():
+            continue
+        vector = (
+            neighbor.GetX() - center.GetX(),
+            neighbor.GetY() - center.GetY(),
+            neighbor.GetZ() - center.GetZ(),
+        )
+        length = math.sqrt(sum(x * x for x in vector))
+        if length < 1e-12:
+            continue
+        vector = tuple(x / length for x in vector)
+        normal = (
+            axis[1] * vector[2] - axis[2] * vector[1],
+            axis[2] * vector[0] - axis[0] * vector[2],
+            axis[0] * vector[1] - axis[1] * vector[0],
+        )
+        length = math.sqrt(sum(x * x for x in normal))
+        if length < 1e-8:
+            continue
+        normal = tuple(x / length for x in normal)
+        tensors.append(tuple(a * b for a in normal for b in normal))
+    if not tensors:
+        return None
+    return tuple(math.fsum(tensor[i] for tensor in tensors) / len(tensors) for i in range(9))
 
 
 def _alternating_double_bonds_are_geometrically_conjugated(
@@ -445,33 +518,111 @@ def _alternating_double_bonds_are_geometrically_conjugated(
     left_inner: ob.OBAtom,
     right_inner: ob.OBAtom,
     multiple_bonds_by_atom: Dict[int, Dict[int, int]],
-    volume_tolerance: float,
+    min_plane_overlap: float,
 ) -> bool:
+    """Require compatible local pi planes, independent of atom/bond ordering.
+
+    The tensor inner product is the mean squared cosine between local normals.
+    This is a geometric scoring heuristic, not a quantum overlap calculation.
+    Enumerate all adjacent pi channels instead of selecting one by its index.
+    Cumulated-system component boundaries are handled separately by the caller.
+    """
     left_bonds = multiple_bonds_by_atom.get(int(left_inner.GetIdx()), {})
     right_bonds = multiple_bonds_by_atom.get(int(right_inner.GetIdx()), {})
     if not left_bonds or not right_bonds:
         return True
-
-    left_outer_idx = next(iter(left_bonds.values()))
-    right_outer_idx = next(iter(right_bonds.values()))
-    left_outer = cast(ob.OBAtom, obmol.GetAtom(left_outer_idx))
-    right_outer = cast(ob.OBAtom, obmol.GetAtom(right_outer_idx))
-    if left_outer is None or right_outer is None:
-        return True
-
-    left_terminal = _first_outer_single_bond_neighbor(left_outer, int(left_inner.GetIdx()))
-    right_terminal = _first_outer_single_bond_neighbor(right_outer, int(right_inner.GetIdx()))
-    if left_terminal is None or right_terminal is None:
-        return True
-
-    return (
-        _normalized_tetrahedron_volume(
-            left_terminal,
-            left_outer,
-            right_outer,
-            right_terminal,
+    for left_idx, right_idx in product(left_bonds.values(), right_bonds.values()):
+        left_outer, right_outer = (
+            cast("ob.OBAtom | None", obmol.GetAtom(left_idx)),
+            cast("ob.OBAtom | None", obmol.GetAtom(right_idx)),
         )
-        <= volume_tolerance
+        if left_outer is None or right_outer is None:
+            continue
+        if any(
+            _strongly_pyramidal_pi_endpoint(atom)
+            for atom in (left_outer, left_inner, right_inner, right_outer)
+        ):
+            continue
+        planes = [
+            plane
+            for center, partner in (
+                (left_outer, left_inner),
+                (left_inner, left_outer),
+                (right_inner, right_outer),
+                (right_outer, right_inner),
+            )
+            # A triple bond has two perpendicular pi channels. A terminal
+            # substituent cannot define one exclusive pi plane for that bond.
+            if neighbor_bond_order(center, partner) < 3
+            and (plane := _local_pi_plane_tensor(center, partner)) is not None
+        ]
+        # With fewer than two observable planes, geometry cannot disprove the
+        # topological conjugation. Do not invent a normal for zero-length axes.
+        if all(
+            math.fsum(a * b for a, b in zip(left, right)) + 1e-12 >= min_plane_overlap
+            for left, right in combinations(planes, 2)
+        ):
+            return True
+    return False
+
+
+def _lone_pair_is_geometrically_conjugated(
+    donor: ob.OBAtom,
+    acceptor: ob.OBAtom,
+    volume_tolerance: float,
+    min_plane_overlap: float,
+) -> bool:
+    """Check carbon electron centers and neutral heteroatom lone-pair donation."""
+    if donor.GetAtomicNum() == 6 or (donor.GetAtomicNum() == 7 and donor.GetFormalCharge() == 0):
+        # Carbon electron centers and neutral N donors use the same overlap
+        # threshold as alternating double bonds. A stricter volume threshold
+        # for N would reward an iminium contributor merely for moving the pair
+        # into a double bond, despite identical local geometry.
+        if any(_strongly_pyramidal_pi_endpoint(atom) for atom in (donor, acceptor)):
+            return False
+        if any(bond.GetBondOrder() >= 3 for bond in atom_bonds(acceptor)):
+            return True  # A triple bond retains two perpendicular pi channels.
+        left = _local_pi_plane_tensor(donor, acceptor, single_bonds_only=False)
+        right = _local_pi_plane_tensor(acceptor, donor, single_bonds_only=False)
+        planes = [plane for plane in (left, right) if plane is not None]
+
+        def compatible(local_planes: list[tuple[float, ...]]) -> bool:
+            return all(
+                math.fsum(a * b for a, b in zip(lhs, rhs)) + 1e-12 >= min_plane_overlap
+                for lhs, rhs in combinations(local_planes, 2)
+            )
+
+        if not compatible(planes):
+            return False
+        # The far endpoint of C=N (or any localized double bond) also sets
+        # its pi plane. Omitting it would let a twisted iminium/carbanion
+        # contributor bypass the same guard that rejects the neutral enamine.
+        pi_partners = [
+            cast(ob.OBAtom, bond.GetNbrAtom(acceptor))
+            for bond in atom_bonds(acceptor)
+            if not bond.IsAromatic() and bond.GetBondOrder() == 2
+        ]
+        if not pi_partners:
+            return True
+        for partner in pi_partners:
+            if _strongly_pyramidal_pi_endpoint(partner):
+                continue
+            outer_plane = _local_pi_plane_tensor(partner, acceptor)
+            if compatible(planes + ([outer_plane] if outer_plane is not None else [])):
+                return True
+        return False
+    if donor.GetFormalCharge() != 0 or donor.GetAtomicNum() not in (7, 8, 15, 16, 33, 34):
+        return True
+    neighbors = [atom for atom in atom_neighbors(donor) if atom.GetIdx() != acceptor.GetIdx()]
+    pi_neighbors = [
+        cast(ob.OBAtom, bond.GetNbrAtom(acceptor))
+        for bond in atom_bonds(acceptor)
+        if _is_multiple_like_bond(bond)
+    ]
+    return all(
+        _normalized_tetrahedron_volume(neighbor, donor, acceptor, pi_neighbor) <= volume_tolerance
+        for neighbor in neighbors
+        for pi_neighbor in pi_neighbors
     )
 
 
@@ -488,8 +639,7 @@ def _validated_conjugated_topology(
     conjugated_bond_indices: Set[int] = set()
     nonaromatic_multiple_bonds_by_atom: Dict[int, Dict[int, int]] = {}
 
-    for bond_iter in ob.OBMolBondIter(obmol):
-        bond = cast(ob.OBBond, bond_iter)
+    for bond in mol_bonds(obmol):
         heavy_atoms = _heavy_bond_atoms(bond)
         if heavy_atoms is None:
             continue
@@ -539,9 +689,23 @@ def _validated_conjugated_topology(
                     begin_atom,
                     end_atom,
                     nonaromatic_multiple_bonds_by_atom,
-                    config.conjugation_normalized_tetrahedron_volume_tolerance,
+                    config.conjugation_min_plane_overlap,
                 )
             )
+        ):
+            continue
+        if not begin_has_pi_bond and not _lone_pair_is_geometrically_conjugated(
+            begin_atom,
+            end_atom,
+            config.conjugation_normalized_tetrahedron_volume_tolerance,
+            config.conjugation_min_plane_overlap,
+        ):
+            continue
+        if not end_has_pi_bond and not _lone_pair_is_geometrically_conjugated(
+            end_atom,
+            begin_atom,
+            config.conjugation_normalized_tetrahedron_volume_tolerance,
+            config.conjugation_min_plane_overlap,
         ):
             continue
         bond_idx = cast(int, bond.GetIdx())
@@ -554,6 +718,11 @@ def _validated_conjugated_topology(
     for bond, begin_atom, end_atom in heavy_bonds:
         bond_idx = cast(int, bond.GetIdx())
         if bond_idx not in multiple_like_bond_indices:
+            continue
+        # Aromatic ring bonds also connect an exocyclic C=O/C=S to a pi
+        # system; an explicitly SINGLE neighboring bond is not required.
+        if begin_atom.IsAromatic() or end_atom.IsAromatic():
+            conjugated_bond_indices.add(bond_idx)
             continue
         if begin_atom.GetIdx() in atom_has_adjacent_alternating_single_bond:
             conjugated_bond_indices.add(bond_idx)
@@ -581,7 +750,7 @@ def _validated_conjugated_bond_indices(omol: pybel.Molecule) -> Set[int]:
 
 
 def is_conjugated_bond(bond: ob.OBBond) -> bool:
-    parent = bond.GetParent()
+    parent = cast("ob.OBMol | None", bond.GetParent())
     if parent is None:
         return False
     parent_mol = _prepare_topology_working_molecule(pybel.Molecule(parent))
@@ -612,7 +781,7 @@ def compute_organic_topology_metrics(
                     topology_config,
                 )
                 for atom_idx in ring_atom_indices:
-                    atom = obmol.GetAtom(atom_idx)
+                    atom = cast("ob.OBAtom | None", obmol.GetAtom(atom_idx))
                     if atom is None or atom.GetAtomicNum() == 1:
                         continue
                     aromatic_atom_indices.add(atom_idx)
@@ -624,8 +793,7 @@ def compute_organic_topology_metrics(
         )
         conjugated_bond_atoms: Dict[int, tuple[int, int]] = {}
         incident_conjugated_bonds: Dict[int, Set[int]] = {}
-        for bond_iter in ob.OBMolBondIter(obmol):
-            bond = cast(ob.OBBond, bond_iter)
+        for bond in mol_bonds(obmol):
             begin_atom = cast(ob.OBAtom, bond.GetBeginAtom())
             end_atom = cast(ob.OBAtom, bond.GetEndAtom())
             if begin_atom.GetAtomicNum() == 1 or end_atom.GetAtomicNum() == 1:
@@ -661,6 +829,7 @@ def compute_organic_topology_metrics(
                     conjugated_bond_neighbors.setdefault(second_bond_idx, set()).add(first_bond_idx)
 
         visited_bonds: Set[int] = set()
+        conjugated_atom_components: list[tuple[int, ...]] = []
         for bond_idx in conjugated_bond_indices:
             if bond_idx in visited_bonds:
                 continue
@@ -680,6 +849,7 @@ def compute_organic_topology_metrics(
             max_conjugated_component_size = max(
                 max_conjugated_component_size, len(component_atom_indices)
             )
+            conjugated_atom_components.append(tuple(sorted(component_atom_indices)))
         hyperconjugative_donor_count, hyperconjugation_score = _hyperconjugation_metrics(
             working_omol
         )
@@ -694,6 +864,7 @@ def compute_organic_topology_metrics(
             conjugated_atom_indices=tuple(sorted(conjugated_atom_indices)),
             hyperconjugative_donor_count=hyperconjugative_donor_count,
             hyperconjugation_score=hyperconjugation_score,
+            conjugated_atom_components=tuple(sorted(conjugated_atom_components)),
         )
     except Exception:  # noqa: BLE001
         return OrganicTopologyMetrics(

@@ -26,6 +26,55 @@ from molgr.fallback.utils.force_field import (
 )
 
 
+@pytest.mark.parametrize(
+    "cs_distance,cc_distance,shared_metal,expected",
+    [
+        (1.78, 1.36, True, 1),
+        (1.73, 1.43, True, 1),
+        (1.65, 1.50, True, 0),
+        (1.78, 1.50, True, 0),
+        (1.78, 1.36, False, 0),
+    ],
+)
+def test_sulfur_selection_respects_chelate_geometry(
+    cs_distance, cc_distance, shared_metal, expected
+):
+    from molgr.fallback.utils.metals.scoring import _sulfur_bond_geometry_discordance
+
+    mol = pybel.readstring("smi", "S=CC=S").OBMol
+    for idx, point in enumerate(
+        [(-cs_distance, 0, 0), (0, 0, 0), (cc_distance, 0, 0), (cc_distance + cs_distance, 0, 0)],
+        start=1,
+    ):
+        mol.GetAtom(idx).SetVector(*point)
+    sites = (
+        [[mol.GetAtom(1), mol.GetAtom(4)]] if shared_metal else [[mol.GetAtom(1)], [mol.GetAtom(4)]]
+    )
+    assert _sulfur_bond_geometry_discordance(mol, sites) == expected
+
+
+def test_replacement_branch_reperceives_types_after_bond_order_changes() -> None:
+    parent = pybel.readstring("smi", "C=C")
+    assert [a.OBAtom.GetHyb() for a in parent] == [2, 2]
+    assert [a.OBAtom.GetType() for a in parent] == ["C2", "C2"]
+    machine = OmolStateMachine(parent)
+
+    replacement = parent.clone
+    replacement.OBMol.GetBond(1, 2).SetBondOrder(1)
+    child = machine.branch("reduced_bond", omol=replacement)
+
+    # Perception on the parent must not determine the child's force-field type.
+    assert [a.OBAtom.GetHyb() for a in child.omol] == [3, 3]
+    assert [a.OBAtom.GetType() for a in child.omol] == ["C3", "C3"]
+    assert _build_score_key(child.omol) != _build_score_key(parent)
+    assert [a.OBAtom.GetHyb() for a in parent] == [2, 2]
+    assert [a.OBAtom.GetType() for a in parent] == ["C2", "C2"]
+
+    unchanged = machine.branch("same_molecule")
+    assert unchanged.omol is parent
+    assert _build_score_key(unchanged.omol) == _build_score_key(parent)
+
+
 def test_selection_force_field_cache_hits_for_equivalent_reloads() -> None:
     force_field_evaluation_cache_clear()
     xyz_block = """3

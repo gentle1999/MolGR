@@ -61,7 +61,8 @@ File: [`.gitea/workflows/ci.yaml`](../../.gitea/workflows/ci.yaml)
 
 File: [`.github/workflows/ci.yaml`](../../.github/workflows/ci.yaml)
 
-- Cross-platform verification job (`build-and-test`) for `3.8` to `3.14`.
+- Pull requests to `main` and `develop` run the standard suite on all 21 combinations of Linux, macOS and Windows with Python 3.8–3.14. Each job runs both backends, representative inputs from the bulk XYZ fixtures and the smaller concurrency checks. The full suite also exercises every bulk fixture and the thousand-input stress matrix.
+- Pushes to `main` and `develop` run the full suite with coverage on Ubuntu / Python 3.11 and the standard suite on the other 20 combinations. Manual runs and published releases run the full suite with coverage on all 21 combinations.
 - GitHub-hosted test jobs use the `setup-python` tool cache and the `setup-uv`
   package cache, split by operating system and Python version.
 - Lint runs a pinned Ruff through `uvx` without installing MolGR's RDKit/Open Babel

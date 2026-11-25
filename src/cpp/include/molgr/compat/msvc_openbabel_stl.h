@@ -12,6 +12,10 @@
 
 namespace std
 {
+  /// Supply the legacy argument and result aliases used by Open Babel binary predicates on MSVC.
+  /// @tparam Arg1 First predicate argument.
+  /// @tparam Arg2 Second predicate argument.
+  /// @tparam Result Predicate return type.
   template <typename Arg1, typename Arg2, typename Result>
   struct binary_function
   {

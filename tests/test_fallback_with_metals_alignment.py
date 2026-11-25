@@ -12,6 +12,7 @@ import pytest
 
 pytest.importorskip("openbabel")
 
+from openbabel import openbabel as ob
 from openbabel import pybel
 from rdkit import Chem, RDLogger
 from rdkit.Chem import rdDistGeom
@@ -42,6 +43,87 @@ from molgr.fallback.utils.metals.search import _group_candidates_by_target_dp
 RDLogger.DisableLog("rdApp.*")  # type: ignore
 
 
+@pytest.mark.parametrize(
+    ("smiles", "length", "visible", "expected"),
+    [
+        ("C[C-]([O-])C", 1.24, True, (1, 0)),
+        ("C[C-]([O-])C", 1.43, True, (0, 0)),
+        ("CC(=O)C", 1.24, True, (0, 0)),
+        ("[O-][C-]=O", 1.28, True, (0, 0)),
+        ("[C-]#[O+]", 1.15, True, (0, 0)),
+        ("O=O", 1.45, True, (0, 1)),
+        ("O=O", 1.28, True, (0, 0)),
+        ("O=O", 1.35, True, (0, 0)),
+        ("O=O", 1.70, True, (0, 0)),
+        ("O=O", 1.45, False, (0, 0)),
+        ("[O-][O-]", 1.45, True, (0, 0)),
+        ("[H][O+]=O", 1.45, True, (0, 0)),
+        ("C[O+]=O", 1.45, True, (0, 0)),
+    ],
+)
+def test_oxygen_geometry_safeguards_abstain_outside_supported_scope(
+    smiles, length, visible, expected
+):
+    omol = pybel.readstring("smi", smiles)
+    mol = omol.OBMol
+    bond = next(
+        b
+        for b in ob.OBMolBondIter(mol)
+        if b.GetBeginAtom().GetAtomicNum() == 8 or b.GetEndAtom().GetAtomicNum() == 8
+    )
+    bond.GetBeginAtom().SetVector(0, 0, 0)
+    bond.GetEndAtom().SetVector(length, 0, 0)
+    indices = {a.GetIdx() for a in ob.OBMolAtomIter(mol)} if visible else set()
+    assert metal_scoring_module._oxygen_bond_geometry_discordance(mol, indices) == expected
+
+
+@pytest.mark.parametrize(
+    "smiles,length,mode,expected",
+    [
+        ("CC(=O)C", 1.24, "shared", 0),
+        ("CC(=O)C", 1.34, "shared", 0),
+        ("CC(=O)C", 1.35, "shared", 1),
+        ("CC(=O)C", 1.43, "shared", 1),
+        ("CC(=O)C", 1.60, "shared", 1),
+        ("CC(=O)C", 1.61, "shared", 0),
+        ("CC=O", 1.43, "shared", 1),
+        ("CC(=O)C", 1.43, "oxygen_only", 0),
+        ("CC(=O)C", 1.43, "separate_metals", 0),
+        ("CC(=O)C", 1.43, "free", 0),
+        ("CC(=O)C", 1.43, "two_shared_metals", 1),
+        ("CC(=O)O", 1.43, "shared", 0),
+        ("CC(=O)N", 1.43, "shared", 0),
+        ("O=C=O", 1.43, "shared", 0),
+        ("[O-][C-]=O", 1.43, "shared", 0),
+        ("[C-]#[O+]", 1.43, "shared", 0),
+        ("C[C-]([O-])C", 1.43, "shared", 0),
+        ("C=C([O-])C", 1.43, "shared", 0),
+    ],
+)
+def test_long_carbonyl_rule_requires_local_geometry_and_shared_coordination(
+    smiles, length, mode, expected
+):
+    mol = pybel.readstring("smi", smiles).OBMol
+    bond = next(
+        b
+        for b in ob.OBMolBondIter(mol)
+        if sorted((b.GetBeginAtom().GetAtomicNum(), b.GetEndAtom().GetAtomicNum())) == [6, 8]
+    )
+    carbon, oxygen = bond.GetBeginAtom(), bond.GetEndAtom()
+    if carbon.GetAtomicNum() != 6:
+        carbon, oxygen = oxygen, carbon
+    carbon.SetVector(0, 0, 0)
+    oxygen.SetVector(length, 0, 0)
+    sites = {
+        "shared": [(carbon, oxygen)],
+        "two_shared_metals": [(carbon, oxygen), (carbon, oxygen)],
+        "oxygen_only": [(oxygen,)],
+        "separate_metals": [(carbon,), (oxygen,)],
+        "free": [],
+    }
+    assert metal_scoring_module._long_carbonyl_multiple_bond_count(mol, sites[mode]) == expected
+
+
 _MOLFILE_CASES_SPEC = importlib.util.spec_from_file_location(
     "molgr_cases_molfile",
     Path("scripts/molgr_cases_molfile.py").resolve(),
@@ -51,6 +133,49 @@ _MOLFILE_CASES_MODULE = importlib.util.module_from_spec(_MOLFILE_CASES_SPEC)
 assert _MOLFILE_CASES_SPEC.loader is not None
 _MOLFILE_CASES_SPEC.loader.exec_module(_MOLFILE_CASES_MODULE)
 load_molfile_cases = _MOLFILE_CASES_MODULE.load_molfile_cases
+
+
+@pytest.mark.parametrize(
+    "mode", ["linear", "bent", "long", "bridging", "oxygen_bound", "hydrogenated", "free"]
+)
+def test_nitrosyl_geometry_preference_is_restricted_to_terminal_linear_no(mode):
+    mol = ob.OBMol()
+    nitrogen = mol.NewAtom()
+    nitrogen.SetAtomicNum(7)
+    nitrogen.SetFormalCharge(-1)
+    nitrogen.SetVector(0, 0, 0)
+    oxygen = mol.NewAtom()
+    oxygen.SetAtomicNum(8)
+    oxygen.SetVector(1.35 if mode == "long" else 1.18, 0, 0)
+    mol.AddBond(1, 2, 2)
+    metal = MetalAtomPosition(3, "Fe", 26, 0, 0, -1.8, 0.0, 0.0)
+    if mode == "bent":
+        metal.position_x = 0
+        metal.position_y = 1.8
+    if mode == "hydrogenated":
+        nitrogen.SetImplicitHCount(1)
+    metals = [metal]
+    visible = [[nitrogen]]
+    if mode == "oxygen_bound":
+        visible = [[oxygen]]
+    if mode == "free":
+        visible = [[]]
+    if mode == "bridging":
+        metals.append(replace(metal, idx=4))
+        visible.append([nitrogen])
+    penalty, exempt, count = metal_scoring_module._nitrosyl_geometry_metrics(mol, metals, visible)
+    assert (penalty > 0) == (mode == "linear")
+    assert count == (mode == "linear")
+    assert not exempt
+    nitrogen.SetFormalCharge(0)
+    oxygen.SetFormalCharge(1)
+    mol.GetBond(1, 2).SetBondOrder(3)
+    penalty, exempt, count = metal_scoring_module._nitrosyl_geometry_metrics(mol, metals, visible)
+    assert penalty == 0
+    assert exempt == ({1, 2} if mode == "linear" else set())
+    assert metal_scoring_module._zero_valent_metals_with_organic_cation_count(
+        mol, metals, total_charge=0, coordinated_nitrosonium_indices=exempt
+    ) == (mode != "linear")
 
 
 def _total_charge_and_radicals(mol: Chem.Mol) -> tuple[int, int]:
@@ -411,7 +536,7 @@ O 1.2 0.0 0.0
     )
     parse_calls = {"count": 0}
 
-    def fake_seed_omol_from_xyz(xyz_block):
+    def fake_seed_omol_from_xyz(xyz_block, metal_sites=()):
         assert xyz_block == "clean-seed-xyz"
         parse_calls["count"] += 1
         return no_metal_seed
@@ -1444,7 +1569,7 @@ def test_select_best_candidate_uses_charge_localization_to_break_remaining_ties(
     result = metal_scoring_module.select_best_candidate([over_oxidized, preferred])
 
     assert result is preferred
-    assert preferred.metadata["selection_key"][-4:] == (0, 0, 10.0, 1)
+    assert preferred.metadata["selection_key"][-6:] == (0, 0, 0.0, 0, 10.0, 1)
     assert preferred.metadata["organic_charge_localization_margin_exceeded"] is False
     assert over_oxidized.metadata["organic_charge_localization_margin_exceeded"] is True
 
@@ -1536,8 +1661,8 @@ def test_select_best_candidate_uses_hyperconjugation_after_charge_localization_m
     assert result is more_hyperconjugated
     assert more_hyperconjugated.metadata["organic_hyperconjugation_deficit"] == 0
     assert less_hyperconjugated.metadata["organic_hyperconjugation_deficit"] == 4
-    assert more_hyperconjugated.metadata["selection_key"][-4:] == (0, 0, 20.0, 0)
-    assert less_hyperconjugated.metadata["selection_key"][-4:] == (0, 4, 10.0, 1)
+    assert more_hyperconjugated.metadata["selection_key"][-6:] == (0, 0, 0.0, 0, 20.0, 0)
+    assert less_hyperconjugated.metadata["selection_key"][-6:] == (0, 4, 0.0, 0, 10.0, 1)
 
 
 @pytest.mark.parametrize(
@@ -1958,8 +2083,7 @@ def test_metal_discordance_counts_charge_asymmetry_only_for_repeated_components(
 
 
 def test_metal_discordance_haptic_ring_reduction_is_ring_and_metal_local() -> None:
-    ring = pybel.readstring("smi", "C1CCCCC1")
-    ring.OBMol.GetAtom(1).SetFormalCharge(-1)
+    ring = pybel.readstring("smi", "[CH-]1[CH]C=CC=C1")
 
     assert (
         metal_scoring_module._haptic_arene_reduction_count(
@@ -2119,14 +2243,12 @@ def test_metal_discordance_inner_same_sign_charge_uses_coordination_radius(
     distance: float,
     expected_count: int,
 ) -> None:
-    no_metal = pybel.readstring(
-        "xyz",
-        f"""1
-N
-N {distance} 0.0 0.0
-""",
-    )
-    no_metal.OBMol.GetAtom(1).SetFormalCharge(1)
+    # A methyl cation has no Lewis pair; this check isolates the radius rule.
+    no_metal = pybel.readstring("smi", "[CH3+]")
+    no_metal.OBMol.AddHydrogens()
+    no_metal.OBMol.GetAtom(1).SetVector(distance, 0.0, 0.0)
+    for idx, yz in enumerate(((1.0, 0.0), (-0.5, 0.866), (-0.5, -0.866)), start=2):
+        no_metal.OBMol.GetAtom(idx).SetVector(distance + 1.0, *yz)
     no_metal_state = ReconstructionState(
         omol=no_metal,
         given_charge=0,
@@ -2235,14 +2357,13 @@ def test_metal_discordance_zero_valence_counts_inner_positive_charge(
     formal_charge: int,
     expected_count: int,
 ) -> None:
-    no_metal = pybel.readstring(
-        "xyz",
-        """1
-N
-N 2.4 0.0 0.0
-""",
-    )
-    no_metal.OBMol.GetAtom(1).SetFormalCharge(formal_charge)
+    # Use an explicit-H methyl ion: positive carbon has no donor pair, whereas
+    # the previous isolated N+ fixture already had nonbonding paired electrons.
+    no_metal = pybel.readstring("smi", "[CH3+]" if formal_charge > 0 else "[CH3-]")
+    no_metal.OBMol.AddHydrogens()
+    no_metal.OBMol.GetAtom(1).SetVector(2.4, 0.0, 0.0)
+    for idx, yz in enumerate(((1.0, 0.0), (-0.5, 0.866), (-0.5, -0.866)), start=2):
+        no_metal.OBMol.GetAtom(idx).SetVector(3.4, *yz)
     no_metal_state = ReconstructionState(
         omol=no_metal,
         given_charge=0,
@@ -2858,10 +2979,66 @@ def test_metal_discordance_counts_bent_but_not_linear_ring_allene() -> None:
         atom.OBAtom.SetVector(*position)
 
     assert metal_scoring_module._bent_cumulated_ring_allene_count(no_metal.OBMol) == 1
+    # Exempt the actual center only, not any neighboring metal-visible atom.
+    assert metal_scoring_module._bent_cumulated_ring_allene_count(no_metal.OBMol, {2}) == 0
+    assert metal_scoring_module._bent_cumulated_ring_allene_count(no_metal.OBMol, {1}) == 1
 
     no_metal.OBMol.GetAtom(3).SetVector(-1.0, 0.05, 0.0)
 
     assert metal_scoring_module._bent_cumulated_ring_allene_count(no_metal.OBMol) == 0
+
+
+@pytest.mark.parametrize("smiles", ["[NH+]1=C=CCC1", "[O+]1=C=CCC1"])
+def test_metal_visibility_does_not_exempt_charged_heterocumulenes(smiles):
+    mol = pybel.readstring("smi", smiles).OBMol
+    mol.GetAtom(1).SetVector(1.0, 0.0, 0.0)
+    mol.GetAtom(2).SetVector(0.0, 0.0, 0.0)
+    mol.GetAtom(3).SetVector(-0.5, 0.866, 0.0)
+    assert metal_scoring_module._bent_cumulated_ring_allene_count(mol, {2}) == 1
+
+
+@pytest.mark.parametrize(
+    ("source_smiles", "partner_smiles", "partner_discordance", "expected"),
+    [
+        ("C1=C=CC=CC1.c1ccccc1", "c1ccccc1.c1ccccc1", 0, 1),
+        ("C1=C=CC=CC1.c1ccccc1", "c1ccccc1.c1ccccc1", 1, 0),
+        ("C1=C=CC=CC1.c1ccccc1", "C1=C=CC=CC1.c1ccccc1", 0, 0),
+        ("C1=C=CC=CC1C2=CC=CCC2", "C1=C=CC=CC1c2ccccc2", 0, 1),
+    ],
+)
+def test_visible_allene_exemption_preserves_viable_local_aromatic_alternative(
+    source_smiles, partner_smiles, partner_discordance, expected
+):
+    def candidate(smiles, discordance, indices):
+        return MetalCandidateState(
+            metal_states=(),
+            no_metal_charge_target=0,
+            no_metal_radical_target=0,
+            no_metal_state=ReconstructionState(
+                omol=pybel.readstring("smi", smiles),
+                given_charge=0,
+                total_charge=0,
+                total_radical_electrons=0,
+            ),
+            metadata={
+                "metal_discordance_structural_count": discordance,
+                "metal_discordance_bent_cumulated_ring_allene_count": 0,
+                "metal_visible_bent_allene_indices": indices,
+            },
+        )
+
+    cumulene = candidate(source_smiles, 0, "2")
+    partner = candidate(partner_smiles, partner_discordance, "")
+    # Electronic edits can leave aromatic perception cached with stale flags.
+    for atom in ob.OBMolAtomIter(partner.no_metal_state.omol.OBMol):
+        atom.SetAromatic(False)
+    partner.no_metal_state.omol.OBMol.SetAromaticPerceived(True)
+    # Repeated selection and candidate ordering must not accumulate penalties.
+    for candidates in ([cumulene, partner], [partner, cumulene], [cumulene, partner]):
+        metal_scoring_module._annotate_bent_allene_aromatic_alternatives(candidates)
+        assert cumulene.metadata["metal_discordance_structural_count"] == expected
+        assert cumulene.metadata["metal_discordance_bent_cumulated_ring_allene_count"] == expected
+        assert partner.metadata["metal_discordance_structural_count"] == partner_discordance
 
 
 @pytest.mark.parametrize(
@@ -3410,7 +3587,8 @@ O 3.2 0.0 0.0
     _patch_no_metal_seed_reconstruction(monkeypatch, no_metal_state)
 
     def fake_prepare_candidate(candidate, no_metal_state, *, config=None):
-        del no_metal_state, config
+        del config
+        candidate.no_metal_state = no_metal_state
         candidate.score = 1.19 if candidate.metadata["combination_index"] == 0 else 1.0
         candidate.metadata["score"] = candidate.score
         candidate.metadata["ignored_prepare_metadata"] = (
@@ -3448,3 +3626,452 @@ O 3.2 0.0 0.0
     assert result.score == 1.0
     assert result.metadata["ignored_prepare_metadata"] == pytest.approx(5.0)
     assert result.combined_omol == {"combination_index": 1}
+
+
+@pytest.mark.parametrize(
+    "mode",
+    ["linear", "bent", "long", "bridging", "free", "hydrogenated", "o_bound", "blocked", "distant"],
+)
+def test_terminal_no_is_an_ordinary_local_seed(mode):
+    from molgr.config import MetalScoringConfig
+    from molgr.fallback.utils.coordination_seeds import expand_coordination_seeds
+
+    mol = ob.OBMol()
+    nitrogen = mol.NewAtom()
+    nitrogen.SetAtomicNum(7)
+    nitrogen.SetFormalCharge(-1)
+    nitrogen.SetVector(0, 0, 0)
+    oxygen = mol.NewAtom()
+    oxygen.SetAtomicNum(8)
+    oxygen.SetVector(1.35 if mode == "long" else 1.18, 0, 0)
+    mol.AddBond(1, 2, 2)
+    if mode == "hydrogenated":
+        hydrogen = mol.NewAtom()
+        hydrogen.SetAtomicNum(1)
+        hydrogen.SetVector(0, 1, 0)
+        mol.AddBond(1, 3, 1)
+    metal = MetalAtomPosition(4, "Fe", 26, 2, 0, -1.8, 0.0, 0.0)
+    if mode == "bent":
+        metal.position_x, metal.position_y = 0, 1.8
+    if mode == "o_bound":
+        metal.position_x = 3.0
+    if mode == "distant":
+        metal.position_x = -10.0
+    if mode == "blocked":
+        blocker = mol.NewAtom()
+        blocker.SetAtomicNum(6)
+        blocker.SetVector(-0.9, 0.1, 0)
+    metals = [] if mode == "free" else [metal]
+    if mode == "bridging":
+        metals.append(replace(metal, idx=5, position_y=0.5))
+    seed = ReconstructionState(pybel.Molecule(mol), -1, -2, 0)
+    seeds = expand_coordination_seeds(seed, [metal.site for metal in metals], MetalScoringConfig())
+    assert seeds[0] is seed
+    assert nitrogen.GetFormalCharge() == -1
+    assert oxygen.GetFormalCharge() == 0
+    assert mol.GetBond(1, 2).GetBondOrder() == 2
+    if mode != "linear":
+        assert len(seeds) == 1
+        return
+    _, recovered = seeds
+    assert recovered.total_charge == -2
+    assert recovered.total_radical_electrons == 0
+    assert recovered.given_charge == -3
+    assert recovered.omol.OBMol.GetBond(1, 2).GetBondOrder() == 3
+    assert recovered.omol.OBMol.GetAtom(2).GetFormalCharge() == 1
+    assert recovered.metadata == {}
+
+
+@pytest.mark.parametrize("explicit_hydrogens", [False, True])
+@pytest.mark.parametrize("smiles", ["[CH-]1CCCCC1", "[CH-]1C=CCCC1"])
+def test_saturated_carbon_interrupts_haptic_arene_screen(smiles, explicit_hydrogens):
+    ring = pybel.readstring("smi", smiles)
+    if explicit_hydrogens:
+        ring.addh()
+    visible = tuple(ring.OBMol.GetAtom(i) for i in (1, 2, 3))
+    assert metal_scoring_module._haptic_arene_reduction_count(ring.OBMol, [visible]) == 0
+
+
+@pytest.mark.parametrize("partner_mode", ["matching", "absent", "changed_ligand", "changed_spin"])
+def test_nitrosonium_redistribution_requires_unchanged_other_ligands(partner_mode):
+    def candidate(valence, smiles, charge):
+        mol = pybel.readstring("smi", smiles)
+        return MetalCandidateState(
+            metal_states=(MetalAtomPosition(8, "Mo", 42, valence, 0, -1.8, 0.0, 0.0),),
+            no_metal_charge_target=charge,
+            no_metal_radical_target=0,
+            no_metal_state=ReconstructionState(mol, 0, charge, 0),
+            metadata={
+                "nitrosyl_geometry_site_count": 1,
+                "nitrosonium_geometry_atom_indices": "1,2" if valence == 0 else "",
+                "metal_discordance_zero_valent_metals_with_organic_cation_count": int(valence == 0),
+                "metal_discordance_structural_count": int(valence == 0),
+            },
+        )
+
+    zero = candidate(0, "[N]#[O+].[N+]([H])([H])([H])[H]", 2)
+    two = candidate(2, "[N-]=O.[N+]([H])([H])([H])[H]", 0)
+    if partner_mode == "changed_ligand":
+        two.no_metal_state.omol.OBMol.GetAtom(3).SetFormalCharge(0)
+    elif partner_mode == "changed_spin":
+        two.no_metal_radical_target = 2
+    pool = [zero] if partner_mode == "absent" else [zero, two]
+    metal_scoring_module._annotate_nitrosonium_redistribution_exceptions(pool)
+    assert zero.metadata["nitrosonium_redistribution_exception"] == int(partner_mode == "matching")
+
+
+@pytest.mark.parametrize(
+    ("smiles", "conflict"),
+    [
+        ("[CH2-]C=CC=[N+](C)C", 0),
+        ("[CH2-]c1cc[n+](C)cc1", 0),
+        ("[CH2-]C=CC(C)(C)C=C[N+](C)=C", 1),
+        ("[CH2-]C=C[Si](C)(C)C=C[N+](C)=C", 1),
+        ("[CH2-]C=C=C=[N+](C)C", 1),
+        ("[CH2-]C=C.C=[N+](C)C", 1),
+        ("[O-]C=CC=[N+](C)C", 1),
+        ("C=CC=[N+](C)C", 1),
+    ],
+)
+def test_zero_metal_carbanion_compensation_requires_one_neutral_pi_system(smiles, conflict):
+    mol = pybel.readstring("smi", smiles)
+    mol.addh()
+    metal = MetalAtomPosition(mol.OBMol.NumAtoms() + 1, "Fe", 26, 0, 0, 0.0, 0.0, 0.0)
+    assert (
+        metal_scoring_module._zero_valent_metals_with_organic_cation_count(
+            mol.OBMol, [metal], total_charge=0
+        )
+        == conflict
+    )
+
+
+def _equalized_carbon_seed(kind="valid", charge=-2):
+    """A controlled C--C=C--C--C fragment; only the middle three are tested."""
+    import math
+
+    from molgr.fallback.utils.electrons import set_unresolved_two_electron_center
+
+    length = 1.4
+    x, y = math.cos(math.radians(25)), math.sin(math.radians(25))
+    coords = [
+        (-x * 2.9, -y * 0.1, 0),
+        (-x * length, y * length, 0),
+        (0, 0, 0),
+        (x * length, y * length, 0),
+        (x * 2.9, -y * 0.1, 0),
+    ]
+    mol = ob.OBMol()
+    for position in coords:
+        atom = mol.NewAtom()
+        atom.SetAtomicNum(6)
+        atom.SetImplicitHCount(0)
+        atom.SetVector(*position)
+    for idx, order in enumerate((1, 2, 1, 1), 1):
+        mol.AddBond(idx, idx + 1, order)
+    for idx in (2, 3):
+        set_unpaired_electron_count(mol.GetAtom(idx), 1)
+    set_unresolved_two_electron_center(mol.GetAtom(4), True)
+    if kind in ("long", "unequal"):
+        distance = 1.6 if kind == "long" else 1.47
+        mol.GetAtom(2).SetVector(-x * distance, y * distance, 0)
+    elif kind == "linear":
+        mol.GetAtom(2).SetVector(-length, 0, 0)
+        mol.GetAtom(4).SetVector(length, 0, 0)
+    elif kind == "ring":
+        mol.AddBond(1, 5, 1)
+    elif kind == "implicit_h":
+        mol.GetAtom(3).SetImplicitHCount(1)
+    elif kind == "nonfinite":
+        mol.GetAtom(3).SetVector(float("nan"), 0, 0)
+    elif kind == "no_radical_pair":
+        set_unpaired_electron_count(mol.GetAtom(2), 0)
+    elif kind == "no_carbene":
+        mol.GetBond(4, 5).SetBondOrder(2)
+    return ReconstructionState(pybel.Molecule(mol), charge, charge, 0)
+
+
+@pytest.mark.parametrize(
+    "kind,budget,expected",
+    [
+        ("valid", -2, 2),
+        ("valid", -1, 1),
+        ("valid", 0, 1),
+        ("long", -2, 1),
+        ("unequal", -2, 1),
+        ("linear", -2, 1),
+        ("ring", -2, 1),
+        ("implicit_h", -2, 1),
+        ("nonfinite", -2, 1),
+        ("no_radical_pair", -2, 1),
+        ("no_carbene", -2, 1),
+    ],
+)
+def test_equalized_carbon_seed_requires_geometry_electrons_and_charge(kind, budget, expected):
+    from molgr.fallback.utils.electrons import get_unpaired_electron_count
+    from molgr.fallback.utils.no_metals.preparation import expand_geometry_electronic_seeds
+
+    state = _equalized_carbon_seed(kind, budget)
+    seeds = expand_geometry_electronic_seeds(state)
+    assert len(seeds) == expected
+    assert seeds[0] is state
+    assert all(a.OBAtom.GetFormalCharge() == 0 for a in state.omol)
+    for seed in seeds:
+        assert seed.given_charge + sum(a.OBAtom.GetFormalCharge() for a in seed.omol) == budget
+    if expected == 2:
+        assert seeds[1].given_charge == 0
+        for idx in (2, 3):
+            atom = seeds[1].omol.OBMol.GetAtom(idx)
+            assert atom.GetFormalCharge() == -1
+            assert get_unpaired_electron_count(atom) == 0
+        assert seeds[1].omol.OBMol.GetBond(2, 3).GetBondOrder() == 2
+
+
+def _equalized_carbon_candidate(*, reduced, groups="2,3,4", kind="valid"):
+    from molgr.fallback.utils.electrons import set_unresolved_two_electron_center
+
+    state = _equalized_carbon_seed(kind)
+    mol = state.omol.OBMol
+    for idx in (2, 3):
+        atom = mol.GetAtom(idx)
+        atom.SetFormalCharge(-1 if reduced else 0)
+        set_unpaired_electron_count(atom, 0)
+    mol.GetBond(2, 3).SetBondOrder(2 if reduced else 3)
+    carbene = mol.GetAtom(4)
+    set_unresolved_two_electron_center(carbene, False)
+    set_lone_pair_count(carbene, 1)
+    return MetalCandidateState(
+        (),
+        -2 if reduced else 0,
+        0,
+        no_metal_state=state,
+        metadata={
+            "metal_discordance_structural_count": int(reduced),
+            "metal_visible_atom_groups": groups,
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    "groups,kind,expected",
+    [
+        ("2,3,4", "valid", (1, 0)),
+        ("2,3;4", "valid", (0, 1)),
+        ("", "valid", (0, 1)),
+        ("2,3,4", "ring", (0, 1)),
+        ("2,3,4", "unequal", (0, 1)),
+    ],
+)
+def test_equalized_carbon_preference_requires_one_metal_and_valid_alternative(
+    groups, kind, expected
+):
+    localized = _equalized_carbon_candidate(reduced=False, groups=groups, kind=kind)
+    reduced = _equalized_carbon_candidate(reduced=True, groups=groups, kind=kind)
+    # Without a validated alternative, geometry does not penalize the alkyne.
+    metal_scoring_module._annotate_equalized_carbon_alternatives([localized])
+    assert localized.metadata["metal_discordance_structural_count"] == 0
+    for _ in range(3):
+        metal_scoring_module._annotate_equalized_carbon_alternatives([localized, reduced])
+        assert (
+            tuple(c.metadata["metal_discordance_structural_count"] for c in (localized, reduced))
+            == expected
+        )
+    # Removing the alternative restores the original score, without accumulating adjustments.
+    metal_scoring_module._annotate_equalized_carbon_alternatives([localized])
+    assert localized.metadata["metal_discordance_structural_count"] == 0
+
+
+def _alkoxy_allylic_candidate(*, reduced=False, kind="valid", groups="1,2,3"):
+    mol = ob.OBMol()
+    for z, coords in (
+        (6, (-1.47, 0, 0)),
+        (6, (0, 0, 0)),
+        (6, (0.7, 1.22, 0)),
+        (8, (2.03, 1.22, 0)),
+        (6, (2.8, 2.46, 0)),
+    ):
+        atom = mol.NewAtom()
+        atom.SetAtomicNum(z)
+        atom.SetImplicitHCount(0)
+        atom.SetVector(*coords)
+    for i, j, order in (
+        (1, 2, 1 if reduced else 2),
+        (2, 3, 2 if reduced else 1),
+        (3, 4, 1 if reduced else 2),
+        (4, 5, 1),
+    ):
+        mol.AddBond(i, j, order)
+    for parent, count in ((1, 2), (2, 1), (3, 1), (5, 3)):
+        for index in range(count):
+            atom = mol.NewAtom()
+            atom.SetAtomicNum(1)
+            atom.SetImplicitHCount(0)
+            atom.SetVector(parent, index, 1)
+            mol.AddBond(parent, atom.GetIdx(), 1)
+    mol.GetAtom(1).SetFormalCharge(-1 if reduced else 0)
+    mol.GetAtom(4).SetFormalCharge(0 if reduced else 1)
+    if kind == "no_length_inversion":
+        mol.GetAtom(1).SetVector(-1.42, 0, 0)
+    elif kind == "long_co":
+        mol.GetAtom(4).SetVector(2.2, 1.22, 0)
+    elif kind == "iminium":
+        mol.GetAtom(4).SetAtomicNum(7)
+    elif kind == "protonated_oxygen":
+        mol.GetAtom(5).SetAtomicNum(1)
+    elif kind == "implicit_h":
+        mol.GetAtom(2).SetImplicitHCount(1)
+    elif kind == "radical":
+        set_unpaired_electron_count(mol.GetAtom(2), 1)
+    elif kind == "nonfinite":
+        mol.GetAtom(1).SetVector(float("nan"), 0, 0)
+    charge = -1 if reduced else 1
+    state = ReconstructionState(pybel.Molecule(mol), charge, charge, 0)
+    return MetalCandidateState(
+        (MetalAtomPosition(50, "W", 74, 2 if reduced else 0, 0, 0, 0, -2),),
+        charge,
+        0,
+        no_metal_state=state,
+        metadata={
+            "metal_discordance_structural_count": 0,
+            "metal_discordance_count": 0,
+            "metal_visible_atom_groups": groups,
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    "kind,groups,expected",
+    [
+        ("valid", "1,2,3", 1),
+        ("valid", "1,2;3", 0),
+        ("valid", "", 0),
+        ("no_length_inversion", "1,2,3", 0),
+        ("long_co", "1,2,3", 0),
+        ("iminium", "1,2,3", 0),
+        ("protonated_oxygen", "1,2,3", 0),
+        ("implicit_h", "1,2,3", 0),
+        ("radical", "1,2,3", 0),
+        ("nonfinite", "1,2,3", 0),
+    ],
+)
+def test_alkoxy_allylic_geometry_requires_supported_local_alternative(kind, groups, expected):
+    inverted = _alkoxy_allylic_candidate(kind=kind, groups=groups)
+    reduced = _alkoxy_allylic_candidate(reduced=True, kind=kind, groups=groups)
+    annotate = metal_scoring_module._annotate_alkoxy_allylic_alternatives
+    key = "metal_alkoxy_allylic_geometry_conflict_count"
+    annotate([inverted])
+    assert inverted.metadata[key] == 0
+    for candidates in ([inverted, reduced], [reduced, inverted], [inverted, reduced]):
+        annotate(candidates)
+        assert inverted.metadata[key] == expected
+        assert inverted.metadata["metal_discordance_structural_count"] == expected
+        assert inverted.metadata["metal_discordance_count"] == expected
+        assert reduced.metadata[key] == 0
+    annotate([inverted])
+    assert inverted.metadata[key] == 0
+    assert inverted.metadata["metal_discordance_count"] == 0
+
+
+@pytest.mark.parametrize(
+    "kind", ["other_metal", "metal_spin", "ligand_spin", "wrong_delta", "worse_partner"]
+)
+def test_alkoxy_allylic_alternative_requires_compatible_metal_and_quality(kind):
+    inverted = _alkoxy_allylic_candidate()
+    reduced = _alkoxy_allylic_candidate(reduced=True)
+    if kind == "ligand_spin":
+        reduced.no_metal_radical_target = 2
+    elif kind == "worse_partner":
+        reduced.metadata["metal_discordance_structural_count"] = 1
+        reduced.metadata["metal_discordance_count"] = 1
+    else:
+        reduced.metal_states = (
+            MetalAtomPosition(
+                51 if kind == "other_metal" else 50,
+                "W",
+                74,
+                4 if kind == "wrong_delta" else 2,
+                2 if kind == "metal_spin" else 0,
+                0,
+                0,
+                -2,
+            ),
+        )
+    metal_scoring_module._annotate_alkoxy_allylic_alternatives([inverted, reduced])
+    assert inverted.metadata["metal_alkoxy_allylic_geometry_conflict_count"] == 0
+
+
+@pytest.mark.parametrize(
+    "kind,expected",
+    [
+        ("valid", True),
+        ("swapped_sulfurs", True),
+        ("spacer", False),
+        ("no_imine", False),
+        ("oxygen_anion", False),
+        ("substituted_sulfur", False),
+        ("no_anion", False),
+        ("charged_carbon", False),
+        ("implicit_sulfur_h", False),
+        ("radical_n", False),
+        ("radical_c", False),
+        ("radical_s", False),
+        ("deferred_n", False),
+        ("deferred_c", False),
+        ("deferred_s", False),
+    ],
+)
+def test_iminium_dithiocarbonyl_compensation_stays_local_and_closed_shell(kind, expected):
+    mol = ob.OBMol()
+    for z in (7, 6, 16, 16, 6, 6):
+        atom = mol.NewAtom()
+        atom.SetAtomicNum(z)
+        atom.SetImplicitHCount(0)
+    for i, j, order in ((1, 2, 1), (2, 3, 2), (2, 4, 1), (1, 5, 2), (1, 6, 1)):
+        mol.AddBond(i, j, order)
+    mol.GetAtom(1).SetFormalCharge(1)
+    mol.GetAtom(4).SetFormalCharge(-1)
+    for parent, count in ((5, 2), (6, 3)):
+        for _ in range(count):
+            atom = mol.NewAtom()
+            atom.SetAtomicNum(1)
+            atom.SetImplicitHCount(0)
+            mol.AddBond(parent, atom.GetIdx(), 1)
+    if kind == "swapped_sulfurs":
+        mol.GetAtom(3).SetFormalCharge(-1)
+        mol.GetAtom(4).SetFormalCharge(0)
+        mol.GetBond(2, 3).SetBondOrder(1)
+        mol.GetBond(2, 4).SetBondOrder(2)
+    elif kind == "spacer":
+        mol.DeleteBond(mol.GetBond(1, 2))
+        atom = mol.NewAtom()
+        atom.SetAtomicNum(6)
+        atom.SetImplicitHCount(0)
+        mol.AddBond(1, atom.GetIdx(), 1)
+        mol.AddBond(atom.GetIdx(), 2, 1)
+    elif kind == "no_imine":
+        mol.GetBond(1, 5).SetBondOrder(1)
+    elif kind == "oxygen_anion":
+        mol.GetAtom(4).SetAtomicNum(8)
+    elif kind == "substituted_sulfur":
+        atom = mol.NewAtom()
+        atom.SetAtomicNum(6)
+        atom.SetImplicitHCount(0)
+        mol.AddBond(4, atom.GetIdx(), 1)
+    elif kind == "no_anion":
+        mol.GetAtom(4).SetFormalCharge(0)
+    elif kind == "charged_carbon":
+        mol.GetAtom(2).SetFormalCharge(1)
+    elif kind == "implicit_sulfur_h":
+        mol.GetAtom(4).SetImplicitHCount(1)
+    elif kind.startswith("radical") or kind.startswith("deferred"):
+        atom = mol.GetAtom({"n": 1, "c": 2, "s": 4}[kind[-1]])
+        if kind.startswith("radical"):
+            set_unpaired_electron_count(atom, 1)
+        else:
+            from molgr.fallback.utils.electrons import set_unresolved_two_electron_center
+
+            set_unresolved_two_electron_center(atom, True)
+    assert metal_scoring_module._has_iminium_dithiocarbonyl_compensation(mol.GetAtom(1)) is expected
+    assert (
+        metal_scoring_module._is_locally_charge_compensated_nonmetal_cation(mol.GetAtom(1))
+        is expected
+    )

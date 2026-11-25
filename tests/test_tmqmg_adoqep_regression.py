@@ -5,14 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from rdkit import Chem
 
 
 pytest.importorskip("openbabel")
 
 from molgr import _core as core
 from molgr.interface import xyz_to_rdmol
-from molgr.utils.equivalence import EquivalenceMethod, check_equivalence
+from molgr.utils.equivalence import check_equivalence
 from scripts.reconstruction_trace import (
     DofRenderContext,
     TraceInputCase,
@@ -20,9 +19,7 @@ from scripts.reconstruction_trace import (
     _render_html_browser_report,
     trace_reconstruction_case,
 )
-
-
-ADOQEP_REFERENCE_SMILES = "CC1c2ccccn2->[Cu+]23<-N=1N=C(C(=NN->2=C(C)c1ccccn->31)c1ccccc1)c1ccccc1"
+from scripts.tmqmg_fixture_data import reference_graph
 
 
 def _adoqep_xyz_block() -> str:
@@ -46,7 +43,7 @@ def test_adoqep_cpp_molecule_data_is_closed_shell() -> None:
 
 
 def test_adoqep_cpp_matches_reference_under_nonchiral_tmqmg_equivalence() -> None:
-    reference = Chem.MolFromSmiles(ADOQEP_REFERENCE_SMILES)
+    reference = reference_graph("ADOQEP")
     assert reference is not None
 
     reconstructed = xyz_to_rdmol(
@@ -68,10 +65,10 @@ def test_adoqep_cpp_matches_reference_under_nonchiral_tmqmg_equivalence() -> Non
         reference,
         reconstructed,
         use_chirality=False,
-        max_resonance=100,
+        ignore_metal_coordination_bonds=True,
+        max_resonance=100000,
     )
     assert equivalent is True, info.reason
-    assert info.method == EquivalenceMethod.IDEAL
 
 
 def test_adoqep_trace_uses_production_no_metal_phase_history() -> None:

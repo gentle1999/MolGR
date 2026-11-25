@@ -31,6 +31,7 @@ from molgr.fallback.utils.electrons import (
     set_unpaired_electron_count,
     set_unresolved_two_electron_center,
 )
+from molgr.fallback.utils.ob_graph import atom_bonds, atom_neighbors, mol_atoms, mol_bonds
 
 from . import smarts
 
@@ -170,6 +171,7 @@ def _run_process_resonance(
             "process_resonance_eliminate_possible_cp_like_radical_anion",
             eliminate_possible_cp_like_radical_anion,
             machine.total_radical_electrons,
+            machine.metadata.get("metal_contact_distances", ()),
         )
         or hit
     )
@@ -222,6 +224,7 @@ def _run_process_resonance(
             "process_resonance_eliminate_negative_charges",
             eliminate_negative_charges,
             machine.total_radical_electrons,
+            machine.metadata.get("metal_contact_distances", ()),
         )
         or hit
     )
@@ -250,8 +253,7 @@ def build_resonance_state_key(omol: pybel.Molecule) -> ResonanceStateKey:
 
     obmol = cast(ob.OBMol, omol.OBMol)
     atom_keys: List[ResonanceAtomKey] = []
-    for atom in ob.OBMolAtomIter(obmol):
-        atom = cast(ob.OBAtom, atom)
+    for atom in mol_atoms(obmol):
         atom_keys.append(
             (
                 atom.GetAtomicNum(),
@@ -264,7 +266,7 @@ def build_resonance_state_key(omol: pybel.Molecule) -> ResonanceStateKey:
         )
 
     bond_keys: List[ResonanceBondKey] = []
-    for bond in ob.OBMolBondIter(obmol):
+    for bond in mol_bonds(obmol):
         begin_idx = cast(ob.OBAtom, bond.GetBeginAtom()).GetIdx()
         end_idx = cast(ob.OBAtom, bond.GetEndAtom()).GetIdx()
         if begin_idx > end_idx:
@@ -294,8 +296,7 @@ def _build_resonance_search_context(
 ) -> Tuple[ResonanceStateKey, ResonanceBondIndexMap]:
     obmol = cast(ob.OBMol, omol.OBMol)
     atom_keys: List[ResonanceAtomKey] = []
-    for atom in ob.OBMolAtomIter(obmol):
-        atom = cast(ob.OBAtom, atom)
+    for atom in mol_atoms(obmol):
         atom_keys.append(
             (
                 atom.GetAtomicNum(),
@@ -309,7 +310,7 @@ def _build_resonance_search_context(
 
     bond_index_map: ResonanceBondIndexMap = {}
     bond_keys: List[ResonanceBondKey] = []
-    for bond in ob.OBMolBondIter(obmol):
+    for bond in mol_bonds(obmol):
         begin_idx = cast(ob.OBAtom, bond.GetBeginAtom()).GetIdx()
         end_idx = cast(ob.OBAtom, bond.GetEndAtom()).GetIdx()
         if begin_idx > end_idx:
@@ -366,7 +367,7 @@ def _enumerate_one_step_resonance_moves(
 
     The target may carry zero or one unpaired electron. A zero-radical target
     follows the ordinary ``r1-r0 -> r0-r1`` route. If a one-radical target becomes
-    a neutral C/N/P two-electron deficit after the bond shift, ``r1-r1`` becomes
+    a neutral C/N/Si/P two-electron deficit after the bond shift, ``r1-r1`` becomes
     ``r0-unresolved`` so validation can choose its singlet or triplet occupancy.
     """
 
@@ -388,7 +389,7 @@ def _enumerate_one_step_resonance_moves(
             post_target_valence = atom3.GetTotalValence() - 1
             target_unresolved = (
                 get_unpaired_electron_count(atom3) == 1
-                and atom3.GetAtomicNum() in (6, 7, 15)
+                and atom3.GetAtomicNum() in (6, 7, 14, 15)
                 and atom3.GetFormalCharge() == 0
                 and get_lone_pair_count(atom3) == 0
                 and max(
@@ -424,11 +425,11 @@ def _materialize_one_step_resonance(
 
     One unpaired electron is removed from the source and added to the target while
     the intervening single/multiple bond orders swap by one. A resulting neutral
-    C/N/P two-electron deficit is represented by an unresolved marker instead of
+    C/N/Si/P two-electron deficit is represented by an unresolved marker instead of
     being forced to two unpaired electrons.
     """
 
-    new_omol = omol.clone
+    new_omol = cast(pybel.Molecule, omol.clone)
     new_obmol = cast(ob.OBMol, new_omol.OBMol)
     atom1_clone = cast(ob.OBAtom, new_obmol.GetAtom(idxs[0]))
     atom3_clone = cast(ob.OBAtom, new_obmol.GetAtom(idxs[2]))
@@ -441,7 +442,7 @@ def _materialize_one_step_resonance(
     target_valence = atom3_clone.GetTotalValence()
     target_unresolved = (
         target_unpaired == 1
-        and atom3_clone.GetAtomicNum() in (6, 7, 15)
+        and atom3_clone.GetAtomicNum() in (6, 7, 14, 15)
         and atom3_clone.GetFormalCharge() == 0
         and get_lone_pair_count(atom3_clone) == 0
         and max(
@@ -581,8 +582,7 @@ def _ideal_angle_radians_for_atom(
     heavy_degree = 0
     multiple_bond_count = 0
     max_bond_order = 1.0
-    for bond_iter in ob.OBAtomBondIter(atom):
-        bond = cast(ob.OBBond, bond_iter)
+    for bond in atom_bonds(atom):
         other = cast(ob.OBAtom, bond.GetNbrAtom(atom))
         if other is not None and cast(int, other.GetAtomicNum()) != 1:
             heavy_degree += 1
@@ -650,7 +650,7 @@ def _local_angle_strain_energy(
         center_atom = cast(ob.OBAtom, obmol.GetAtom(center_idx))
         if center_atom is None:
             continue
-        neighbors = [cast(ob.OBAtom, neighbor) for neighbor in ob.OBAtomAtomIter(center_atom)]
+        neighbors = list(atom_neighbors(center_atom))
         for left_index in range(len(neighbors)):
             for right_index in range(left_index + 1, len(neighbors)):
                 total += _uff_lite_angle_energy(
@@ -700,8 +700,7 @@ def _estimate_radical_conjugation_size(
         atom = cast(ob.OBAtom, obmol.GetAtom(atom_idx))
         if atom is None:
             continue
-        for bond_iter in ob.OBAtomBondIter(atom):
-            bond = cast(ob.OBBond, bond_iter)
+        for bond in atom_bonds(atom):
             bond_kind = _conjugated_bond_kind(bond, overrides)
             if bond_kind == 0:
                 continue
@@ -737,11 +736,15 @@ def _compute_uff_lite_gain_resonance_metrics(
         _bond_pair(old_radical_idx, center_idx): cast(int, bond_old_center.GetBondOrder()) + 1,
         _bond_pair(center_idx, new_radical_idx): cast(int, bond_center_new.GetBondOrder()) - 1,
     }
-    affected_bonds = (
-        _bond_pair(old_radical_idx, center_idx),
-        _bond_pair(center_idx, new_radical_idx),
+    # Match native std::set accumulation order. Roundoff in otherwise tied
+    # move scores can change which branches fit the discrepancy budget.
+    affected_bonds = sorted(
+        (
+            _bond_pair(old_radical_idx, center_idx),
+            _bond_pair(center_idx, new_radical_idx),
+        )
     )
-    affected_angle_centers = (old_radical_idx, center_idx, new_radical_idx)
+    affected_angle_centers = sorted((old_radical_idx, center_idx, new_radical_idx))
 
     bond_strain_gain = _local_bond_stretch_energy(
         obmol,
@@ -755,20 +758,20 @@ def _compute_uff_lite_gain_resonance_metrics(
     ) - _local_angle_strain_energy(obmol, affected_angle_centers, bond_order_overrides)
     radical_penalty_before = _radical_penalty_for_atom(
         cast(int, old_atom.GetAtomicNum()),
-        cast(int, get_unpaired_electron_count(old_atom)),
+        get_unpaired_electron_count(old_atom),
         cast(int, old_atom.GetHvyDegree()),
     ) + _radical_penalty_for_atom(
         cast(int, new_atom.GetAtomicNum()),
-        cast(int, get_unpaired_electron_count(new_atom)),
+        get_unpaired_electron_count(new_atom),
         cast(int, new_atom.GetHvyDegree()),
     )
     radical_penalty_after = _radical_penalty_for_atom(
         cast(int, old_atom.GetAtomicNum()),
-        cast(int, get_unpaired_electron_count(old_atom)) - 1,
+        get_unpaired_electron_count(old_atom) - 1,
         cast(int, old_atom.GetHvyDegree()),
     ) + _radical_penalty_for_atom(
         cast(int, new_atom.GetAtomicNum()),
-        cast(int, get_unpaired_electron_count(new_atom)) + 1,
+        get_unpaired_electron_count(new_atom) + 1,
         cast(int, new_atom.GetHvyDegree()),
     )
     radical_penalty_gain = radical_penalty_before - radical_penalty_after

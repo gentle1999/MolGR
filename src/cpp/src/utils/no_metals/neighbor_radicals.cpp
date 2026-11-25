@@ -1,6 +1,7 @@
 #include "molgr/utils/no_metals/neighbor_radicals.h"
 
 #include "molgr/stages/fresh.h"
+#include "molgr/utils/bond_geometry.h"
 #include "molgr/utils/conversions.h"
 #include "molgr/utils/electrons.h"
 #include "molgr/utils/resonance.h"
@@ -28,11 +29,16 @@ namespace
     using StateKey = std::pair<molgr::resonance::ResonanceStateKey, int>;
     using EnumerationKey = std::tuple<molgr::resonance::ResonanceStateKey, int, int>;
 
+    /// Pair the graph's resonance fingerprint with the outstanding charge for seed deduplication.
+    /// @param state Ligand graph and electronic budgets at this stage of reconstruction.
+    /// @return Graph fingerprint and outstanding charge used together for deduplication.
     StateKey BuildStateKey(const molgr::state::ReconstructionState &state)
     {
         return {molgr::resonance::BuildResonanceStateKey(state.Mol()), state.given_charge};
     }
 
+    /// @param state Ligand graph and electronic budgets at this stage of reconstruction.
+    /// @return The charge-separation discrepancy stored in seed metadata, defaulting to zero.
     int ChargeSeparationDiscrepancy(const molgr::state::ReconstructionState &state)
     {
         const auto it = state.metadata.find(kChargeSeparationDiscrepancyKey);
@@ -50,6 +56,13 @@ namespace
     // at both endpoints. Bond mode converts each pair to one bond-order increment
     // and refreshes endpoints; charge mode converts them to +n/-n. The n>1 charge
     // branch is a documented high-spin heuristic. Validate before mutation.
+    /// Resolve adjacent real radicals by bonding or formal charge separation.
+    /// @param mol Ligand graph supplying the atom labels, coordinates and bond orders.
+    /// @param begin_idx One-based atom index in the ligand graph.
+    /// @param end_idx One-based atom index in the ligand graph.
+    /// @param mode Choice of bond formation or charge separation at the adjacent radical sites.
+    /// @param positive_atom_idx Endpoint receiving positive charge in the charge-separated assignment.
+    /// @return True when the requested edit was applied to the graph.
     bool ResolveNeighborRadicalPair(
         OpenBabel::OBMol &mol,
         int begin_idx,
@@ -63,7 +76,7 @@ namespace
         {
             return false;
         }
-        const int spin_to_consume = std::min(
+        int spin_to_consume = std::min(
             molgr::utils::GetUnpairedElectronCount(*begin_atom),
             molgr::utils::GetUnpairedElectronCount(*end_atom));
         if (spin_to_consume <= 0)
@@ -79,6 +92,9 @@ namespace
             {
                 return false;
             }
+            spin_to_consume = std::min(
+                spin_to_consume, 3 - static_cast<int>(bond->GetBondOrder()));
+            if (spin_to_consume <= 0) return false;
         }
         else if (mode != "charge_separation" ||
                  (positive_atom_idx != begin_idx && positive_atom_idx != end_idx))
@@ -103,6 +119,13 @@ namespace
         return true;
     }
 
+    /// Apply the neighbor-radical resolution to a branched seed and freeze the successful result.
+    /// @param state Ligand graph and electronic budgets at this stage of reconstruction.
+    /// @param begin_idx One-based atom index in the ligand graph.
+    /// @param end_idx One-based atom index in the ligand graph.
+    /// @param mode Choice of bond formation or charge separation at the adjacent radical sites.
+    /// @param positive_atom_idx Endpoint receiving positive charge in the charge-separated assignment.
+    /// @return New ligand snapshot, or an empty optional if the pair could not be resolved.
     std::optional<molgr::state::ReconstructionState> ResolveSeed(
         const molgr::state::ReconstructionState &state,
         int begin_idx,
@@ -167,6 +190,32 @@ namespace molgr
     {
         namespace neighbor_radicals
         {
+            bool HasSubstitutedNORadicalPair(const OpenBabel::OBMol &mol)
+            {
+                // Retain charge-aware oximate alternatives to N=O closure.
+                // Isolated NO and oxygen with attached H are excluded.
+                auto &mutable_mol = const_cast<OpenBabel::OBMol &>(mol);
+                FOR_BONDS_OF_MOL(bond, mutable_mol)
+                {
+                    auto *nitrogen = bond->GetBeginAtom();
+                    auto *oxygen = bond->GetEndAtom();
+                    if (nitrogen->GetAtomicNum() == 8)
+                        std::swap(nitrogen, oxygen);
+                    if (nitrogen->GetAtomicNum() != 7 || oxygen->GetAtomicNum() != 8 ||
+                        bond->GetBondOrder() != 1 || oxygen->GetExplicitDegree() != 1 ||
+                        oxygen->GetImplicitHCount() != 0 ||
+                        molgr::utils::GetUnpairedElectronCount(*nitrogen) <= 0 ||
+                        molgr::utils::GetUnpairedElectronCount(*oxygen) <= 0)
+                        continue;
+                    FOR_NBORS_OF_ATOM(neighbor, nitrogen)
+                    {
+                        if (neighbor->GetAtomicNum() != 1 && neighbor->GetIdx() != oxygen->GetIdx())
+                            return true;
+                    }
+                }
+                return false;
+            }
+
             std::vector<std::pair<int, int>> NeighborRadicalBondPairs(
                 const OpenBabel::OBMol &mol)
             {
@@ -180,6 +229,21 @@ namespace molgr
                         molgr::utils::GetUnpairedElectronCount(*begin_atom) > 0 &&
                         molgr::utils::GetUnpairedElectronCount(*end_atom) > 0)
                     {
+                        // Leave elongated isolated O2 radicals to charge/spin-aware
+                        // normalization; eager bonding loses the peroxide candidate.
+                        const double length = begin_atom->GetDistance(end_atom);
+                        if (begin_atom->GetAtomicNum() == 8 && end_atom->GetAtomicNum() == 8 &&
+                            begin_atom->GetExplicitDegree() == 1 && end_atom->GetExplicitDegree() == 1 &&
+                            begin_atom->GetImplicitHCount() == 0 && end_atom->GetImplicitHCount() == 0 &&
+                            bond_iter->GetBondOrder() == 1 && length >= 1.40 && length <= 1.65)
+                            continue;
+                        if (bond_iter->GetBondOrder() == 1 &&
+                            molgr::bond_geometry::IsElongatedCarbonylPair(*begin_atom, *end_atom))
+                            continue;
+                        if (bond_iter->GetBondOrder() == 1 &&
+                            (molgr::bond_geometry::WouldFormBentRingAllene(*begin_atom, *end_atom) ||
+                             molgr::bond_geometry::WouldFormBentRingAllene(*end_atom, *begin_atom)))
+                            continue;
                         unique.emplace(
                             std::min(begin_atom->GetIdx(), end_atom->GetIdx()),
                             std::max(begin_atom->GetIdx(), end_atom->GetIdx()));
