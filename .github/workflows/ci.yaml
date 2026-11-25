@@ -2,11 +2,9 @@ name: Build, Test, and Deploy
 
 on:
   push:
-    branches:
-      - "**"
+    branches: [main, develop]
   pull_request:
-    branches:
-      - main
+    branches: [main, develop]
   workflow_dispatch:
     inputs:
       build_release_wheels:
@@ -21,6 +19,10 @@ on:
         type: string
   release:
     types: [published]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -121,9 +123,18 @@ jobs:
       UV_DEFAULT_INDEX: https://pypi.org/simple
     strategy:
       fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
+      # Exercise every supported ABI before publishing and on manual runs.
+      matrix: >-
+        ${{ fromJSON(
+          (github.event_name == 'release' || github.event_name == 'workflow_dispatch') &&
+          '{"os": ["ubuntu-latest", "macos-latest", "windows-latest"],
+            "python-version": ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14"],
+            "suite": ["full"]}' ||
+          '{"include": [
+            {"os": "ubuntu-latest", "python-version": "3.11", "suite": "core"},
+            {"os": "windows-latest", "python-version": "3.8", "suite": "platform"},
+            {"os": "macos-latest", "python-version": "3.14", "suite": "platform"}]}'
+        ) }}
 
     steps:
       - name: Checkout code
@@ -179,8 +190,27 @@ jobs:
         run: |
           uv run --no-sync --python ${{ matrix.python-version }} python -c "import molgr; import molgr._core"
 
-      - name: Run tests
+      - name: Run full suite with coverage
+        if: matrix.suite == 'full' || (matrix.suite == 'core' && github.event_name == 'push')
         run: uv run --no-sync --python ${{ matrix.python-version }} python -m pytest
+
+      - name: Run core regression
+        if: matrix.suite == 'core' && github.event_name == 'pull_request'
+        run: uv run --no-sync --python ${{ matrix.python-version }} python -m pytest --no-cov -m "not exhaustive and not stress"
+
+      - name: Run platform regression
+        if: matrix.suite == 'platform'
+        run: >-
+          uv run --no-sync --python ${{ matrix.python-version }} python -m pytest
+          --no-cov -m "not exhaustive and not stress"
+          tests/test_batch_reconstruction.py tests/test_process_guard.py
+          tests/test_interface_spin_multiplicity.py tests/test_interface_reconstruction_failure_policy.py
+          tests/test_reviewed_reconstruction_fixtures.py tests/test_smiles_roundtrip.py
+          tests/test_tmqmg_fixtures.py tests/test_tmqmg_published_regression.py
+          tests/test_equivalence_native.py tests/test_molecule_data_stereo.py tests/test_uff_resource.py
+          tests/test_cpp_python_metal_candidate_parity.py::test_cpp_python_scored_candidate_parity_case_522
+          tests/test_cpp_python_metal_candidate_parity.py::test_cpp_python_scored_candidate_state_matches_abagam_fixture
+          tests/test_local_cc_geometry.py::test_cot_kekule_normalization_is_bounded_and_nonmutating
 
   build-release-wheels:
     needs: get-metadata

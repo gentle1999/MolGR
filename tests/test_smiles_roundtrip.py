@@ -4,6 +4,7 @@ import csv
 from pathlib import Path
 
 import pytest
+from fixture_reconstruction import fixture_marks
 from rdkit import Chem
 
 from molgr import (
@@ -42,6 +43,7 @@ WATER_XYZ = "3\nwater\nO 0 0 0\nH 0.9572 0 0\nH -0.2390 0.9270 0\n"
                 int(case["spin_multiplicity"]),
             ),
             id=case["case_id"],
+            marks=fixture_marks(Path(case["xyz_file"]).stem),
         )
         for case in CASES
     ],

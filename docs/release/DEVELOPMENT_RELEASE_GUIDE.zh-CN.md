@@ -57,7 +57,8 @@ flowchart TD
 
 文件： [`.github/workflows/ci.yaml`](../../.github/workflows/ci.yaml)
 
-- `build-and-test` 提供跨平台（Linux/macOS/Windows）验证，覆盖 `3.8` 到 `3.14`。
+- 目标为 `main` 或 `develop` 的 PR 在 Ubuntu / Python 3.11 上跑核心回归，在 Windows / Python 3.8 和 macOS / Python 3.14 上跑平台回归。快速回归在每组批量 XYZ 夹具中选取代表样本，千输入并发压力测试留到全量回归。
+- 推送到 `main` 或 `develop` 后，Ubuntu 运行带覆盖率的完整套件，Windows 和 macOS 运行平台回归。手动触发工作流或发布 GitHub Release 时，三个操作系统与 Python 3.8–3.14 的全部 21 个组合都运行完整套件。
 - GitHub 托管测试 job 使用 `setup-python` 的工具缓存和 `setup-uv` 的依赖缓存，
   并按操作系统与 Python 版本隔离。
 - lint 通过 `uvx` 运行固定版本 Ruff，不安装 MolGR 的 RDKit/Open Babel 运行时依赖；

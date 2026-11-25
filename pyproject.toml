@@ -145,6 +145,7 @@ addopts = "-ra -q --cov=src --cov-report=term-missing"
 testpaths = ["tests"]
 pythonpath = ["src", "."]
 markers = [
+    "exhaustive: additional XYZ inputs in the full fixture regression",
     "stress: resource-intensive native concurrency and memory stress tests",
 ]
 

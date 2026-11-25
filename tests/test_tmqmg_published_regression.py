@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 
 import pytest
+from fixture_reconstruction import fixture_marks
 from rdkit import Chem
 
 from molgr import ReconstructionBatchRequest
@@ -93,6 +94,7 @@ published_cases = pytest.mark.parametrize(
             case,
             ReconstructionBatchRequest(case["xyz"], case["charge"], case["multiplicity"]),
             id=case["id"],
+            marks=fixture_marks(case["id"]),
         )
         for case in RECONSTRUCTION_CASES
     ],

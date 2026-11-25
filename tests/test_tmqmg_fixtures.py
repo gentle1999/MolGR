@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Literal
 
 import pytest
+from fixture_reconstruction import fixture_marks
 from rdkit import Chem
 
 from molgr import ReconstructionBatchRequest
@@ -146,6 +147,7 @@ sulfur_cases = pytest.mark.parametrize(
                 int(case["multiplicity"]),
             ),
             id=f"{group}-{case['case_id']}",
+            marks=fixture_marks(case["case_id"]),
         )
         for group, expectations in _SULFUR_REVIEW_EXPECTATIONS.items()
         for case in _manifest(group)

@@ -17,6 +17,33 @@ if TYPE_CHECKING:
     from molgr import ReconstructionBatchRequest, ReconstructionDiagnostics
 
 
+# Keep both backends and output modes for these inputs in the short CI suite.
+_PR_FIXTURES = {
+    # Metal-state ranking, charge and radical localization.
+    "ABAGAM",
+    "ABELOK",
+    "ABIRIO",
+    # Side-on coordination, chelates and ring resonance.
+    "ACEKAU",
+    "VIVNIZ",
+    "KAYWOA",
+    # Bounded equivalence proofs.
+    "BASDAC",
+    "BEBQIK",
+    "YURTOW",
+    # Published and reviewed sulfur assignments.
+    "ADURUP",
+    "ALILOX",
+    "KIWCEY",
+    "KIWCIC",
+}
+
+
+def fixture_marks(case_id: str) -> tuple[pytest.MarkDecorator, ...]:
+    """Reserve the remaining bulk XYZ inputs for full-suite runs."""
+    return () if case_id in _PR_FIXTURES else (pytest.mark.exhaustive,)
+
+
 def _batch(
     frames: list[ReconstructionBatchRequest],
     backend: Literal["cpp", "python"],
