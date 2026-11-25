@@ -277,12 +277,24 @@ def test_cot_kekule_normalization_is_bounded_and_nonmutating(pair, defect):
     if name != "KAYWOA":
         return
     site = core(c)
+    m = p.no_metal_state.omol.OBMol
+    ref = c.no_metal_state.omol.OBMol
+    ring = next(
+        list(r._path) for r in m.GetSSSR() if len(r._path) == 8 and not set(r._path) & set(site)
+    )
+    edges = list(zip(ring, ring[1:] + ring[:1]))
+    # A neutral cyclooctatetraene can start in either alternating Kekulé form.
+    # Exercise both forms even when the backend chose the same one twice.
+    for mol in (ref, m):
+        orders = [mol.GetBond(i, j).GetBondOrder() for i, j in edges]
+        assert orders in ([1, 2] * 4, [2, 1] * 4)
+    for i, j in edges:
+        m.GetBond(i, j).SetBondOrder(3 - ref.GetBond(i, j).GetBondOrder())
+
     before = [signature(x) for x in [c, p]]
     assert g.outside_signature(c, site) != g.outside_signature(p, site)
     assert g.normalized_outside(c, site) == g.normalized_outside(p, site)
     assert [signature(x) for x in [c, p]] == before
-    m = p.no_metal_state.omol.OBMol
-    ring = next(list(x._path) for x in m.GetSSSR() if len(x._path) == 8)
     a = m.GetAtom(ring[0])
     if defect == "charge":
         a.SetFormalCharge(1)

@@ -35,6 +35,20 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _XYZ_FIXTURES = _PROJECT_ROOT / "tests/data/xyz"
 
 
+def _assert_metal_selection_key_matches(
+    native: tuple[float, ...] | None, fallback: tuple[float, ...] | None
+) -> None:
+    """Allow rounding of the total score and compare the remaining ranking fields exactly."""
+    if fallback is None:
+        assert native is None
+        return
+    assert native is not None
+    # The total score precedes the final deterministic combination index.
+    assert native[:-2] == fallback[:-2]
+    assert native[-2] == pytest.approx(fallback[-2], rel=1e-14, abs=1e-12)
+    assert native[-1] == fallback[-1]
+
+
 @pytest.mark.parametrize(
     "case_id,symbol,valence",
     [
@@ -891,7 +905,9 @@ def test_cpp_python_scored_candidate_parity_for_dmso_state_regressions(case_id: 
         assert cpp_item["combination_index"] == py_item.metadata.get("combination_index")
         assert cpp_item["no_metal_charge_target"] == py_item.no_metal_charge_target
         assert cpp_item["score"] == pytest.approx(py_item.score or 0.0)
-        assert cpp_item["selection_key"] == py_item.metadata.get("selection_key")
+        _assert_metal_selection_key_matches(
+            cpp_item["selection_key"], py_item.metadata.get("selection_key")
+        )
         assert cpp_item["selected"] == (py_best is py_item)
 
 
@@ -978,7 +994,9 @@ def test_cpp_python_scored_candidate_parity_for_acifea_nitrate_exemption() -> No
                 False,
             )
         )
-        assert cpp_item["selection_key"] == py_item.metadata.get("selection_key")
+        _assert_metal_selection_key_matches(
+            cpp_item["selection_key"], py_item.metadata.get("selection_key")
+        )
         assert cpp_item["selected"] == (py_best is py_item)
 
     zinc_ii = next(item for item in cpp["candidates"] if item["metal_states"][0]["valence"] == 2)
@@ -1222,7 +1240,9 @@ def test_cpp_python_scored_candidate_parity_case_522() -> None:
         assert cpp_item["passes_metal_discordance_filter"] == py_item.metadata.get(
             "passes_metal_discordance_filter"
         )
-        assert cpp_item["selection_key"] == py_item.metadata.get("selection_key")
+        _assert_metal_selection_key_matches(
+            cpp_item["selection_key"], py_item.metadata.get("selection_key")
+        )
 
         assert cpp_item["selected"] == (py_best is py_item)
 
@@ -1249,7 +1269,9 @@ def test_cpp_python_scored_candidate_state_matches_abagam_fixture() -> None:
         assert tuple(cpp_item["no_metal_bond_signature"]) == _pybel_bond_signature(
             py_item.no_metal_state.omol
         )
-        assert cpp_item["selection_key"] == py_item.metadata.get("selection_key")
+        _assert_metal_selection_key_matches(
+            cpp_item["selection_key"], py_item.metadata.get("selection_key")
+        )
         assert cpp_item["selected"] == (py_best is py_item)
 
 
