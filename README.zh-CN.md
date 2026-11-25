@@ -181,7 +181,6 @@ uv pip install -e . -v --no-build-isolation \
 - [`tests/`](tests/)：公开行为测试、fallback 测试、转换器测试和 C++ 一致性测试。
 - [`benchmarks/`](benchmarks/)：benchmark 入口、专用依赖和运行说明。
 - [`docs/`](docs/)：架构说明和发布流程文档。
-- [`docs/development/MOLECULE_REVIEW_TOOL.zh-CN.md`](docs/development/MOLECULE_REVIEW_TOOL.zh-CN.md)：MolGR 分子图重建审核与 Trace 工具说明。
 
 ## 算法概览
 

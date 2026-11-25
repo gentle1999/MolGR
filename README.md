@@ -205,7 +205,6 @@ uv pip install -e . -v --no-build-isolation \
 - [`tests/`](tests/): public behavior tests, fallback tests, converter tests, and C++ parity tests.
 - [`benchmarks/`](benchmarks/): benchmark entrypoints, dedicated dependencies, and benchmark docs.
 - [`docs/`](docs/): architecture and release documentation.
-- [`docs/development/MOLECULE_REVIEW_TOOL.md`](docs/development/MOLECULE_REVIEW_TOOL.md): MolGR reconstruction review and trace tool.
 
 ## Algorithm Overview
 

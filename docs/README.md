@@ -29,8 +29,3 @@ and maintenance boundaries.
 
 These files describe the Gitea internal package channels, GitHub/PyPI release path,
 wheel build matrix, tag policy, and required CI variables.
-
-## Development Tools
-
-- [`development/MOLECULE_REVIEW_TOOL.md`](development/MOLECULE_REVIEW_TOOL.md): English molecule graph review/trace tool guide.
-- [`development/MOLECULE_REVIEW_TOOL.zh-CN.md`](development/MOLECULE_REVIEW_TOOL.zh-CN.md): Chinese runtime, queue, review-state, and fixture guide.

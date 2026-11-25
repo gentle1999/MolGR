@@ -28,8 +28,3 @@
 
 这些文档说明 Gitea 内网包通道、GitHub/PyPI 正式发布路径、wheel 构建矩阵、标签策略和
 必要 CI 变量。
-
-## 开发工具
-
-- [`development/MOLECULE_REVIEW_TOOL.zh-CN.md`](development/MOLECULE_REVIEW_TOOL.zh-CN.md)：MolGR 重建审核工具的运行环境、队列、审核状态与 fixture 流程。
-- [`development/MOLECULE_REVIEW_TOOL.md`](development/MOLECULE_REVIEW_TOOL.md)：英文开发工具说明。
