@@ -15,6 +15,8 @@ SUMMARY_COLUMNS: tuple[str, ...] = (
     "fail_count",
     "inconclusive_count",
     "runtime_failure_count",
+    "api_error_count",
+    "matched_with_errors",
     "total_count",
     "reference_valid_count",
     "reference_excluded_count",
@@ -89,8 +91,7 @@ def summarize_results(results: list[BenchmarkResult]) -> list[dict[str, str | in
         evaluated_rows = [
             row
             for row in denominator_rows
-            if row.status == "ok"
-            and row.evaluator_decision in {"equivalent", "not_equivalent", "inconclusive"}
+            if row.evaluator_decision in {"equivalent", "not_equivalent", "inconclusive"}
         ]
         success_count = sum(row.evaluator_decision == "equivalent" for row in evaluated_rows)
         fail_count = sum(row.evaluator_decision == "not_equivalent" for row in evaluated_rows)
@@ -109,6 +110,11 @@ def summarize_results(results: list[BenchmarkResult]) -> list[dict[str, str | in
                 "fail_count": fail_count,
                 "inconclusive_count": inconclusive_count,
                 "runtime_failure_count": runtime_failure_count,
+                "api_error_count": sum(row.status == "error" for row in denominator_rows),
+                "matched_with_errors": sum(
+                    row.status == "error" and row.evaluator_decision == "equivalent"
+                    for row in denominator_rows
+                ),
                 "total_count": len(rows),
                 "reference_valid_count": count,
                 "reference_excluded_count": excluded_count,

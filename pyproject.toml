@@ -72,6 +72,7 @@ cmake.build-type = "Release"
 wheel.packages = ["src/molgr"]
 
 # 生成 _version.py (包含在 sdist 中)
+sdist.exclude = [".local/**"]
 sdist.include = ["src/molgr/_version.py"]
 
 # ✅ 这是官方原生支持的 Provider

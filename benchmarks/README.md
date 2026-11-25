@@ -11,8 +11,8 @@ root project dependency graph so they do not affect package releases.
 - `smiles_xyz_benchmark`: builds XYZ cases from SMILES inputs and compares reconstruction methods.
 - `molfile_xyz_benchmark`: loads `.mol`, `.molfile`, and `.sdf` inputs, converts them to XYZ cases,
   and runs the same method registry.
-- `tmqmg_xyz_benchmark`: runs the shared method registry on tmQMg CSV/XYZ pairs and supports
-  row/id subset selection.
+- `dataset_xyz_benchmark`: imports released geometries for GEOM, BorylXAT, BDE and tmQMg-Corrected.
+  See the unified [dataset preparation, execution and reporting guide](dataset_xyz_benchmark/README.md).
 
 All benchmark entrypoints use the same shared method registry:
 
@@ -22,8 +22,9 @@ All benchmark entrypoints use the same shared method registry:
 - `molgr_fallback`
 - `molgr_cpp`
 - `xyzgraph_cheminf_full`
+- `xyz2mol_tm`
 
-`cell2mol_v2` and `xyzgraph_cheminf_full` are competitor baselines. `molgr_fallback`
+`cell2mol_v2`, `xyzgraph_cheminf_full`, and `xyz2mol_tm` are comparison baselines. `molgr_fallback`
 uses the Python reference backend, and `molgr_cpp` uses the default C++ backend.
 
 ## Environment
@@ -66,37 +67,10 @@ bash scripts/benchmark_env.sh run python benchmarks/molfile_xyz_benchmark/run.py
   --out benchmarks/_runs/molfile-demo
 ```
 
-Run a small tmQMg benchmark on a selected subset:
-
-```bash
-bash scripts/benchmark_env.sh run python benchmarks/tmqmg_xyz_benchmark/run.py \
-  --csv /path/to/tmqmg.csv \
-  --xyz-dir /path/to/xyz \
-  --start-row 1 \
-  --end-row 100 \
-  --ids ABC123,DEF456 \
-  --limit 10 \
-  --out benchmarks/_runs/tmqmg-demo
-```
-
-For backend parity checks, restrict tmQMg to MolGR's two backends:
-
-```bash
-bash scripts/benchmark_env.sh run python benchmarks/tmqmg_xyz_benchmark/run.py \
-  --csv /path/to/tmqmg.csv \
-  --xyz-dir /path/to/xyz \
-  --limit 1000 \
-  --out benchmarks/_runs/tmqmg-parity \
-  --case-timeout-seconds 1.0 \
-  --cpp-accelerations all \
-  --methods molgr_cpp,molgr_fallback
-```
-
-`tmqmg_xyz_benchmark` defaults to `--process-workers 1` and runs rows serially; the
-C++ single-molecule path still keeps internal target-bucket parallelism. For
-`molgr_cpp` with a larger value, one subprocess passes the worker count to the
-native batch pool instead of stacking external processes. Measure batch worker
-counts on the target machine rather than assuming the largest value is fastest.
+Released datasets use `python -m benchmarks.dataset_xyz_benchmark.prepare`,
+`.run` and `.report`; [commands and source policies](dataset_xyz_benchmark/README.md)
+are maintained in that directory. For backend parity, run `--method molgr_cpp`
+and `--method molgr_fallback` separately on the same prepared store.
 
 For repeated commands, switch the current shell to the benchmark project:
 
@@ -136,18 +110,14 @@ Molfile/SDF benchmark:
 - Each input structure is loaded with RDKit, converted to an XYZ case, and compared against
   the source molecule.
 
-Shared flags:
-
-- `--limit`: cap the number of cases for quick checks.
-- `--out`: output run directory.
-- `--methods`: for tmQMg, restrict the shared method registry by method id.
-- `--process-workers`: tmQMg serial/native-batch worker budget; `1` is the serial
-  single-molecule path, and larger C++ values use one native batch pool.
-- `--cpp-accelerations`: for tmQMg, choose the C++ acceleration preset.
+For SMILES/molfile runners, `--limit` caps cases and `--out` selects the output
+directory. Dataset runs use preparation-time `--limit-molecules` and run-time
+`--method` / `--workers`.
 
 ## Outputs
 
-Each run writes two main files under the `--out` directory:
+SMILES/molfile runs write two main files under `--out`; dataset runs use the
+unified SQLite/JSON workflow described above:
 
 - `results.csv`: one row per `(case, method)` attempt with status, prediction,
   equivalence result, and timing fields.
@@ -164,6 +134,9 @@ The important `results.csv` columns are:
 - `predicted_smiles`
 - `equivalent`
 - `equivalence_method`
+- `evaluator_decision`
+- `reference_status`
+- `reference_reason`
 - `timing_ms_total`
 - `method_ms`
 - `equivalence_ms`
@@ -174,11 +147,21 @@ method-specific timing dictionary for profiling.
 
 ## Interpreting Results
 
-- Use `summary.csv` for method-level comparison.
-- Use `results.csv` for per-case debugging and failure analysis.
-- A row is counted as successful when equivalence is `True`.
-- A row is counted as failed when the method errors or equivalence is `False`.
-- A row is counted as skipped when the input case could not be prepared.
+`reference_status` determines the accuracy denominator: `valid` references enter;
+`excluded` records have confirmed reference-error evidence; `unresolved` references
+remain unassessed. Eligibility is independent of method outcomes.
+
+Use `evaluator_decision` for graph matching: `equivalent`, `not_equivalent`, and
+`inconclusive` mean matched, mismatched, and unresolved comparison. API `status`
+is independent. Retained graphs are compared after errors, and confirmed
+equivalence counts as a match. Attempts without a comparison decision remain in
+the eligible-reference denominator without adding a match.
+
+In `summary.csv`, `success_count`, `fail_count`, `inconclusive_count`, and
+`runtime_failure_count` partition eligible references; the last field counts
+attempts with no comparison decision. `api_error_count` separately records errors,
+and `matched_with_errors` counts matching graphs from error-status attempts.
+Use `results.csv` to inspect each error, decision, and timing.
 
 ## Optional `cell2mol_v2` Note
 
@@ -186,11 +169,46 @@ method-specific timing dictionary for profiling.
 to the upstream `cell2mol` `v2` Git revision. If you enable or redistribute this baseline,
 ensure your usage complies with its license terms, including GPL obligations where applicable.
 
+## Optional xyz2mol_tm baseline
+
+After creating the benchmark environment, install the pinned upstream checkout:
+
+```bash
+git clone https://github.com/jensengroup/xyz2mol_tm.git .local/third-party/xyz2mol_tm
+git -C .local/third-party/xyz2mol_tm checkout db2734b084045ef895528c7a3d5040d38da23983
+uv pip install --python .venv-benchmark/bin/python --no-deps -e .local/third-party/xyz2mol_tm
+```
+
+Editable installation is needed because this revision's wheel package list omits
+the Hückel subpackage. The existing benchmark environment supplies RDKit (including
+`rdEHTTools`), NumPy, and NetworkX. Reinstall this optional checkout after environment
+sync if it was removed. The clone and raw results remain under Git-ignored `.local/`.
+
+Select `--methods xyz2mol_tm` in the tmQMg runners. The adapter calls
+`get_tmc_mol(xyz_file, overall_charge, with_stereo=False)` and evaluates the returned
+RDKit graph. This entrypoint does not accept multiplicity. Its SMILES round trip
+discards coordinates, so the adapter retains upstream dative bonds without adding
+geometry-based MolGR postprocessing. File I/O and serialization are timed. Failures
+remain errors; an available graph is retained if only serialization fails.
+
+The shared registry loads RDKit's Hückel and MolStandardize modules before native
+MolGR/Open Babel adapters to avoid an import-order crash observed with the benchmark
+environment's Linux RDKit wheel. Import the registry before MolGR in an existing
+Python process; if the unsafe order has already occurred, the adapter reports
+that a fresh process is needed. Upstream reconstruction code is unmodified.
+The performance runner records the installed version, source hashes, and checkout revision.
+
+The upstream tmQMg SMILES were generated with the xyz2mol_tm Hückel method. The current benchmark uses only the 72,040 released Lewis graphs from tmQMg-Corrected 2026-11-23, with its published evidence tiers and exclusions. Original labels are provenance, not ground truth. [tmQMg](https://github.com/uiocompcat/tmQMg#data) · [Corrected targets](dataset_xyz_benchmark/README.md#tmqmg-corrected)
+
 ## Benchmark-Specific Docs
 
 - [`smiles_xyz_benchmark/README.md`](smiles_xyz_benchmark/README.md)
 - [`smiles_xyz_benchmark/README.zh-CN.md`](smiles_xyz_benchmark/README.zh-CN.md)
 - [`molfile_xyz_benchmark/README.md`](molfile_xyz_benchmark/README.md)
 - [`molfile_xyz_benchmark/README.zh-CN.md`](molfile_xyz_benchmark/README.zh-CN.md)
-- [`tmqmg_xyz_benchmark/README.md`](tmqmg_xyz_benchmark/README.md)
-- [`tmqmg_xyz_benchmark/README.zh-CN.md`](tmqmg_xyz_benchmark/README.zh-CN.md)
+- [`dataset_xyz_benchmark/README.md#tmqmg-corrected`](dataset_xyz_benchmark/README.md#tmqmg-corrected)
+- [`dataset_xyz_benchmark/README.zh-CN.md#tmqmg-corrected`](dataset_xyz_benchmark/README.zh-CN.md#tmqmg-corrected)
+
+## Additional source-geometry datasets
+
+[GEOM-QM9, GEOM-Drugs, BorylXAT-DB and the pending BDE source](dataset_xyz_benchmark/README.md): all-conformer import, molecule-level aggregation, resumable multiprocessing, and current data availability. Pilot validation is reported separately from full-dataset results.

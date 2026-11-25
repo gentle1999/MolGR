@@ -1,6 +1,19 @@
 from __future__ import annotations
 
+import sys
 from importlib import import_module
+
+
+# Load the RDKit modules used by xyz2mol_tm before adapters load MolGR's
+# native extension. The reverse order crashes MolStandardize initialization
+# with the benchmark environment's RDKit 2026.03.1 Linux wheel.
+if "molgr._core.pipeline" not in sys.modules and "openbabel._openbabel" not in sys.modules:
+    try:
+        from rdkit.Chem import rdEHTTools  # noqa: F401
+        from rdkit.Chem.MolStandardize import rdMolStandardize  # noqa: F401
+    except ImportError:
+        # Optional RDKit builds without Hückel support still run other baselines.
+        pass
 
 from benchmarks.smiles_xyz_benchmark.methods.base import BenchmarkMethod
 
@@ -12,9 +25,14 @@ METHOD_IDS: tuple[str, ...] = (
     "molgr_fallback",
     "molgr_cpp",
     "xyzgraph_cheminf_full",
+    "xyz2mol_tm",
 )
 
 _METHOD_CLASS_IMPORTS: dict[str, tuple[str, str]] = {
+    "xyz2mol_tm": (
+        "benchmarks.smiles_xyz_benchmark.methods.xyz2mol_tm",
+        "XYZ2MolTMMethod",
+    ),
     "rdkit_determine_bonds": (
         "benchmarks.smiles_xyz_benchmark.methods.rdkit_determine_bonds",
         "RDKitDetermineBondsMethod",

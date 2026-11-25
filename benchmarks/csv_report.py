@@ -18,7 +18,7 @@ def _pyplot():
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Plot tmQMg benchmark accuracy and timing.")
+    parser = argparse.ArgumentParser(description="Plot CSV benchmark accuracy and timing.")
     parser.add_argument(
         "--results",
         type=Path,
@@ -74,7 +74,7 @@ def _comparable_mask(df: pd.DataFrame) -> pd.Series:
 
 def _equivalent_mask(df: pd.DataFrame) -> pd.Series:
     if "evaluator_decision" in df.columns:
-        return df["status"].eq("ok") & df["evaluator_decision"].eq("equivalent")
+        return df["evaluator_decision"].eq("equivalent")
     return _truthy_series(cast(pd.Series, df["equivalent"]))
 
 
@@ -129,7 +129,7 @@ def _plot_accuracy(datasets: list[tuple[str, pd.DataFrame]], out_path: Path) -> 
     ax.set_ylim(0.0, 1.0)
     ax.set_ylabel("Accuracy")
     ax.set_xlabel("Method")
-    ax.set_title("tmQMg Accuracy by Method")
+    ax.set_title("Reference Match Rate by Method")
     ax.grid(axis="y", alpha=0.2)
     ax.legend(title="OpenBabel version")
     fig.tight_layout()
@@ -175,7 +175,7 @@ def _plot_timing_boxplot(datasets: list[tuple[str, pd.DataFrame]], out_path: Pat
     ax.set_xticklabels(method_ids, rotation=20)
     ax.set_ylabel("Timing (ms)")
     ax.set_xlabel("Method")
-    ax.set_title("tmQMg Timing Distribution by Method")
+    ax.set_title("Timing Distribution by Method")
     ax.grid(axis="y", alpha=0.2)
     ax.legend(title="OpenBabel version")
     fig.tight_layout()
@@ -236,7 +236,7 @@ def _plot_timing_recall_boxplot(datasets: list[tuple[str, pd.DataFrame]], out_pa
         if boxplot["boxes"]:
             boxplot["boxes"][0].set_label(label)
 
-        for method_id, position in zip(method_ids, positions, strict=False):
+        for method_id, position in zip(method_ids, positions):
             ax.text(
                 1.015,
                 position,
@@ -258,7 +258,7 @@ def _plot_timing_recall_boxplot(datasets: list[tuple[str, pd.DataFrame]], out_pa
     ax.set_yticklabels(method_ids)
     ax.set_xlabel("Processing time (ms, log scale)")
     ax.set_ylabel("Method")
-    ax.set_title("tmQMg First 1000: Timing Distribution and Recall")
+    ax.set_title("Timing Distribution and Reference Match Rate")
     ax.grid(axis="x", which="both", alpha=0.22)
     if grouped:
         ax.legend(title="Dataset")
@@ -281,9 +281,9 @@ def main() -> int:
     args = _parse_args()
     datasets = _normalize_results(args.results, args.labels)
     args.out_dir.mkdir(parents=True, exist_ok=True)
-    _plot_accuracy(datasets, args.out_dir / "tmqmg_accuracy.png")
-    _plot_timing_boxplot(datasets, args.out_dir / "tmqmg_timing_boxplot.png")
-    _plot_timing_recall_boxplot(datasets, args.out_dir / "tmqmg_timing_recall_boxplot.png")
+    _plot_accuracy(datasets, args.out_dir / "accuracy.png")
+    _plot_timing_boxplot(datasets, args.out_dir / "timing_boxplot.png")
+    _plot_timing_recall_boxplot(datasets, args.out_dir / "timing_recall_boxplot.png")
     return 0
 
 

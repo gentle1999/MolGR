@@ -222,8 +222,7 @@ act-artifacts/
 
 # KDE directory preferences
 
-# Local review databases, queue exports, benchmark runs, and reviewer state.
-# Portable review tooling lives under tools/molgr_review.
+# Local datasets, benchmark runs, reports, and historical working data.
 .local/
 .directory
 
@@ -454,3 +453,8 @@ compile_commands.json
 .omm
 .tmp
 image
+
+# External benchmark datasets and generated fixture databases.
+/datasets/tmqmg/
+/datasets/tmqmg-corrected/
+/tests/data/**/*.sqlite*

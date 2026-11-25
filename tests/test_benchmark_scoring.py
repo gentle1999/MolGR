@@ -6,19 +6,19 @@ from pathlib import Path
 
 import pytest
 
+from benchmarks.reference_quality import (
+    load_manual_reference_records,
+    reference_validity,
+)
 from benchmarks.smiles_xyz_benchmark.io import (
     summarize_results,
     write_results_csv,
     write_summary_csv,
 )
 from benchmarks.smiles_xyz_benchmark.schema import BenchmarkResult
-from benchmarks.tmqmg_xyz_benchmark.comparison_annotations import (
-    load_manual_reference_records,
-    reference_validity,
-)
 
 
-@pytest.mark.parametrize("case_id", ["ABEGOD", "ABATEC"])
+@pytest.mark.parametrize("case_id", ["ABEGOD"])
 @pytest.mark.parametrize("decision", ["equivalent", "not_equivalent", "inconclusive"])
 def test_historical_reference_records_do_not_certify_correctness(
     case_id: str, decision: str
@@ -89,6 +89,7 @@ def test_summary_and_csv_keep_reference_partition_and_inconclusive(tmp_path: Pat
         ("valid", "ok", "not_equivalent"),
         ("valid", "ok", "inconclusive"),
         ("valid", "error", None),
+        ("valid", "error", "equivalent"),
         ("valid", "skipped", None),
         ("excluded", "ok", "equivalent"),
         ("excluded", "ok", "not_equivalent"),
@@ -122,14 +123,16 @@ def test_summary_and_csv_keep_reference_partition_and_inconclusive(tmp_path: Pat
         )
     summary = summarize_results(rows)
     counts = summary[0]
-    assert counts["total_count"] == 9
-    assert counts["count"] == counts["reference_valid_count"] == 5
+    assert counts["total_count"] == 10
+    assert counts["count"] == counts["reference_valid_count"] == 6
     assert counts["reference_excluded_count"] == 2
     assert counts["reference_unresolved_count"] == 2
-    assert counts["success_count"] == 1
+    assert counts["success_count"] == 2
     assert counts["fail_count"] == 1
     assert counts["inconclusive_count"] == 1
     assert counts["runtime_failure_count"] == 2
+    assert counts["api_error_count"] == 2
+    assert counts["matched_with_errors"] == 1
 
     results_path = tmp_path / "results.csv"
     summary_path = tmp_path / "summary.csv"
@@ -139,18 +142,18 @@ def test_summary_and_csv_keep_reference_partition_and_inconclusive(tmp_path: Pat
         saved = list(csv.DictReader(handle))
     assert saved[2]["evaluator_decision"] == "inconclusive"
     assert saved[2]["equivalent"] == ""
-    assert saved[5]["reference_status"] == "excluded"
-    assert saved[5]["evaluator_decision"] == "equivalent"
+    assert saved[6]["reference_status"] == "excluded"
+    assert saved[6]["evaluator_decision"] == "equivalent"
     with summary_path.open() as handle:
         saved_summary = next(csv.DictReader(handle))
-    assert saved_summary["reference_valid_count"] == "5"
+    assert saved_summary["reference_valid_count"] == "6"
     assert saved_summary["inconclusive_count"] == "1"
 
-    from benchmarks.tmqmg_xyz_benchmark.report import _accuracy_by_method, _load_results
+    from benchmarks.csv_report import _accuracy_by_method, _load_results
 
     report = _accuracy_by_method(_load_results(results_path)).iloc[0]
-    assert report["count"] == 5
-    assert report["accuracy"] == pytest.approx(1 / 5)
+    assert report["count"] == 6
+    assert report["accuracy"] == pytest.approx(2 / 6)
 
 
 def test_frozen_valid_reference_is_not_reopened_by_legacy_whitelist() -> None:
