@@ -758,25 +758,13 @@ uv run ruff check \
   tests/test_force_field_scoring_policy.py
 ```
 
-For tmQMg regression checks, compare only the MolGR C++ and fallback methods
-when validating backend parity:
+Check C++ and Python backend parity, including coordination bonds, against the offline tmQMg fixtures.
 
 ```bash
-bash scripts/benchmark_env.sh run python benchmarks/tmqmg_xyz_benchmark/run.py \
-  --csv /mnt/e/download/tmQMg_properties_and_targets.csv \
-  --xyz-dir /mnt/e/download/tmQMg_xyz/xyz \
-  --limit 1000 \
-  --out benchmarks/_runs/<run-name> \
-  --progress-every 50 \
-  --case-timeout-seconds 1.0 \
-  --cpp-accelerations all \
-  --methods molgr_cpp,molgr_fallback \
-  --process-workers 1
+uv run pytest tests/test_tmqmg_published_regression.py::test_backends_match_with_coordination_bonds
 ```
 
-Increase `--process-workers` only for throughput measurements. Process-level
-parallelism stacks with C++ target-bucket threads, so high worker counts can
-compete for the same CPU resources.
+For benchmarks on the published release, use the [dataset benchmark guide](../../benchmarks/dataset_xyz_benchmark/README.md#tmqmg-corrected).
 
 ### Maintenance Boundaries
 

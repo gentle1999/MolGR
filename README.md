@@ -342,17 +342,18 @@ bash scripts/benchmark_env.sh run python benchmarks/molfile_xyz_benchmark/run.py
   --out benchmarks/_runs/molfile-demo
 ```
 
-Run a tmQMg backend parity subset:
+Compare both backends on a small tmQMg-Corrected sample on Linux. First [install the pinned release](benchmarks/dataset_xyz_benchmark/README.md#tmqmg-corrected).
 
 ```bash
-bash scripts/benchmark_env.sh run python benchmarks/tmqmg_xyz_benchmark/run.py \
-  --csv /path/to/tmqmg.csv \
-  --xyz-dir /path/to/xyz \
-  --limit 1000 \
-  --out benchmarks/_runs/tmqmg-parity \
-  --case-timeout-seconds 1.0 \
-  --cpp-accelerations all \
-  --methods molgr_cpp,molgr_fallback
+bash scripts/benchmark_env.sh run python -m benchmarks.dataset_xyz_benchmark.prepare \
+  --dataset tmqmg-corrected --source .local/datasets/tmqmg-corrected \
+  --limit-molecules 10 --out benchmarks/_runs/tmqmg-demo/cases.sqlite
+
+for method in molgr_cpp molgr_fallback; do
+  bash scripts/benchmark_env.sh run python -m benchmarks.dataset_xyz_benchmark.run \
+    --cases benchmarks/_runs/tmqmg-demo/cases.sqlite --method "$method" \
+    --workers 1 --out benchmarks/_runs/tmqmg-demo/results
+done
 ```
 
 For repeated benchmark commands, switch the current shell environment:

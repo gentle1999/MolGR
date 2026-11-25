@@ -570,23 +570,13 @@ uv run ruff check \
   tests/test_force_field_scoring_policy.py
 ```
 
-验证 tmQMg 后端对齐时，只比较 MolGR C++ 和 fallback 两个方法：
+使用离线 tmQMg 夹具比较 C++ 和 Python 后端生成的分子图，比较时包含配位键。
 
 ```bash
-bash scripts/benchmark_env.sh run python benchmarks/tmqmg_xyz_benchmark/run.py \
-  --csv /mnt/e/download/tmQMg_properties_and_targets.csv \
-  --xyz-dir /mnt/e/download/tmQMg_xyz/xyz \
-  --limit 1000 \
-  --out benchmarks/_runs/<run-name> \
-  --progress-every 50 \
-  --case-timeout-seconds 1.0 \
-  --cpp-accelerations all \
-  --methods molgr_cpp,molgr_fallback \
-  --process-workers 1
+uv run pytest tests/test_tmqmg_published_regression.py::test_backends_match_with_coordination_bonds
 ```
 
-只有在测吞吐时才增加 `--process-workers`。进程级并行会与 C++ target-bucket 线程叠加，
-过高 worker 数会竞争同一批 CPU 资源。
+发布数据集上的性能测试见[数据集 benchmark 指南](../../benchmarks/dataset_xyz_benchmark/README.zh-CN.md#tmqmg-corrected)。
 
 ### 维护边界
 

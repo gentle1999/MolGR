@@ -314,17 +314,18 @@ bash scripts/benchmark_env.sh run python benchmarks/molfile_xyz_benchmark/run.py
   --out benchmarks/_runs/molfile-demo
 ```
 
-运行一个 tmQMg 后端对齐子集：
+在 Linux 上比较两个后端对同一组 tmQMg-Corrected 样本的重建结果。先按[数据准备说明](benchmarks/dataset_xyz_benchmark/README.zh-CN.md#tmqmg-corrected)获取指定版本。
 
 ```bash
-bash scripts/benchmark_env.sh run python benchmarks/tmqmg_xyz_benchmark/run.py \
-  --csv /path/to/tmqmg.csv \
-  --xyz-dir /path/to/xyz \
-  --limit 1000 \
-  --out benchmarks/_runs/tmqmg-parity \
-  --case-timeout-seconds 1.0 \
-  --cpp-accelerations all \
-  --methods molgr_cpp,molgr_fallback
+bash scripts/benchmark_env.sh run python -m benchmarks.dataset_xyz_benchmark.prepare \
+  --dataset tmqmg-corrected --source .local/datasets/tmqmg-corrected \
+  --limit-molecules 10 --out benchmarks/_runs/tmqmg-demo/cases.sqlite
+
+for method in molgr_cpp molgr_fallback; do
+  bash scripts/benchmark_env.sh run python -m benchmarks.dataset_xyz_benchmark.run \
+    --cases benchmarks/_runs/tmqmg-demo/cases.sqlite --method "$method" \
+    --workers 1 --out benchmarks/_runs/tmqmg-demo/results
+done
 ```
 
 连续运行 benchmark 命令时，也可以切换当前 shell 环境：
