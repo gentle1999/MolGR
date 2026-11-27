@@ -15,7 +15,7 @@ DEFAULT_POLICY = {
 
 
 def comparison_policy(source, timeout=None):
-    """Resolve a prepared source's policy, respecting publisher-pinned settings."""
+    """Copy the source policy and apply an optional wall-time limit for this run."""
     if (
         source.get("dataset") == "borylxat"
         and source.get("release", {}).get("geometry_basis") != "GS_OPT"
@@ -32,14 +32,16 @@ def comparison_policy(source, timeout=None):
     budget = policy["max_resonance"]
     if type(budget) is not int or budget < 1:
         raise ValueError("Invalid comparison policy: max_resonance")
+    source_timeout = _checked_timeout(policy["comparison_timeout_seconds"])
     if timeout is not None:
-        if (
-            source.get("comparison_policy_locked")
-            and timeout != policy["comparison_timeout_seconds"]
-        ):
-            raise ValueError("Source pins the comparison policy; its timeout cannot be overridden")
+        timeout = _checked_timeout(timeout)
+        if source.get("comparison_policy_locked") and timeout > source_timeout:
+            raise ValueError("Comparison timeout exceeds the publisher's limit")
         policy["comparison_timeout_seconds"] = timeout
-    value = policy["comparison_timeout_seconds"]
+    return policy
+
+
+def _checked_timeout(value):
     if (
         isinstance(value, bool)
         or not isinstance(value, (int, float))
@@ -47,7 +49,7 @@ def comparison_policy(source, timeout=None):
         or value <= 0
     ):
         raise ValueError("Invalid comparison policy: comparison_timeout_seconds")
-    return policy
+    return value
 
 
 def native_reference(data, digest):

@@ -342,8 +342,8 @@ def test_unified_run_report_resume_and_pinned_policy(release):
     prepare(root, store, "tmqmg-corrected")
     out = root / "results"
     method = "rdkit_determine_bonds"
-    with pytest.raises(ValueError, match="Source pins"):
-        run(store, out, method, 1, comparison_timeout=5)
+    with pytest.raises(ValueError, match="exceeds the publisher"):
+        run(store, out, method, 1, comparison_timeout=61)
     run(store, out, method, 1)
     result = out / f"{method}.sqlite"
     report = summarize(store, result)
@@ -357,6 +357,14 @@ def test_unified_run_report_resume_and_pinned_policy(release):
             "SELECT case_id,status,decision FROM results"
         ).fetchone()
         assert case_id == 2 and status == "ok" and decision == "not_equivalent"
+    with pytest.raises(ValueError, match="provenance differs"):
+        run(store, out, method, 1, comparison_timeout=5)
+    cross_dataset = root / "cross-dataset"
+    run(store, cross_dataset, method, 1, timeout=10, comparison_timeout=5)
+    timed = summarize(store, cross_dataset / f"{method}.sqlite")["provenance"]
+    assert timed["source"]["comparison_policy"] == manifest["benchmark"]
+    assert timed["comparison_policy"] == dict(manifest["benchmark"], comparison_timeout_seconds=5)
+    assert timed["timeout_seconds"] == 10 and timed["comparison_timeout_seconds"] == 5
     before = result.read_bytes()
     run(store, out, method, 1)  # Nothing is reconstructed again.
     assert result.read_bytes() == before
@@ -379,7 +387,7 @@ def _interrupted_worker(conn, cpu, source, method_id, log, policy):
     case_id = conn.recv()
     if case_id is None:
         return
-    # Source policy is the only comparison timeout input to the worker.
+    # The parent and worker use the same effective comparison deadline.
     assert policy["comparison_timeout_seconds"] == 0.05
     if method_id == "molgr_cpp":
         conn.send(("comparison", {"status": "error", "method_ms": 12.5, "decision": None}))
@@ -409,14 +417,12 @@ def test_unified_watchdogs_preserve_failure_denominator(
     from benchmarks.dataset_xyz_benchmark.prepare import prepare
     from benchmarks.dataset_xyz_benchmark.report import summarize
 
-    root, manifest = release
-    manifest["benchmark"]["comparison_timeout_seconds"] = 0.05
-    _pin_fixture(root, manifest, monkeypatch)
+    root, _ = release
     store = root / "watchdog.sqlite"
     prepare(root, store, "tmqmg-corrected")
     monkeypatch.setattr(runner, "worker", _interrupted_worker)
     out = root / "results"
-    runner.run(store, out, method, 1, timeout=2)
+    runner.run(store, out, method, 1, timeout=2, comparison_timeout=0.05)
     with sqlite3.connect(out / f"{method}.sqlite") as db:
         record = json.loads(zlib.decompress(db.execute("SELECT detail FROM results").fetchone()[0]))
     assert record["status"] == status
