@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
 from typing import cast
 
 from openbabel import openbabel as ob
@@ -36,21 +37,26 @@ def _get_int_data(atom: ob.OBAtom, attribute: str) -> int:
     if data is None:
         return 0
     try:
-        return int(ob.toPairData(data).GetValue())
+        # OBPairData supplies its string value through the virtual OBGenericData accessor.
+        return int(data.GetValue())
     except (TypeError, ValueError):
         return 0
 
 
-def _set_int_data(atom: ob.OBAtom, attribute: str, value: int) -> None:
-    """Preserve explicit zero; missing generic data continues to mean unknown."""
-
-    atom.DeleteData(attribute)
+@lru_cache(maxsize=32)
+def _electron_label(attribute: str, value: int) -> ob.OBPairData:
+    """Create a label template. Each atom receives a separate Open Babel copy."""
     data = ob.OBPairData()
     data.SetAttribute(attribute)
-    data.SetValue(str(int(value)))
+    data.SetValue(str(value))
     data.SetOrigin(ob.local)
-    # The Python bindings do not expose OBBase::SetData. CloneData owns a copy.
-    atom.CloneData(data)
+    return data
+
+
+def _set_int_data(atom: ob.OBAtom, attribute: str, value: int) -> None:
+    """Preserve explicit zero; missing generic data continues to mean unknown."""
+    atom.DeleteData(attribute)
+    atom.CloneData(_electron_label(attribute, int(value)))
 
 
 def get_unpaired_electron_count(atom: ob.OBAtom) -> int:

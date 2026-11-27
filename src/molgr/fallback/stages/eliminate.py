@@ -23,7 +23,7 @@ from molgr.fallback.utils.electrons import (
     set_unpaired_electron_count,
     set_unresolved_two_electron_center,
 )
-from molgr.fallback.utils.ob_graph import atom_neighbors, mol_atoms
+from molgr.fallback.utils.ob_graph import atom_neighbors, indexed_atoms
 
 
 @dataclass(frozen=True)
@@ -41,52 +41,77 @@ class _ChargeAssignmentAction:
     spin_created: int = 0
 
 
+# The single-atom anion patterns rank a neutral radical by element and total
+# valence (SMARTS v). Carbon and hydrogen tiers require a negative charge budget.
+_ANION_RADICAL_TIERS = {
+    (9, 0): 10,
+    (8, 0): 20,
+    (8, 1): 21,
+    (17, 0): 30,
+    (7, 0): 40,
+    (7, 1): 41,
+    (7, 2): 42,
+    (35, 0): 50,
+    (53, 0): 60,
+    (16, 0): 70,
+    (16, 1): 71,
+    (34, 0): 80,
+    (34, 1): 81,
+    (15, 0): 90,
+    (15, 1): 91,
+    (15, 2): 92,
+    (5, 0): 95,
+    (5, 1): 96,
+    (5, 2): 97,
+    (6, 3): 100,
+    (6, 0): 110,
+    (6, 1): 110,
+    (6, 2): 110,
+    (1, 0): 120,
+}
+_BORON_REDUCTION_TIER = 98
+_GENERIC_ANION_TIER = 1000
+
+
 @dataclass(frozen=True)
-class _NegativeChargeAssignmentPattern:
-    """A ranked local environment eligible to receive a unit of negative charge."""
+class _AnionSite:
+    """Neutral atom that can accept charge before the next bond-order change."""
 
-    smarts: pybel.Smarts
+    atom_idx: int
+    atomic_num: int
     tier: int
-    target_idx: int = 0
-    requires_negative_deficit: bool = False
+    unpaired: int
 
-
-_NEGATIVE_CHARGE_ASSIGNMENT_PATTERNS = (
-    _NegativeChargeAssignmentPattern(smarts.ELIM_NEGATIVE_F, tier=10),
-    _NegativeChargeAssignmentPattern(smarts.ELIM_NEGATIVE_O, tier=20),
-    _NegativeChargeAssignmentPattern(smarts.ELIM_NEGATIVE_O_1, tier=21),
-    _NegativeChargeAssignmentPattern(smarts.ELIM_NEGATIVE_CL, tier=30),
-    _NegativeChargeAssignmentPattern(smarts.ELIM_NEGATIVE_N, tier=40),
-    _NegativeChargeAssignmentPattern(smarts.ELIM_NEGATIVE_N_1, tier=41),
-    _NegativeChargeAssignmentPattern(smarts.ELIM_NEGATIVE_N_2, tier=42),
-    _NegativeChargeAssignmentPattern(smarts.ELIM_NEGATIVE_BR, tier=50),
-    _NegativeChargeAssignmentPattern(smarts.ELIM_NEGATIVE_I, tier=60),
-    _NegativeChargeAssignmentPattern(smarts.ELIM_NEGATIVE_S, tier=70),
-    _NegativeChargeAssignmentPattern(smarts.ELIM_NEGATIVE_S_1, tier=71),
-    _NegativeChargeAssignmentPattern(smarts.ELIM_NEGATIVE_SE, tier=80),
-    _NegativeChargeAssignmentPattern(smarts.ELIM_NEGATIVE_SE_1, tier=81),
-    _NegativeChargeAssignmentPattern(smarts.ELIM_NEGATIVE_P, tier=90),
-    _NegativeChargeAssignmentPattern(smarts.ELIM_NEGATIVE_P_1, tier=91),
-    _NegativeChargeAssignmentPattern(smarts.ELIM_NEGATIVE_P_2, tier=92),
-    _NegativeChargeAssignmentPattern(smarts.ELIM_NEGATIVE_B, tier=95),
-    _NegativeChargeAssignmentPattern(smarts.ELIM_NEGATIVE_B_1, tier=96),
-    _NegativeChargeAssignmentPattern(smarts.ELIM_NEGATIVE_B_2, tier=97),
-    _NegativeChargeAssignmentPattern(
-        smarts.ELIM_NEGATIVE_C_V3,
-        tier=100,
-        requires_negative_deficit=True,
-    ),
-    _NegativeChargeAssignmentPattern(
-        smarts.ELIM_NEGATIVE_C_LOW,
-        tier=110,
-        requires_negative_deficit=True,
-    ),
-    _NegativeChargeAssignmentPattern(
-        smarts.ELIM_NEGATIVE_H,
-        tier=120,
-        requires_negative_deficit=True,
-    ),
-)
+    def action(
+        self, charge: int, real_unpaired: int, radical_target: int | None
+    ) -> _ChargeAssignmentAction | None:
+        """Evaluate this site's charge and spin costs against the current budgets."""
+        if charge == 0 and self.tier >= _BORON_REDUCTION_TIER:
+            return None
+        creates_spin = self.tier == _BORON_REDUCTION_TIER
+        consumes_center = self.unpaired == 0 and not creates_spin
+        consumed_spin = 0
+        if creates_spin:
+            if radical_target is None or real_unpaired >= radical_target:
+                return None
+            amount = 1
+        elif consumes_center:
+            if charge > -2:
+                return None
+            amount = 2
+        else:
+            consumed_spin = min(self.unpaired, max(1, -charge))
+            amount = consumed_spin
+        after = charge + amount
+        return _ChargeAssignmentAction(
+            atom_idx=self.atom_idx,
+            formal_charge=-amount,
+            spin_consumed=consumed_spin,
+            spin_created=int(creates_spin),
+            consume_unresolved_center=consumes_center,
+            charge_delta=amount,
+            score_key=(self.tier, abs(after), max(after, 0), self.atomic_num, self.atom_idx),
+        )
 
 
 def _is_closed_shell_trivalent_boron(atom: ob.OBAtom) -> bool:
@@ -166,12 +191,6 @@ def _atom_idx(atom: ob.OBAtom) -> int:
     return int(atom.GetIdx())
 
 
-def _negative_charge_assignment_amount(atom: ob.OBAtom, given_charge: int) -> int:
-    """Choose how many real unpaired electrons a multivalent anion action consumes."""
-
-    return min(get_unpaired_electron_count(atom), max(1, abs(given_charge)))
-
-
 def _positive_charge_assignment_actions(
     omol: pybel.Molecule,
     obmol: ob.OBMol,
@@ -184,12 +203,6 @@ def _positive_charge_assignment_actions(
     deficit is at least two, the generic tier also admits a pure unresolved center
     as an atomic ``+2`` action. Active lone pairs remain excluded.
     """
-
-    real_radicals = sum(get_unpaired_electron_count(atom) for atom in mol_atoms(obmol))
-    unresolved_electrons = sum(
-        1 for atom in mol_atoms(obmol) if has_unresolved_two_electron_center(atom)
-    )
-    tier5_allowed = abs(given_charge - 1) <= real_radicals + unresolved_electrons * 2 - 1
 
     actions: list[_ChargeAssignmentAction] = []
     seen: set[tuple[int, int, int]] = set()
@@ -274,6 +287,7 @@ def _positive_charge_assignment_actions(
         ):
             append_action(atom, tier=10, match_order=match_order, amount=1)
 
+    dipole_budget_checked = False
     for match_order, dipole_idxs in enumerate(
         cast(List[Tuple[int, int]], smarts.ELIM_POSITIVE_DIPOLE.findall(omol))
     ):
@@ -281,186 +295,90 @@ def _positive_charge_assignment_actions(
         charge_atom = cast(ob.OBAtom, obmol.GetAtom(dipole_idxs[1]))
         bond = cast(ob.OBBond, obmol.GetBond(dipole_idxs[0], dipole_idxs[1]))
         if (
-            tier5_allowed
-            and radical_atom.GetFormalCharge() == 0
-            and get_unpaired_electron_count(radical_atom) == 1
-            and not has_unresolved_two_electron_center(radical_atom)
-            and bond is not None
+            radical_atom.GetFormalCharge() != 0
+            or get_unpaired_electron_count(radical_atom) != 1
+            or has_unresolved_two_electron_center(radical_atom)
+            or bond is None
         ):
-            actions.append(
-                _ChargeAssignmentAction(
-                    atom_idx=_atom_idx(radical_atom),
-                    formal_charge=0,
-                    spin_consumed=1,
-                    consume_unresolved_center=False,
-                    charge_delta=-1,
-                    score_key=(
-                        4 if restores_azinium_ring(charge_atom, radical_atom) else 5,
-                        abs(given_charge - 1),
-                        max(given_charge - 1, 0),
-                        _atom_idx(radical_atom),
-                        match_order,
-                    ),
-                    bond_idx=bond.GetIdx(),
-                    charge_atom_idx=_atom_idx(charge_atom),
-                )
+            continue
+        if not dipole_budget_checked:
+            # The budget is shared by all dipoles in this unmodified candidate.
+            electrons = sum(
+                get_unpaired_electron_count(atom) + 2 * has_unresolved_two_electron_center(atom)
+                for atom in indexed_atoms(obmol)
             )
-
-    for match_order, atom in enumerate(mol_atoms(obmol)):
-        if (
-            given_charge > 0
-            and atom.GetFormalCharge() == 0
-            and get_unpaired_electron_count(atom) >= 1
-        ):
-            append_action(
-                atom,
-                tier=100,
-                match_order=match_order,
-                amount=min(get_unpaired_electron_count(atom), given_charge),
+            if abs(given_charge - 1) > electrons - 1:
+                break
+            dipole_budget_checked = True
+        actions.append(
+            _ChargeAssignmentAction(
+                atom_idx=_atom_idx(radical_atom),
+                formal_charge=0,
+                spin_consumed=1,
+                consume_unresolved_center=False,
+                charge_delta=-1,
+                score_key=(
+                    4 if restores_azinium_ring(charge_atom, radical_atom) else 5,
+                    abs(given_charge - 1),
+                    max(given_charge - 1, 0),
+                    _atom_idx(radical_atom),
+                    match_order,
+                ),
+                bond_idx=bond.GetIdx(),
+                charge_atom_idx=_atom_idx(charge_atom),
             )
-        append_unresolved_action(atom, match_order=match_order)
-
-    return sorted(actions, key=lambda action: action.score_key)
-
-
-def _negative_charge_assignment_actions(
-    omol: pybel.Molecule,
-    obmol: ob.OBMol,
-    given_charge: int,
-    total_radical_electrons: int | None = None,
-    metal_distances: tuple[int, ...] = (),
-) -> list[_ChargeAssignmentAction]:
-    """Rank anion actions from radicals or a pure unresolved 2e center.
-
-    Radical actions preserve their existing SMARTS priority and may seed charge
-    separation at zero budget. An unresolved center is admitted only for a real
-    deficit of at least two and becomes ``-2``. With a negative charge deficit
-    and remaining radical budget, neutral Bv3 can accept an electron as B-.
-    Active lone pairs remain excluded.
-    """
+        )
 
     if given_charge > 0:
-        return []
-
-    actions: list[_ChargeAssignmentAction] = []
-    seen: set[tuple[int, int, int]] = set()
-
-    def append_action(atom: ob.OBAtom, *, tier: int, match_order: int, amount: int) -> None:
-        if atom is None or amount <= 0 or has_unresolved_two_electron_center(atom):
-            return
-        atom_idx = _atom_idx(atom)
-        key = (atom_idx, tier, amount)
-        if key in seen:
-            return
-        seen.add(key)
-        charge_after = given_charge + amount
-        atomic_num = int(atom.GetAtomicNum())
-        actions.append(
-            _ChargeAssignmentAction(
-                atom_idx=atom_idx,
-                formal_charge=-amount,
-                spin_consumed=amount,
-                consume_unresolved_center=False,
-                charge_delta=amount,
-                score_key=(
-                    tier,
-                    abs(charge_after),
-                    max(charge_after, 0),
-                    atomic_num,
-                    atom_idx,
-                    match_order,
-                ),
-            )
-        )
-
-    def append_unresolved_action(atom: ob.OBAtom, *, match_order: int) -> None:
-        if (
-            atom is None
-            or given_charge > -2
-            or atom.GetFormalCharge() != 0
-            or not has_unresolved_two_electron_center(atom)
-            or get_unpaired_electron_count(atom) != 0
-            or get_lone_pair_count(atom) != 0
-        ):
-            return
-        atom_idx = _atom_idx(atom)
-        charge_after = given_charge + 2
-        actions.append(
-            _ChargeAssignmentAction(
-                atom_idx=atom_idx,
-                formal_charge=-2,
-                spin_consumed=0,
-                consume_unresolved_center=True,
-                charge_delta=2,
-                score_key=(
-                    1000,
-                    abs(charge_after),
-                    max(charge_after, 0),
-                    int(atom.GetAtomicNum()),
-                    atom_idx,
-                    match_order,
-                ),
-            )
-        )
-
-    for pattern in _NEGATIVE_CHARGE_ASSIGNMENT_PATTERNS:
-        if pattern.requires_negative_deficit and given_charge >= 0:
-            continue
-        for match_order, pattern_idxs in enumerate(
-            cast(List[Tuple[int, ...]], pattern.smarts.findall(omol))
-        ):
-            atom = cast(ob.OBAtom, obmol.GetAtom(pattern_idxs[pattern.target_idx]))
+        for match_order, atom in enumerate(indexed_atoms(obmol)):
             if atom.GetFormalCharge() == 0 and get_unpaired_electron_count(atom) >= 1:
                 append_action(
                     atom,
-                    tier=pattern.tier,
+                    tier=100,
                     match_order=match_order,
-                    amount=_negative_charge_assignment_amount(atom, given_charge),
-                )
-
-    if given_charge < 0:
-        can_create_radical = (
-            total_radical_electrons is not None
-            and sum(get_unpaired_electron_count(atom) for atom in mol_atoms(obmol))
-            < total_radical_electrons
-        )
-        for match_order, atom in enumerate(mol_atoms(obmol)):
-            if can_create_radical and _is_closed_shell_trivalent_boron(atom):
-                atom_idx = _atom_idx(atom)
-                charge_after = given_charge + 1
-                actions.append(
-                    _ChargeAssignmentAction(
-                        atom_idx=atom_idx,
-                        formal_charge=-1,
-                        spin_consumed=0,
-                        consume_unresolved_center=False,
-                        charge_delta=1,
-                        score_key=(
-                            98,
-                            abs(charge_after),
-                            max(charge_after, 0),
-                            5,
-                            atom_idx,
-                            match_order,
-                        ),
-                        spin_created=1,
-                    )
-                )
-            if atom.GetFormalCharge() == 0 and get_unpaired_electron_count(atom) >= 1:
-                append_action(
-                    atom,
-                    tier=1000,
-                    match_order=match_order,
-                    amount=_negative_charge_assignment_amount(atom, given_charge),
+                    amount=min(get_unpaired_electron_count(atom), given_charge),
                 )
             append_unresolved_action(atom, match_order=match_order)
 
-    if metal_distances and len(actions) > 1:
-        # Chemistry and budget occupy the first four fields; atom and match order follow.
-        return sorted(
-            actions, key=lambda a: (*a.score_key[:4], metal_distances[a.atom_idx], *a.score_key[4:])
-        )
     return sorted(actions, key=lambda action: action.score_key)
+
+
+def _negative_charge_sites(
+    obmol: ob.OBMol, given_charge: int, radical_target: int | None
+) -> tuple[dict[int, _AnionSite], int]:
+    """Index neutral acceptors and count all real radicals, including those on charged atoms.
+
+    Anion assignment changes only the selected neutral atom's charge and
+    electronic labels. Its neighbours retain their valences and priorities.
+    The index is private to one elimination pass and is discarded before any
+    later resonance stage can change a bond.
+    """
+    sites: dict[int, _AnionSite] = {}
+    real_unpaired = 0
+    for atom in indexed_atoms(obmol):
+        spin = get_unpaired_electron_count(atom)
+        real_unpaired += spin
+        if (spin == 0 and given_charge == 0) or atom.GetFormalCharge() != 0:
+            continue
+        element = int(atom.GetAtomicNum())
+        if spin > 0:
+            if has_unresolved_two_electron_center(atom):
+                continue
+            tier = _ANION_RADICAL_TIERS.get((element, atom.GetTotalValence()), _GENERIC_ANION_TIER)
+        elif (
+            given_charge <= -2
+            and spin == 0
+            and has_unresolved_two_electron_center(atom)
+            and not get_lone_pair_count(atom)
+        ):
+            tier = _GENERIC_ANION_TIER
+        elif element == 5 and radical_target is not None and _is_closed_shell_trivalent_boron(atom):
+            tier = _BORON_REDUCTION_TIER
+        else:
+            continue
+        index = _atom_idx(atom)
+        sites[index] = _AnionSite(index, element, tier, spin)
+    return sites, real_unpaired
 
 
 def eliminate_high_positive_charge_atoms(
@@ -605,7 +523,7 @@ def eliminate_carbene_neighbor_heteroatom(
         return has_unresolved_two_electron_center(obatom)
 
     hit = False
-    for obatom in mol_atoms(cast(ob.OBMol, omol.OBMol)):
+    for obatom in indexed_atoms(cast(ob.OBMol, omol.OBMol)):
         if possible_carbene_atom_checker(obatom):
             if any(
                 get_unpaired_electron_count(neighbor) == 1 for neighbor in atom_neighbors(obatom)
@@ -781,7 +699,7 @@ def eliminate_possible_cp_like_radical_anion(
 
     def available_unpaired_electrons() -> int:
         return (
-            sum(get_unpaired_electron_count(atom) for atom in mol_atoms(obmol))
+            sum(get_unpaired_electron_count(atom) for atom in indexed_atoms(obmol))
             - total_radical_electrons
             - abs(given_charge)
         )
@@ -897,21 +815,35 @@ def eliminate_negative_charges(
     obmol = cast(ob.OBMol, omol.OBMol)
     hit = False
 
-    while given_charge <= 0:
-        if total_radical_electrons is not None and given_charge == 0:
-            real_unpaired = sum(get_unpaired_electron_count(atom) for atom in mol_atoms(obmol))
-            if real_unpaired <= total_radical_electrons:
-                break
-
-        actions = _negative_charge_assignment_actions(
-            omol, obmol, given_charge, total_radical_electrons, metal_distances
-        )
+    if given_charge > 0:
+        return omol, given_charge, hit
+    sites, real_unpaired = _negative_charge_sites(obmol, given_charge, total_radical_electrons)
+    while sites and given_charge <= 0:
+        if (
+            given_charge == 0
+            and total_radical_electrons is not None
+            and real_unpaired <= total_radical_electrons
+        ):
+            break
+        actions = [
+            action
+            for site in sites.values()
+            if (action := site.action(given_charge, real_unpaired, total_radical_electrons))
+            is not None
+        ]
         if not actions:
             break
-        action = actions[0]
+        if metal_distances and len(actions) > 1:
+            action = min(
+                actions, key=lambda a: (*a.score_key[:4], metal_distances[a.atom_idx], a.atom_idx)
+            )
+        else:
+            action = min(actions, key=lambda a: a.score_key)
         if not _apply_charge_assignment_action(obmol, action):
             break
+        del sites[action.atom_idx]
         given_charge += action.charge_delta
+        real_unpaired += action.spin_created - action.spin_consumed
         hit = True
 
     return omol, given_charge, hit

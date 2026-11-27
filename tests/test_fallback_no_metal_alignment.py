@@ -58,6 +58,7 @@ from molgr.fallback.stages.preprocess import make_connections, pre_clean
 from molgr.fallback.state import ReconstructionState
 from molgr.fallback.utils import resonance as resonance_utils
 from molgr.fallback.utils.electrons import (
+    UNPAIRED_ELECTRON_COUNT_PROP,
     get_lone_pair_count,
     get_unpaired_electron_count,
     has_unresolved_two_electron_center,
@@ -1780,6 +1781,66 @@ def test_bv3_negative_charge_assignment_obeys_both_budgets_for_python_and_cpp(
             assert atom.GetFormalCharge() == -get_unpaired_electron_count(atom)
             assert get_lone_pair_count(atom) == 0
             assert not has_unresolved_two_electron_center(atom)
+
+
+@pytest.mark.parametrize(("element", "hydrogens", "boron_charge"), [(6, 3, -1), (8, 1, 0)])
+def test_boron_reduction_ranks_between_oxygen_and_carbon_radicals(
+    element: int, hydrogens: int, boron_charge: int
+) -> None:
+    """With one excess electron, hydroxyl is reduced before BH3 and methyl after BH3."""
+    mol = ob.OBMol()
+    radical = mol.NewAtom()
+    radical.SetAtomicNum(element)
+    set_unpaired_electron_count(radical, 1)
+    boron = mol.NewAtom()
+    boron.SetAtomicNum(5)
+    for atom, count in ((radical, hydrogens), (boron, 3)):
+        for _ in range(count):
+            hydrogen = mol.NewAtom()
+            hydrogen.SetAtomicNum(1)
+            mol.AddBond(atom.GetIdx(), hydrogen.GetIdx(), 1)
+
+    _, remaining, hit = eliminate_negative_charges(pybel.Molecule(mol), -1, 2)
+
+    assert hit and remaining == 0
+    assert boron.GetFormalCharge() == boron_charge
+    assert radical.GetFormalCharge() == -1 - boron_charge
+    assert (
+        get_unpaired_electron_count(boron) == get_unpaired_electron_count(radical) == -boron_charge
+    )
+
+
+def test_explicit_zero_radical_labels_are_owned_by_each_atom() -> None:
+    mol = ob.OBMol()
+    first, second = mol.NewAtom(), mol.NewAtom()
+    for atom in (first, second):
+        set_unpaired_electron_count(atom, 0)
+    label = ob.toPairData(first.GetData(UNPAIRED_ELECTRON_COUNT_PROP))
+    label.SetValue("2")
+    assert get_unpaired_electron_count(first) == 2
+    assert second.HasData(UNPAIRED_ELECTRON_COUNT_PROP)
+    assert get_unpaired_electron_count(second) == 0
+    set_unpaired_electron_count(first, 0)
+    assert get_unpaired_electron_count(first) == 0
+
+
+def test_consuming_an_oxygen_radical_allows_boron_reduction_in_the_same_pass() -> None:
+    mol = ob.OBMol()
+    oxygen = mol.NewAtom()
+    oxygen.SetAtomicNum(8)
+    set_unpaired_electron_count(oxygen, 1)
+    boron = mol.NewAtom()
+    boron.SetAtomicNum(5)
+    for atom in (oxygen, boron, boron, boron):
+        hydrogen = mol.NewAtom()
+        hydrogen.SetAtomicNum(1)
+        mol.AddBond(atom.GetIdx(), hydrogen.GetIdx(), 1)
+
+    _, charge, hit = eliminate_negative_charges(pybel.Molecule(mol), -2, 1)
+
+    assert hit and charge == 0
+    assert (oxygen.GetFormalCharge(), get_unpaired_electron_count(oxygen)) == (-1, 0)
+    assert (boron.GetFormalCharge(), get_unpaired_electron_count(boron)) == (-1, 1)
 
 
 def test_eliminate_negative_charges_prefers_single_radical_heteroatom_even_at_zero_charge_for_python_and_cpp() -> (

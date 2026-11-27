@@ -26,8 +26,8 @@ from molgr.fallback.utils.electrons import (
 )
 from molgr.fallback.utils.ob_graph import (
     atom_neighbors,
-    mol_atoms,
-    mol_bonds,
+    indexed_atoms,
+    indexed_bonds,
     neighbor_bond_order,
     ring_paths,
 )
@@ -90,18 +90,9 @@ def clean_possible_1_3_dipole(
     obmol = cast(ob.OBMol, omol.OBMol)
     hit = False
 
-    def available_unpaired_electrons() -> int:
-        return (
-            sum(get_unpaired_electron_count(atom) for atom in mol_atoms(obmol))
-            - total_radical_electrons
-            - abs(given_charge)
-        )
-
+    available: int | None = None
     matches: List[Tuple[int, int, int]] = list(smarts.CLEAN_POSSIBLE_1_3_DIPOLE.findall(omol))
     for idxs in matches:
-        if available_unpaired_electrons() < 2:
-            break
-
         atom1 = cast(ob.OBAtom, obmol.GetAtom(idxs[0]))
         atom2 = cast(ob.OBAtom, obmol.GetAtom(idxs[1]))
         atom3 = cast(ob.OBAtom, obmol.GetAtom(idxs[2]))
@@ -135,11 +126,20 @@ def clean_possible_1_3_dipole(
         if bond_to_increase.GetBondOrder() >= 3:
             continue
 
+        if available is None:
+            available = (
+                sum(get_unpaired_electron_count(atom) for atom in indexed_atoms(obmol))
+                - total_radical_electrons
+                - abs(given_charge)
+            )
+        if available < 2:
+            break
         bond_to_increase.SetBondOrder(bond_to_increase.GetBondOrder() + 1)
         atom2.SetFormalCharge(1)
         negative_atom.SetFormalCharge(-1)
         set_unpaired_electron_count(atom1, get_unpaired_electron_count(atom1) - 1)
         set_unpaired_electron_count(atom3, get_unpaired_electron_count(atom3) - 1)
+        available -= 2
         hit = True
 
     return omol, hit
@@ -169,28 +169,26 @@ def clean_neighbor_radicals(
             sum(
                 get_unpaired_electron_count(atom)
                 + (2 if has_unresolved_two_electron_center(atom) else 0)
-                for atom in mol_atoms(obmol)
+                for atom in indexed_atoms(obmol)
             )
             - total_radical_electrons
             - abs(given_charge)
         )
 
+    available = available_electron_budget()
     hit = False
-    for bond in list(mol_bonds(obmol)):
-        begin_atom = cast(ob.OBAtom, bond.GetBeginAtom())
-        end_atom = cast(ob.OBAtom, bond.GetEndAtom())
-        begin_unpaired = get_unpaired_electron_count(begin_atom)
-        end_unpaired = get_unpaired_electron_count(end_atom)
-        begin_unresolved = has_unresolved_two_electron_center(begin_atom)
-        end_unresolved = has_unresolved_two_electron_center(end_atom)
-
-        begin_capacity = 2 if begin_unresolved else begin_unpaired
-        end_capacity = 2 if end_unresolved else end_unpaired
-        if begin_capacity <= 0 or end_capacity <= 0:
-            continue
-
-        available = available_electron_budget()
+    for bond in indexed_bonds(obmol):
         if available < 2:
+            break
+        begin_atom = cast(ob.OBAtom, bond.GetBeginAtom())
+        begin_unresolved = has_unresolved_two_electron_center(begin_atom)
+        begin_capacity = 2 if begin_unresolved else get_unpaired_electron_count(begin_atom)
+        if begin_capacity <= 0:
+            continue
+        end_atom = cast(ob.OBAtom, bond.GetEndAtom())
+        end_unresolved = has_unresolved_two_electron_center(end_atom)
+        end_capacity = 2 if end_unresolved else get_unpaired_electron_count(end_atom)
+        if end_capacity <= 0:
             continue
         bond_to_add = min(begin_capacity, end_capacity, available // 2, 3 - bond.GetBondOrder())
         if bond_to_add <= 0:
@@ -214,6 +212,8 @@ def clean_neighbor_radicals(
             else:
                 set_unpaired_electron_count(atom, remaining)
                 assign_charge_radical_for_atom(atom)
+        # Reclassification can change the radical budget after either endpoint reacts.
+        available = available_electron_budget()
         hit = True
     return omol, hit
 
@@ -286,7 +286,7 @@ def clean_1_4_radicals(
 
     def available_unpaired_electrons() -> int:
         return (
-            sum(get_unpaired_electron_count(atom) for atom in mol_atoms(obmol))
+            sum(get_unpaired_electron_count(atom) for atom in indexed_atoms(obmol))
             - total_radical_electrons
             - abs(given_charge)
         )
@@ -352,7 +352,7 @@ def clean_1_6_radicals(
 
     def available_unpaired_electrons() -> int:
         return (
-            sum(get_unpaired_electron_count(atom) for atom in mol_atoms(obmol))
+            sum(get_unpaired_electron_count(atom) for atom in indexed_atoms(obmol))
             - total_radical_electrons
             - abs(given_charge)
         )
@@ -736,28 +736,27 @@ def clean_resonances_10(omol: pybel.Molecule) -> tuple[pybel.Molecule, bool]:
     """
 
     obmol = cast(ob.OBMol, omol.OBMol)
-    res: List[Tuple[int, int, int, int]] = list(smarts.CLEAN_RESONANCE_10.findall(omol))
+    matches = cast(List[Tuple[int, int, int, int]], smarts.CLEAN_RESONANCE_10.findall(omol))
     hit = False
-    while len(res):
-        idxs = res.pop(0)
-        obatom1 = cast(ob.OBAtom, obmol.GetAtom(idxs[0]))
-        obatom3 = cast(ob.OBAtom, obmol.GetAtom(idxs[-1]))
-        obbond1 = cast(ob.OBBond, obmol.GetBond(idxs[0], idxs[1]))
-        obbond2 = cast(ob.OBBond, obmol.GetBond(idxs[1], idxs[2]))
-        obbond3 = cast(ob.OBBond, obmol.GetBond(idxs[2], idxs[3]))
-        if get_unpaired_electron_count(obatom1) == 1 and get_unpaired_electron_count(obatom3) == 1:
-            if not (
-                obbond1.GetBondOrder() == 1
-                and obbond2.GetBondOrder() in (2, 3)
-                and obbond3.GetBondOrder() == 1
-            ):
-                continue
-            obbond2.SetBondOrder(obbond2.GetBondOrder() - 1)
-            obbond1.SetBondOrder(obbond1.GetBondOrder() + 1)
-            obbond3.SetBondOrder(obbond3.GetBondOrder() + 1)
-            set_unpaired_electron_count(obatom1, get_unpaired_electron_count(obatom1) - 1)
-            set_unpaired_electron_count(obatom3, get_unpaired_electron_count(obatom3) - 1)
-            hit = True
+    for first, middle_left, middle_right, last in matches:
+        left = cast(ob.OBAtom, obmol.GetAtom(first))
+        if get_unpaired_electron_count(left) != 1:
+            continue
+        right = cast(ob.OBAtom, obmol.GetAtom(last))
+        if get_unpaired_electron_count(right) != 1:
+            continue
+        bond1 = cast(ob.OBBond, obmol.GetBond(first, middle_left))
+        bond2 = cast(ob.OBBond, obmol.GetBond(middle_left, middle_right))
+        bond3 = cast(ob.OBBond, obmol.GetBond(middle_right, last))
+        middle_order = bond2.GetBondOrder()
+        if bond1.GetBondOrder() != 1 or middle_order not in (2, 3) or bond3.GetBondOrder() != 1:
+            continue
+        bond2.SetBondOrder(middle_order - 1)
+        bond1.SetBondOrder(2)
+        bond3.SetBondOrder(2)
+        set_unpaired_electron_count(left, 0)
+        set_unpaired_electron_count(right, 0)
+        hit = True
     return omol, hit
 
 
@@ -1024,7 +1023,7 @@ def clean_short_diazo_resonance(omol: pybel.Molecule) -> tuple[pybel.Molecule, b
     """
     mol = cast(ob.OBMol, omol.OBMol)
     hit = False
-    for terminal in mol_atoms(mol):
+    for terminal in indexed_atoms(mol):
         if (
             terminal.GetAtomicNum() != 7
             or terminal.GetExplicitDegree() != 1
@@ -1073,7 +1072,7 @@ def clean_stretched_dithiolate_resonance(omol: pybel.Molecule) -> tuple[pybel.Mo
     """
     mol = cast(ob.OBMol, omol.OBMol)
     hit = False
-    for sulfur in mol_atoms(mol):
+    for sulfur in indexed_atoms(mol):
         if (
             sulfur.GetAtomicNum() != 16
             or sulfur.GetExplicitDegree() != 1
@@ -1149,7 +1148,7 @@ def clean_stretched_silyloxonium_resonance(omol: pybel.Molecule) -> tuple[pybel.
     """
     mol = cast(ob.OBMol, omol.OBMol)
     hit = False
-    for oxygen in mol_atoms(mol):
+    for oxygen in indexed_atoms(mol):
         if (
             oxygen.GetAtomicNum() != 8
             or oxygen.GetFormalCharge() != 1
@@ -1201,7 +1200,7 @@ def clean_phosphorus_cumulene(omol: pybel.Molecule) -> tuple[pybel.Molecule, boo
     """Resolve C=P+=C-N into C=P-C=N+ when short C-N supports N donation."""
     mol = cast(ob.OBMol, omol.OBMol)
     hit = False
-    for phosphorus in mol_atoms(mol):
+    for phosphorus in indexed_atoms(mol):
         if (
             phosphorus.GetAtomicNum() != 15
             or phosphorus.GetFormalCharge() != 1
@@ -1301,7 +1300,7 @@ def clean_pyramidal_allyl_resonance(omol: pybel.Molecule) -> tuple[pybel.Molecul
     """Place an existing allylic anion on the pyramidal CH2 end of a long C–C bond."""
     mol = cast(ob.OBMol, omol.OBMol)
     hit = False
-    for first in mol_atoms(mol):
+    for first in indexed_atoms(mol):
         if (
             first.GetAtomicNum() != 6
             or first.GetFormalCharge()

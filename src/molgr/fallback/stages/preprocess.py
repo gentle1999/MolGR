@@ -25,7 +25,12 @@ from molgr.fallback.utils.electrons import (
     set_unpaired_electron_count,
     set_unresolved_two_electron_center,
 )
-from molgr.fallback.utils.ob_graph import atom_neighbors, mol_atoms, mol_bonds, neighbor_bond_order
+from molgr.fallback.utils.ob_graph import (
+    atom_neighbors,
+    indexed_atoms,
+    indexed_bonds,
+    neighbor_bond_order,
+)
 from molgr.fallback.utils.search_constraints import search_constraints_satisfied
 
 
@@ -46,20 +51,25 @@ def validate_omol(
     obmol = cast(ob.OBMol, omol.OBMol)
     if not search_constraints_satisfied(obmol):
         return False
-    for bond in mol_bonds(obmol):
+    invalid_bond_order = False
+    for bond in indexed_bonds(obmol):
+        order = int(bond.GetBondOrder())
+        if order < 0 or order > 5:
+            invalid_bond_order = True
+        if order <= 1:
+            continue
         a = cast(ob.OBAtom, bond.GetBeginAtom())
         b = cast(ob.OBAtom, bond.GetEndAtom())
-        order = int(bond.GetBondOrder())
         if (
             order > 3
             and a.GetAtomicNum() in consts.NON_METAL_DICT
             and b.GetAtomicNum() in consts.NON_METAL_DICT
         ):
             return False
-        if not nitrogen_nitrogen_order_allowed(a, b, order):
-            return False
         if order not in (2, 3):
             continue
+        if not nitrogen_nitrogen_order_allowed(a, b, order):
+            return False
         if order == 2 and {a.GetAtomicNum(), b.GetAtomicNum()} == {6, 7}:
             carbon, nitrogen = (a, b) if a.GetAtomicNum() == 6 else (b, a)
             if not cationic_carbon_double_bond_allowed(carbon, nitrogen):
@@ -74,15 +84,14 @@ def validate_omol(
         ):
             return False
 
-    formal_charge_sum = sum(atom.GetFormalCharge() for atom in mol_atoms(obmol))
-    unresolved_atoms = [
-        atom for atom in mol_atoms(obmol) if has_unresolved_two_electron_center(atom)
-    ]
-    radical_sum = sum(
-        get_unpaired_electron_count(atom)
-        for atom in mol_atoms(obmol)
-        if not has_unresolved_two_electron_center(atom)
-    )
+    formal_charge_sum = radical_sum = 0
+    unresolved_atoms: list[ob.OBAtom] = []
+    for atom in indexed_atoms(obmol):
+        formal_charge_sum += atom.GetFormalCharge()
+        if has_unresolved_two_electron_center(atom):
+            unresolved_atoms.append(atom)
+        else:
+            radical_sum += get_unpaired_electron_count(atom)
 
     # A low-coordinate carbon can legitimately be represented as ``C-`` with
     # one radical electron. Fresh preparation defers this two-electron center;
@@ -105,7 +114,7 @@ def validate_omol(
 
     if formal_charge_sum != total_charge:
         return False
-    if any(bond.GetBondOrder() > 5 or bond.GetBondOrder() < 0 for bond in mol_bonds(obmol)):
+    if invalid_bond_order:
         return False
     required_unpaired_electrons = total_radical_electrons - radical_sum
     if (
@@ -284,7 +293,7 @@ def pre_clean(omol: pybel.Molecule) -> tuple[pybel.Molecule, bool]:
         obbond.SetBondOrder(1)
         hit = True
 
-    for bond in mol_bonds(obmol):
+    for bond in indexed_bonds(obmol):
         if neutral_carbon_monochalcogenide(bond) and bond.GetBondOrder() in (1, 3):
             # Fresh electron inference marks neutral C=X as an unresolved
             # carbon center. The shared donor rule then yields C-#X+.
