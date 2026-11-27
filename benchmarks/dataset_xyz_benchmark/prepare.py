@@ -7,22 +7,23 @@ from __future__ import annotations
 
 import argparse
 import base64
+import gzip
 import hashlib
 import io
 import json
 import math
 import pickle
 import sqlite3
-import struct
 import tarfile
 import zlib
 from collections import Counter
 from contextlib import suppress
+from decimal import Decimal
 from pathlib import Path
 
 from rdkit import Chem
 
-from benchmarks.dataset_xyz_benchmark import tmqmg
+from benchmarks.dataset_xyz_benchmark import borylxat, tmqmg
 from benchmarks.dataset_xyz_benchmark.comparison import DEFAULT_POLICY, comparison_policy
 
 
@@ -58,7 +59,13 @@ def xyz_block(mol):
         position = conf.GetAtomPosition(atom.GetIdx())
         if not all(math.isfinite(x) for x in position):
             raise ValueError("Nonfinite coordinates")
-        lines.append(atom.GetSymbol() + " " + " ".join(format(x, ".17g") for x in position))
+        # RDKit's XYZ reader can reject scientific notation for small GS_OPT coordinates.
+        values = [format(x, ".17g") for x in position]
+        lines.append(
+            " ".join(
+                [atom.GetSymbol(), *(format(Decimal(v), "f") if "e" in v else v for v in values)]
+            )
+        )
     return "\n".join(lines) + "\n"
 
 
@@ -87,7 +94,18 @@ def validate_reference(geometry, reference, charge, multiplicity):
         return "excluded", f"Reference validation failed: {exc}"
 
 
-def make_case(dataset, molecule, conformer, geometry, reference, charge, multiplicity, evidence):
+def make_case(
+    dataset,
+    molecule,
+    conformer,
+    geometry,
+    reference,
+    charge,
+    multiplicity,
+    evidence,
+    *,
+    normalize_geom_queries=False,
+):
     block = xyz_block(geometry)
     status, reason = validate_reference(geometry, reference, charge, multiplicity)
     native = reference.ToBinary() if reference is not None else None
@@ -96,6 +114,12 @@ def make_case(dataset, molecule, conformer, geometry, reference, charge, multipl
         # SMILES is display-only; preserve the native graph regardless.
         with suppress(Exception):
             smiles = Chem.MolToSmiles(reference, allHsExplicit=True)
+    if normalize_geom_queries and status == "valid":
+        source_hash = hashlib.sha256(native).hexdigest()
+        native, query_count = _geom_scoring_reference(native)
+        evidence = dict(
+            evidence, source_reference_sha256=source_hash, exact_element_query_atoms=query_count
+        )
     return (
         dataset,
         molecule,
@@ -112,41 +136,118 @@ def make_case(dataset, molecule, conformer, geometry, reference, charge, multipl
     )
 
 
-def geom_cases(path, dataset, limit_molecules=None):
-    subset = "qm9" if dataset == "geom-qm9" else "drugs"
-    seen = set()
-    count = 0
-    # The official .tar.gz is actually an uncompressed tar in this release.
-    with tarfile.open(path, "r|*") as archive:
+GEOM_SEED = 20261125
+GEOM_DRUGS_PARENTS = 100_000
+_GEOM_NAMES = {"geom-drugs": "GEOM-Drugs", "geom-qm9": "GEOM-QM9"}
+
+
+def _geom_scoring_reference(native):
+    """Replace exact-element query atoms in eligible GEOM targets with ordinary atoms.
+
+    GEOM uses these queries for some concrete elements. Keep ambiguous queries
+    and query bonds intact so the comparator can report an unsupported reference.
+    """
+    mol = Chem.Mol(native)
+    if not mol.HasQuery():
+        return native, 0
+    atoms = [atom for atom in mol.GetAtoms() if atom.HasQuery()]
+    if any(bond.HasQuery() for bond in mol.GetBonds()) or any(
+        atom.GetAtomicNum() <= 0
+        or atom.DescribeQuery().strip() != f"AtomAtomicNum {atom.GetAtomicNum()} = val"
+        for atom in atoms
+    ):
+        return native, -1
+    graph = Chem.RWMol(mol)
+    for atom in atoms:
+        graph.ReplaceAtom(atom.GetIdx(), Chem.Atom(atom), preserveProps=True)
+    return graph.GetMol().ToBinary(), len(atoms)
+
+
+def _geom_digest(dataset, domain, member):
+    key = f"{_GEOM_NAMES[dataset]}/{GEOM_SEED}/{domain}\0{member}"
+    return hashlib.sha256(key.encode("utf-8")).digest()
+
+
+def _geom_conformer_index(dataset, member, size):
+    """Select a uniform zero-based ensemble index without modulo bias."""
+    ceiling = (1 << 256) // size * size
+    counter = 0
+    while True:
+        digest = _geom_digest(dataset, f"conformer/{counter}", member)
+        value = int.from_bytes(digest, "big")
+        if value < ceiling:
+            return value % size
+        counter += 1
+
+
+def _geom_members(archive, dataset, pilot):
+    """Yield archive members in case-ID order, with their Drugs sampling ranks."""
+    subset = dataset.split("-", 1)[1]
+    if dataset == "geom-qm9" or pilot:
         for member in archive:
-            parts = Path(member.name).parts
             if (
-                not member.isfile()
-                or subset not in parts[:-1]
-                or not member.name.endswith(".pickle")
+                member.isfile()
+                and subset in Path(member.name).parts[:-1]
+                and member.name.endswith(".pickle")
             ):
-                continue
-            raw = archive.extractfile(member).read()
+                yield None, member
+        return
+
+    # The pinned release is an uncompressed tar despite its .tar.gz suffix.
+    # Index headers once and seek directly to each ranked member's payload.
+    prefix = f"rdkit_folder/{subset}/"
+    members = {m.name: m for m in archive.getmembers() if m.isfile() and m.name.startswith(prefix)}
+    with archive.extractfile("rdkit_folder/summary_drugs.json") as stream:
+        inventory = json.load(stream)
+    paths = {
+        "rdkit_folder/" + item["pickle_path"]
+        for item in inventory.values()
+        if item.get("pickle_path")
+    }
+    del inventory
+    ranked = sorted(paths, key=lambda name: (_geom_digest(dataset, "parent", name), name))
+    for rank, name in enumerate(ranked, 1):
+        if name in members:
+            yield rank, members[name]
+
+
+def geom_cases(path, dataset, limit_molecules=None):
+    """Prepare the fixed one-conformer cohort, or an archive-order all-conformer pilot."""
+    pilot = limit_molecules is not None
+    sampled_drugs = dataset == "geom-drugs" and not pilot
+    seen = set()
+    with tarfile.open(path, "r|*" if pilot else "r:*") as archive:
+        for rank, member in _geom_members(archive, dataset, pilot):
+            with archive.extractfile(member) as stream:
+                raw = stream.read()
             source = GeomUnpickler(io.BytesIO(raw)).load()
             molecule = source["smiles"]
             if molecule in seen:
+                if sampled_drugs:
+                    continue
                 raise ValueError(f"Duplicate parent molecule: {molecule}")
-            seen.add(molecule)
             conformers = source["conformers"]
             if not conformers:
+                if sampled_drugs:
+                    continue
                 raise ValueError(f"Empty conformer ensemble: {member.name}")
             charge = int(source["charge"])
             if charge != source["charge"]:
                 raise ValueError("Nonintegral source charge")
-            for index, conf in enumerate(conformers):
+            indices = (
+                range(len(conformers))
+                if pilot
+                else (_geom_conformer_index(dataset, member.name, len(conformers)),)
+            )
+            member_hash = hashlib.sha256(raw).hexdigest()
+            for index in indices:
+                conf = conformers[index]
                 mol = conf["rd_mol"]
-                # A single unpaired electron establishes a doublet; multiple
-                # formal radicals do not establish their spin coupling.
                 radicals = sum(a.GetNumRadicalElectrons() for a in mol.GetAtoms())
                 multiplicity = radicals + 1 if radicals in (0, 1) else None
                 evidence = {
                     "archive_member": member.name,
-                    "member_sha256": hashlib.sha256(raw).hexdigest(),
+                    "member_sha256": member_hash,
                     "source_url": GEOM_URL,
                     "source_geom_id": conf.get("geom_id"),
                     "relativeenergy": conf.get("relativeenergy"),
@@ -158,10 +259,29 @@ def geom_cases(path, dataset, limit_molecules=None):
                     "state_basis": "Source charge; source graph closed-shell singlet or one-radical doublet; multiradical spin coupling unresolved",
                     "reference_basis": "Per-conformer released rd_mol; source uses xyz2mol; not independent chemical ground truth",
                 }
-                yield make_case(dataset, molecule, index, mol, mol, charge, multiplicity, evidence)
-            count += 1
-            if limit_molecules and count >= limit_molecules:
+                if not pilot:
+                    evidence["seed"] = GEOM_SEED
+                if rank is not None:
+                    evidence["sample_rank"] = rank
+                case = make_case(
+                    dataset,
+                    molecule,
+                    index,
+                    mol,
+                    mol,
+                    charge,
+                    multiplicity,
+                    evidence,
+                    normalize_geom_queries=not pilot,
+                )
+                if sampled_drugs and case[7] != "valid":
+                    continue
+                seen.add(molecule)
+                yield case
+            if len(seen) == (GEOM_DRUGS_PARENTS if sampled_drugs else limit_molecules):
                 return
+    if sampled_drugs:
+        raise ValueError(f"GEOM-Drugs inventory exhausted after {len(seen)} eligible parents")
 
 
 def fixture_cases(path):
@@ -187,95 +307,61 @@ def fixture_cases(path):
 
 
 def borylxat_cases(path):
-    from scripts.freeze_borylxat_fixtures import SOURCE, corrected_reference, electronic_state_basis
-
-    if (
-        path.stat().st_size != SOURCE["size_bytes"]
-        or file_hash(path, "md5") != SOURCE["published_md5"]
+    for key, geometry, target, charge, multiplicity, evidence, issue in borylxat.optimized_rows(
+        path
     ):
-        raise ValueError("BorylXAT-DB does not match pinned Zenodo size/MD5")
-    with sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True) as db:
-        for row_id, natoms, charge, metadata, numbers, positions, data in db.execute(
-            "SELECT id,natoms,charge,key_value_pairs,numbers,positions,data FROM systems ORDER BY id"
+        case = make_case("borylxat", key, 0, geometry, target, charge, multiplicity, evidence)
+        if issue:
+            case = (*case[:7], "unresolved", issue, *case[9:])
+        yield case
+
+
+BDE_URL = "https://doi.org/10.6084/m9.figshare.12158646.v1"
+BDE_SDF_SHA256 = "18f40da3c4a36954234d37ad37c72655e5ed0544913da8ca231f93d570b50348"
+BDE_GZ_MD5 = "296709b4c0b0d2c9e750565e40e6e237"
+
+
+def bde_cases(path):
+    """Read optimized, explicit-H organic doublets from the published BDE SDF.
+
+    The embedded bond table supplies the reference. AtomSpins independently
+    distinguishes doublets from parent molecules with cancelling spin densities.
+    """
+    opener = gzip.open if path.suffix == ".gz" else open
+    with opener(path, "rb") as stream:
+        for index, mol in enumerate(
+            Chem.ForwardSDMolSupplier(stream, removeHs=False, sanitize=False)
         ):
-            meta = json.loads(metadata)
-            category = meta["category"]
-            elements = struct.unpack(f"<{natoms}i", numbers)
-            coordinates = struct.unpack(f"<{3 * natoms}d", positions)
-            geometry = Chem.RWMol()
-            conf = Chem.Conformer(natoms)
-            conf.Set3D(True)
-            for i, z in enumerate(elements):
-                atom = Chem.Atom(z)
-                atom.SetNoImplicit(True)
-                geometry.AddAtom(atom)
-                conf.SetAtomPosition(i, coordinates[i * 3 : i * 3 + 3])
-            geometry.AddConformer(conf)
-            offset = int.from_bytes(data[:8], "little")
-            payload = json.loads(data[offset:])
-            spins = payload.get("spin_densities")
-            is_radical = category in {"B", "complex_r", "c_radical"}
-            is_closed = category in {"LB", "Cl", "complex_p"}
-            multiplicity = 2 if is_radical else 1 if is_closed else None
-            if is_radical and (
-                not isinstance(spins, list)
-                or len(spins) != natoms
-                or not all(math.isfinite(x) for x in spins)
-                or not math.isclose(sum(spins), 1, abs_tol=1e-4)
-            ):
-                multiplicity = None
-            evidence = {
-                "source_url": SOURCE["record_url"],
-                "ase_row_id": row_id,
-                "category": category,
-                "source_smiles": meta.get("smiles"),
-                "state_basis": electronic_state_basis(category)
-                if category in {"B", "complex_r", "complex_p"}
-                else "Author category and spin-density sum; electron parity checked separately",
-                "spin_density_sum": sum(spins) if isinstance(spins, list) else None,
-            }
-            reference = None
-            if category in {"B", "complex_r", "complex_p"} and multiplicity is not None:
-                case = {
-                    "case_id": meta["key"],
-                    "natoms": natoms,
-                    "category": category,
-                    "source_smiles": meta["smiles"],
-                    "charge": int(charge),
-                    "spin_multiplicity": multiplicity,
-                }
-                try:
-                    reference, mapping, removed = corrected_reference(geometry, case)
-                    evidence.update(source_to_geometry=mapping, removed_extra_boron_h=removed)
-                except Exception as exc:
-                    evidence["reference_error"] = str(exc)
-            elif is_radical or is_closed:
-                reference = Chem.MolFromSmiles(meta.get("smiles", ""))
-            result = make_case(
-                "borylxat",
-                meta["key"],
-                row_id,
-                geometry,
-                reference,
-                int(charge),
-                multiplicity,
-                evidence,
+            if mol is None:
+                raise ValueError(f"Unparseable BDE SDF record {index}")
+            if not any(a.GetAtomicNum() == 6 for a in mol.GetAtoms()):
+                continue
+            radicals = sum(a.GetNumRadicalElectrons() for a in mol.GetAtoms())
+            spins = json.loads(mol.GetProp("AtomSpins")) if mol.HasProp("AtomSpins") else []
+            if spins and (len(spins) != mol.GetNumAtoms() or not all(map(math.isfinite, spins))):
+                raise ValueError(f"Invalid spin densities in BDE record {index}")
+            total_spin = math.fsum(spins)
+            if not radicals and abs(total_spin) < 1e-4:
+                continue
+            if radicals != 1 or abs(total_spin - 1) > 1e-4:
+                raise ValueError(f"Inconsistent doublet annotation in BDE record {index}")
+            Chem.SanitizeMol(mol)
+            yield make_case(
+                "bde",
+                mol.GetProp("_Name"),
+                0,
+                mol,
+                mol,
+                Chem.GetFormalCharge(mol),
+                2,
+                {
+                    "source_url": BDE_URL,
+                    "sdf_record": index,
+                    "source_smiles": mol.GetProp("SMILES"),
+                    "spin_density_sum": total_spin,
+                    "state_basis": "SDF radical and AtomSpins",
+                },
             )
-            if category == "ts" or category not in {
-                "B",
-                "complex_r",
-                "complex_p",
-                "LB",
-                "Cl",
-                "c_radical",
-            }:
-                result = (
-                    *result[:7],
-                    "not_applicable",
-                    "Transition-state/other category kept separately from stable-graph accuracy",
-                    *result[9:],
-                )
-            yield result
 
 
 def sdf_cases(path, dataset, source_url, multiplicity_property):
@@ -367,14 +453,26 @@ def prepare(
     elif dataset == "borylxat-fixtures":
         cases = fixture_cases(source)
     elif dataset == "borylxat":
+        release = borylxat.provenance(source)
         cases = borylxat_cases(source)
     elif dataset == "tmqmg-corrected":
         release = tmqmg.provenance(source)  # Validate with actionable checkout instructions first.
         cases = tmqmg_cases(source)
-    else:
-        if not source_url:
-            raise ValueError("SDF sources require --source-url")
-        cases = sdf_cases(source, dataset, source_url, multiplicity_property)
+    else:  # BDE also supports explicitly attributed, custom SDF inputs.
+        compressed = source.suffix == ".gz"
+        if file_hash(source, "md5" if compressed else "sha256") == (
+            BDE_GZ_MD5 if compressed else BDE_SDF_SHA256
+        ):
+            source_url = BDE_URL
+            cases = bde_cases(source)
+        elif (
+            not source_url
+            or source_url == BDE_URL
+            or source_url.rstrip("/").endswith(("/4944855", "/22357962"))
+        ):
+            raise ValueError("BDE SDF checksum differs from Figshare release 12158646 v1")
+        else:
+            cases = sdf_cases(source, dataset, source_url, multiplicity_property)
     provenance = {
         "schema": SCHEMA_VERSION,
         "dataset": dataset,
@@ -389,6 +487,29 @@ def prepare(
         "comparison_policy": dict(DEFAULT_POLICY),
         "comparison_policy_locked": False,
     }
+    if dataset in _GEOM_NAMES:
+        provenance["source_url"] = GEOM_URL
+        if limit_molecules is None:
+            provenance.update(
+                seed=GEOM_SEED,
+                conformer_policy="one released conformer per parent, SHA-256 rejection sampling",
+                parent_sampling=(
+                    f"first {GEOM_DRUGS_PARENTS} eligible distinct parents in seeded SHA-256 order"
+                    if dataset == "geom-drugs"
+                    else "all released parents in archive order"
+                ),
+            )
+    if dataset == "bde" and source_url == BDE_URL:
+        provenance.update(
+            conformer_policy="one optimized geometry per carbon-containing doublet fragment",
+            release={"figshare_file_id": 22357962, "sdf_sha256": BDE_SDF_SHA256},
+        )
+    if dataset == "borylxat":
+        provenance.update(
+            source_url=release["source_url"],
+            release=release,
+            conformer_policy="one released optimized geometry per component key",
+        )
     if dataset == "tmqmg-corrected":
         provenance.update(
             source_url=tmqmg.REPOSITORY,
@@ -441,7 +562,11 @@ def main():
     )
     parser.add_argument("--source-url")
     parser.add_argument("--multiplicity-property", default="MULTIPLICITY")
-    parser.add_argument("--limit-molecules", type=int)
+    parser.add_argument(
+        "--limit-molecules",
+        type=int,
+        help="Prepare a pilot. For GEOM, import all conformers of the first N parents in archive order.",
+    )
     args = parser.parse_args()
     print(
         json.dumps(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import io
 import json
 import os
@@ -13,7 +14,13 @@ import pytest
 from rdkit import Chem
 from rdkit.Chem import AllChem
 
-from benchmarks.dataset_xyz_benchmark.prepare import GeomUnpickler, file_hash, make_case, prepare
+from benchmarks.dataset_xyz_benchmark.prepare import (
+    GeomUnpickler,
+    bde_cases,
+    file_hash,
+    make_case,
+    prepare,
+)
 from benchmarks.dataset_xyz_benchmark.report import summarize
 
 
@@ -65,6 +72,66 @@ def test_all_released_conformers_preserve_coordinates_and_groups(tmp_path):
         assert xyz.GetConformer().GetPositions() == pytest.approx(
             water(i).GetConformer().GetPositions()
         )
+
+
+def test_geom_benchmark_selection(tmp_path, monkeypatch):
+    from benchmarks.dataset_xyz_benchmark import prepare as importer
+
+    def add(archive, name, data):
+        member = tarfile.TarInfo("rdkit_folder/" + name)
+        member.size = len(data)
+        archive.addfile(member, io.BytesIO(data))
+
+    path = tmp_path / "geom.tar"
+    with tarfile.open(path, "w") as archive:
+        inventory = {key: {"pickle_path": f"drugs/{key}.pickle"} for key in "ABCDEFG"}
+        inventory["alias"] = inventory["B"]
+        inventory["no_path"] = {}
+        add(archive, "summary_drugs.json", json.dumps(inventory).encode())
+        for subset in ("qm9", "drugs"):
+            for key in "ABCDEF":
+                source = {
+                    "smiles": "C" if key == "F" else key,
+                    "charge": int(key == "E"),
+                    "conformers": [{"rd_mol": water(i), "geom_id": i} for i in range(3)],
+                }
+                if subset == "qm9":
+                    source["smiles"] = key
+                add(archive, f"{subset}/{key}.pickle", pickle.dumps(source))
+
+    # Drugs rank order is G (missing), E (invalid), C, F (same parent as C), D, B, A.
+    monkeypatch.setattr(importer, "GEOM_DRUGS_PARENTS", 3)
+    drugs = list(importer.geom_cases(path, "geom-drugs"))
+    assert [(r[1], r[2], json.loads(r[9])["sample_rank"]) for r in drugs] == [
+        ("C", "0", 3),
+        ("D", "2", 5),
+        ("B", "1", 6),
+    ]
+    qm9 = list(importer.geom_cases(path, "geom-qm9"))
+    assert [(r[1], r[2]) for r in qm9] == list(zip("ABCDEF", "222210"))
+    assert [r[1] for r in qm9 if r[7] != "valid"] == ["E"]
+    for row in drugs + qm9:
+        evidence = json.loads(row[9])
+        assert evidence["seed"] == 20261125
+        assert evidence["source_geom_id"] == int(row[2])
+        assert Chem.Mol(row[10]).GetConformer().GetPositions() == pytest.approx(
+            water(int(row[2])).GetConformer().GetPositions()
+        )
+    monkeypatch.setattr(importer, "GEOM_DRUGS_PARENTS", 5)
+    with pytest.raises(ValueError, match="exhausted"):
+        list(importer.geom_cases(path, "geom-drugs"))
+
+
+def test_geom_scoring_concretizes_only_exact_element_queries():
+    from benchmarks.dataset_xyz_benchmark.prepare import _geom_scoring_reference
+
+    exact = Chem.MolFromSmarts("[#6]").ToBinary()
+    concrete, count = _geom_scoring_reference(exact)
+    atom = Chem.Mol(concrete).GetAtomWithIdx(0)
+    assert count == 1 and atom.GetAtomicNum() == 6 and not atom.HasQuery()
+    for smarts in ("[#6,#7]", "[#6]~[#7]"):
+        ambiguous = Chem.MolFromSmarts(smarts).ToBinary()
+        assert _geom_scoring_reference(ambiguous) == (ambiguous, -1)
 
 
 def test_reference_cannot_add_unobserved_hydrogen():
@@ -268,3 +335,28 @@ def test_native_batch_scores_duplicate_geometries_and_resumes(tmp_path, monkeypa
     native_batch.run(cases, out, workers=2, checkers=1)
     with pytest.raises(ValueError, match="provenance differs"):
         native_batch.run(cases, out, workers=1, checkers=1)
+
+
+def test_bde_selects_only_carbon_containing_doublets(tmp_path):
+    source = tmp_path / "test.sdf"
+    with Chem.SDWriter(str(source)) as writer:
+        for smiles in ("C", "[OH]", "[CH3]"):
+            mol = Chem.AddHs(Chem.MolFromSmiles(smiles))
+            assert AllChem.EmbedMolecule(mol, randomSeed=11) == 0
+            mol.SetProp("_Name", smiles)
+            mol.SetProp("SMILES", smiles)
+            if smiles != "C":
+                mol.SetProp("AtomSpins", json.dumps([1] + [0] * (mol.GetNumAtoms() - 1)))
+            writer.write(mol)
+    compressed = source.with_suffix(".sdf.gz")
+    compressed.write_bytes(gzip.compress(source.read_bytes()))
+    (case,) = bde_cases(compressed)
+    assert case[:3] == ("bde", "[CH3]", "0")
+    assert case[5:8] == (0, 2, "valid")
+    assert json.loads(case[9])["sdf_record"] == 2
+    assert Chem.Mol(case[10]).GetNumAtoms() == 4
+    source.write_text(source.read_text().replace("[1, 0, 0, 0]", "[0, 0, 0, 0]"))
+    with pytest.raises(ValueError, match="Inconsistent doublet"):
+        list(bde_cases(source))
+    with pytest.raises(ValueError, match="checksum"):
+        prepare(source, tmp_path / "cases.sqlite", "bde")
