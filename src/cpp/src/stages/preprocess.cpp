@@ -277,6 +277,31 @@ namespace molgr
             return changed;
         }
 
+        /// Remove one overlong C–N contact across a four-membered ring.
+        /// @param mol Seed graph with coordinates in angstroms. The SMARTS lists
+        ///     bridgehead C, outer C, bridgehead N, outer C in that order.
+        /// @return True if the shared edge exceeds both the covalent radii sum
+        ///     and the longest perimeter bond by 15%. The local comparison
+        ///     protects stretched covalent bridges in strained bicyclic systems.
+        static bool RemoveOneLongRingDiagonal(OBMol &mol)
+        {
+            for (const auto &match : smarts::FindAll(mol, smarts::PatternId::PRE_CLEAN_BCP_RING_4))
+            {
+                auto *carbon = mol.GetAtom(match[0]);
+                auto *first = mol.GetAtom(match[1]);
+                auto *nitrogen = mol.GetAtom(match[2]);
+                auto *second = mol.GetAtom(match[3]);
+                const double radii = OBElements::GetCovalentRad(carbon->GetAtomicNum()) +
+                                     OBElements::GetCovalentRad(nitrogen->GetAtomicNum());
+                const double longest_side = std::max({
+                    carbon->GetDistance(first), carbon->GetDistance(second),
+                    nitrogen->GetDistance(first), nitrogen->GetDistance(second)});
+                if (carbon->GetDistance(nitrogen) > 1.15 * std::max(radii, longest_side))
+                    return mol.DeleteBond(mol.GetBond(carbon, nitrogen));
+            }
+            return false;
+        }
+
         bool PreClean(OBMol &mol)
         {
             bool hit = false;
@@ -368,40 +393,8 @@ namespace molgr
                 }
             }
 
-            while (true)
-            {
-                auto matches4 = molgr::smarts::FindAll(mol, molgr::smarts::PatternId::PRE_CLEAN_BCP_RING_4);
-                if (matches4.empty())
-                {
-                    break;
-                }
-                const auto &idxs = matches4.front();
-                int amine_n = -1, butyl_c = -1;
-                for (int idx : idxs)
-                {
-                    OBAtom *atom = mol.GetAtom(idx);
-                    int internal_degree = 0;
-                    for (int other : idxs)
-                        if (idx != other && mol.GetBond(idx, other))
-                            internal_degree++;
-                    if (internal_degree >= 2)
-                    {
-                        if (atom->GetAtomicNum() == 7)
-                            amine_n = idx;
-                        if (atom->GetAtomicNum() == 6)
-                            butyl_c = idx;
-                    }
-                }
-                if (amine_n != -1 && butyl_c != -1)
-                {
-                    OBBond *bond = mol.GetBond(amine_n, butyl_c);
-                    if (bond)
-                    {
-                        mol.DeleteBond(bond);
-                        hit = true;
-                    }
-                }
-            }
+            while (RemoveOneLongRingDiagonal(mol))
+                hit = true;
 
             return hit;
         }

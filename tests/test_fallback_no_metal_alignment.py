@@ -775,6 +775,47 @@ def test_pre_clean_collapses_hyper_pi_bonds_for_python_and_cpp(
     assert _pybel_stage_signature(cpp_omol) == _pybel_stage_signature(python_omol)
 
 
+@pytest.mark.parametrize("order", [(0, 1, 2, 3), (3, 2, 0, 1)])
+def test_pre_clean_distinguishes_covalent_bridges_from_ring_diagonals(
+    order: tuple[int, ...],
+) -> None:
+    from molgr import _core
+
+    # Include a stretched covalent bridge and two diagonals in the same seed.
+    # A retained match must not prevent subsequent repairs.
+    seed = ob.OBMol()
+    expected = set()
+    for offset, (span, height, keep_bridge) in enumerate(
+        [(1.46, 1.28, True), (1.76, 1.30, True), (1.86, 1.08, False), (1.89, 1.10, False)]
+    ):
+        positions = [(-span / 2, 0), (0, height), (span / 2, 0), (0, -height)]
+        indices = {}
+        for site in order:
+            atom = seed.NewAtom()
+            atom.SetAtomicNum(7 if site == 2 else 6)
+            x, y = positions[site]
+            atom.SetVector(x + offset * 5, y, 0)
+            indices[site] = atom.GetIdx()
+        for start, end in [(0, 1), (1, 2), (2, 3), (3, 0), (0, 2)]:
+            pair = tuple(sorted((indices[start], indices[end])))
+            seed.AddBond(*pair, 1)
+            if (start, end) != (0, 2) or keep_bridge:
+                expected.add(pair)
+
+    for backend in ("python", "cpp"):
+        mol = pybel.Molecule(ob.OBMol(seed))
+        for expect_change in (True, False):
+            if backend == "python":
+                _, changed = pre_clean(mol)
+            else:
+                changed = _core.dev.stages.preprocess.pre_clean_ptr(_get_ptr(mol.OBMol))
+            assert changed == expect_change
+            assert {
+                tuple(sorted((bond.GetBeginAtomIdx(), bond.GetEndAtomIdx())))
+                for bond in ob.OBMolBondIter(mol.OBMol)
+            } == expected
+
+
 @pytest.mark.parametrize("seed", ["[Si](F)(F)(F)(F)F", "[Si](C)(O)(O)(O)O"])
 def test_pre_clean_retains_five_single_bonds_to_silicon(seed: str) -> None:
     from molgr import _core

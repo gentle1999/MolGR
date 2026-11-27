@@ -233,6 +233,29 @@ def make_connections(
     return omol, changed
 
 
+def _remove_one_long_ring_diagonal(omol: pybel.Molecule) -> bool:
+    """Remove an overlong C–N contact across a four-membered ring.
+
+    The SMARTS orders the atoms as bridgehead C, outer C, bridgehead N,
+    outer C. A strained bicyclic structure can have a real shared C–N bond.
+    Allow the same 15% stretch as for other seed bonds, relative to both the
+    covalent radii and the longest perimeter bond. Rematch after each edit
+    because rings can overlap.
+    """
+    mol = cast(ob.OBMol, omol.OBMol)
+    for match in smarts.PRE_CLEAN_BCP_RING_4.findall(omol):
+        carbon, first, nitrogen, second = (cast(ob.OBAtom, mol.GetAtom(idx)) for idx in match)
+        radii = ob.GetCovalentRad(carbon.GetAtomicNum()) + ob.GetCovalentRad(
+            nitrogen.GetAtomicNum()
+        )
+        longest_side = max(
+            end.GetDistance(outer) for end in (carbon, nitrogen) for outer in (first, second)
+        )
+        if carbon.GetDistance(nitrogen) > 1.15 * max(radii, longest_side):
+            return mol.DeleteBond(cast(ob.OBBond, mol.GetBond(carbon, nitrogen)))
+    return False
+
+
 def pre_clean(omol: pybel.Molecule) -> tuple[pybel.Molecule, bool]:
     """Apply cheap structural fixes that simplify the later heuristic stages."""
 
@@ -283,20 +306,8 @@ def pre_clean(omol: pybel.Molecule) -> tuple[pybel.Molecule, bool]:
             obmol.DeleteBond(cast(ob.OBBond, obmol.GetBond(bcp_n, bcp_c)))
             hit = True
 
-    while res := smarts.PRE_CLEAN_BCP_RING_4.findall(omol):
-        idxs_4 = cast(Tuple[int, int, int, int], res.pop(0))
-        amine_n: Optional[int] = None
-        butyl_c: Optional[int] = None
-        for idx in idxs_4:
-            indexs = set(idxs_4) - {idx}
-            if all(obmol.GetBond(idx, idx_4) for idx_4 in indexs):
-                if cast(ob.OBAtom, obmol.GetAtom(idx)).GetAtomicNum() == 7:
-                    amine_n = idx
-                if cast(ob.OBAtom, obmol.GetAtom(idx)).GetAtomicNum() == 6:
-                    butyl_c = idx
-        if amine_n is not None and butyl_c is not None:
-            obmol.DeleteBond(obmol.GetBond(amine_n, butyl_c))
-            hit = True
+    while _remove_one_long_ring_diagonal(omol):
+        hit = True
 
     return omol, hit
 
