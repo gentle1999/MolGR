@@ -211,4 +211,4 @@ The upstream tmQMg SMILES were generated with the xyz2mol_tm Hückel method. The
 
 ## Additional source-geometry datasets
 
-[GEOM-QM9, GEOM-Drugs, BorylXAT-DB and the pending BDE source](dataset_xyz_benchmark/README.md): all-conformer import, molecule-level aggregation, resumable multiprocessing, and current data availability. Pilot validation is reported separately from full-dataset results.
+[GEOM-QM9, GEOM-Drugs, BorylXAT-DB, tmQMg-Corrected and BDE](dataset_xyz_benchmark/README.md): fixed GEOM sampling, molecule-level aggregation, resumable multiprocessing, and current data availability. Pilot validation is reported separately from full-dataset results.

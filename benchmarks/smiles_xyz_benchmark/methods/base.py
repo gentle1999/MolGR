@@ -4,6 +4,15 @@ from dataclasses import dataclass
 from typing import Any
 
 
+def allow_charged_fragments(total_charge: int, total_radical_electrons: int) -> bool:
+    """RDKit and xyz2mol can assign radicals to neutral open-shell inputs.
+
+    Their radical-only mode cannot represent a nonzero net charge. Closed-shell
+    and charged inputs use formal-charge assignment.
+    """
+    return total_charge != 0 or total_radical_electrons <= 0
+
+
 @dataclass(frozen=True)
 class MethodRunOutput:
     status: str

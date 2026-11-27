@@ -16,6 +16,13 @@ DEFAULT_POLICY = {
 
 def comparison_policy(source, timeout=None):
     """Resolve a prepared source's policy, respecting publisher-pinned settings."""
+    if (
+        source.get("dataset") == "borylxat"
+        and source.get("release", {}).get("geometry_basis") != "GS_OPT"
+    ):
+        raise ValueError(
+            "Reprepare BorylXAT with optimized component coordinates and mapped reaction references"
+        )
     policy = dict(source["comparison_policy"])
     if set(policy) != set(DEFAULT_POLICY):
         raise ValueError("Invalid comparison policy fields; prepare the case store again")

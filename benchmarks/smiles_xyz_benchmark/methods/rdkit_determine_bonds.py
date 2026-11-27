@@ -15,7 +15,11 @@ from typing import Any
 from rdkit import Chem
 from rdkit.Chem import rdDetermineBonds
 
-from benchmarks.smiles_xyz_benchmark.methods.base import BenchmarkMethod, MethodRunOutput
+from benchmarks.smiles_xyz_benchmark.methods.base import (
+    BenchmarkMethod,
+    MethodRunOutput,
+    allow_charged_fragments,
+)
 from benchmarks.smiles_xyz_benchmark.methods.postprocess import finalize_rdmol_with_dative_bonds
 
 
@@ -59,7 +63,13 @@ class RDKitDetermineBondsMethod(BenchmarkMethod):
 
         determine_bonds_started = time.perf_counter()
         try:
-            rdDetermineBonds.DetermineBonds(mol, charge=total_charge)
+            rdDetermineBonds.DetermineBonds(
+                mol,
+                charge=total_charge,
+                allowChargedFragments=allow_charged_fragments(
+                    total_charge, int(case.get("total_radical_electrons", 0))
+                ),
+            )
         except Exception as exc:  # noqa: BLE001
             # The API mutates mol before raising. Retain that graph for independent
             # equivalence checking without concealing the reconstruction error.

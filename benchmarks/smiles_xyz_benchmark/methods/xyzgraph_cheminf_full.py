@@ -97,7 +97,10 @@ def _graph_to_rdkit_mol(
 ) -> Chem.Mol:
     rw = Chem.RWMol()
     for _, node in graph.nodes.data():
-        rw.AddAtom(Chem.Atom(node.get("symbol", "C")))
+        atom = Chem.Atom(node["symbol"])
+        # All nuclei, including H, are already present in the source XYZ.
+        atom.SetNoImplicit(True)
+        rw.AddAtom(atom)
 
     for i, j, data in graph.edges(data=True):
         bo = float(data.get("bond_order", 1.0))

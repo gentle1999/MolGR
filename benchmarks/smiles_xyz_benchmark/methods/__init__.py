@@ -29,6 +29,10 @@ METHOD_IDS: tuple[str, ...] = (
 )
 
 _METHOD_CLASS_IMPORTS: dict[str, tuple[str, str]] = {
+    "xyz2mol_tm_local": (
+        "benchmarks.smiles_xyz_benchmark.methods.xyz2mol_tm_local",
+        "OrganicXYZ2Mol",
+    ),
     "xyz2mol_tm": (
         "benchmarks.smiles_xyz_benchmark.methods.xyz2mol_tm",
         "XYZ2MolTMMethod",

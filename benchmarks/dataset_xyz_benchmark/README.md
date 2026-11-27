@@ -2,7 +2,7 @@
 
 [中文](README.zh-CN.md)
 
-This harness imports source coordinates, reconstructs each released conformer,
+This harness imports source coordinates, reconstructs each selected conformer,
 and aggregates matches with equal weight per parent molecule. It reuses the
 [existing adapters](../smiles_xyz_benchmark/methods) and equivalence settings.
 No reference bonds are passed into reconstruction. Raw data, prepared SQLite
@@ -10,17 +10,15 @@ stores, worker logs and per-conformer results stay in Git-ignored directories.
 
 ## Dataset status
 
-| Dataset | Source | Import and evaluation policy | Current validation |
-| --- | --- | --- | --- |
-| GEOM-QM9 | [GEOM release](https://doi.org/10.7910/DVN/JNGTDF) | All released conformers, grouped by source molecule | Importer unit-tested; full download pending |
-| GEOM-Drugs | [GEOM release](https://doi.org/10.7910/DVN/JNGTDF) | All released conformers, grouped by source molecule | First 3 complete molecules / 744 conformers used for pipeline validation; not a representative sample |
-| BorylXAT-DB | [Zenodo v2](https://doi.org/10.5281/zenodo.21330198) | Stable structures; transition states and other categories retained separately from stable-graph accuracy | Existing 30 corrected fixtures available; full database download currently returns HTTP 403 |
-| BDE | Release still to be identified | SDF import requires source attribution and an explicit multiplicity property | No dataset-specific measurement yet |
-| tmQMg-Corrected | [2026-11-23 release](https://github.com/gentle1999/tmQMg-Corrected) | Pinned native Lewis graphs; release eligibility and comparison policy | Full import counts verified; no full performance result |
+| Dataset | Molecular class | Inputs in the cross-dataset comparison |
+| --- | --- | --- |
+| [GEOM-QM9](https://doi.org/10.7910/DVN/JNGTDF) | Small organic molecules | One released conformer per parent |
+| [GEOM-Drugs](https://doi.org/10.7910/DVN/JNGTDF) | Drug-like molecules | One conformer per parent in a fixed sample of 100,000 parents |
+| [BorylXAT-DB](https://doi.org/10.5281/zenodo.21330198) | Boryl radicals and their halogen-transfer reaction partners | Unique optimized reactant and product components with mapped reaction SMILES as references |
+| [tmQMg-Corrected](https://github.com/gentle1999/tmQMg-Corrected) | Singlet transition-metal complexes | Structures with a native Lewis reference in the pinned release |
+| [BDE](https://doi.org/10.6084/m9.figshare.12158646.v1) | Small organic radical fragments | One optimized SDF geometry per carbon-containing doublet fragment |
 
-The historical tmQMg comparison used
-72,578 draft targets, not the current release. Pilot measurements are not
-full-dataset results; the published standard requires a new evaluation.
+In the cross-dataset comparison, each reconstruction has a 10 s deadline and the subsequent reference comparison has a separate 5 s deadline. Each dataset has its own denominator, including failed and timed-out reconstructions.
 
 ## Reference policy
 
@@ -29,30 +27,48 @@ notes that some geometries dissociate and their graphs differ from the parent
 SMILES. Each conformer's released `rd_mol` supplies its reference graph; the
 parent SMILES only identifies the aggregation group. The released graphs were
 assigned with xyz2mol, so reference agreement is not an independent chemical
-accuracy measurement for that method family. Conformer energy, degeneracy,
-source ID and statistical weight are retained as evidence, but do not select
-or weight the main comparison. Every stored conformer is used once; `totalconfs`
-and degeneracy do not create additional coordinate records.
+accuracy measurement for that method family. Each selected structure retains its
+released coordinates, energy, degeneracy, source ID and statistical weight.
+
+Both GEOM commands below use seed `20261125`. QM9 selects one conformer per
+released parent in archive order and records the reference status for every
+selection. Drugs ranks distinct pickle paths from `summary_drugs.json` by
+seeded SHA-256, then takes the first 100,000 distinct parents with an eligible
+reference for the selected conformer. A missing member, empty ensemble or
+ineligible reference advances the selection to the next ranked parent. Both
+datasets select the conformer by hashing the dataset name, seed and archive
+member path, using rejection sampling to select a uniform zero-based index.
+For scoring, an RDKit atom query that specifies a single exact element can be
+stored as a concrete atom. Both the source and scoring graph hashes are retained
+for eligible structures.
+
+The [QM9 input indices](manifests/geom-qm9.csv.gz) and [Drugs input indices](manifests/geom-drugs.csv.gz) give the exact selections in case-store order. Both files are gzipped CSVs. To load a geometry, open the pickle at `archive_member` in the pinned release and read `entry["conformers"][conformer_index]["rd_mol"]`.
+
+| Column | Meaning |
+| --- | --- |
+| `archive_parent_index` | Zero-based position among regular `.pickle` members in the same subset, in physical tar order. |
+| `conformer_index` | Zero-based position in that parent’s released `conformers` list. |
+| `case_id`, `source_geom_id` | One-based SQLite case ID and the publisher’s `geom_id` for the selected conformer, respectively. |
+| `reference_status` | Use `valid` for the scored cohort. QM9 includes all 133,232 selections, of which 133,123 were scored. All 100,000 Drugs selections were scored. |
+| `sample_rank` (Drugs only) | One-based rank before eligibility filtering and parent deduplication. Skipped candidates leave gaps. |
 
 Input charge comes from the source. GEOM singlet/doublet targets are inferred
 from a source graph with zero/one formal radical electron, respectively. A
 multiradical graph alone does not establish spin coupling: its multiplicity
-remains unresolved. BorylXAT open-shell categories additionally require a
-spin-density sum consistent with one unpaired electron. Spin densities are not
-atom-localized integer radical counts.
+remains unresolved.
 
-BorylXAT reuses the [source-derived correction and geometry checks](../../tests/data/borylxat/README.md)
-for B and reactant/product complexes. A failed correction leaves the reference
-unresolved; it does not replace it with a MolGR output. Other stable categories
-retain source graphs and undergo composition, charge and radical-count checks.
-Transition states are not assigned an integer-bond reference accuracy. The full
-importer requires the published file size and MD5; it has not yet been validated
-against all source rows.
+BorylXAT uses the Zenodo v2 `BorylXAT-DB.db`. Each reaction links four independently optimized species: the boryl complex radical (`complex_r`) and chlorinated substrate (`Cl`) on the reactant side, and the chlorinated boron complex (`complex_p`) and carbon radical (`c_radical`) on the product side. Each geometry comes from the final step of its own `GS_OPT` calculation. Reconstruct each component separately and count each structure key once.
+
+The reference is the corresponding fragment of the mapped reaction SMILES on the TS record. Track the mapped chlorine transferred from carbon to boron to identify the fragments and verify conservation of every explicit hydrogen and other atom across the reaction. Preserve the optimized atom order; graph comparison allows atom permutations. Report components with missing or conflicting reaction labels as unresolved.
+
+BDE uses the optimized structures published by St. John et al. A fragment must contain carbon and have one unpaired electron in the SDF bond table. Its atomic spin densities (`AtomSpins`) must sum to 1 within 0.0001. Closed-shell parents and carbon-free fragments fall outside this cohort. Reconstruction receives the explicit-H coordinates, SDF formal charge and doublet multiplicity through the benchmark adapter. Individual method APIs may use only a subset of these inputs. The bond table from the same record supplies the scoring reference.
+
+Across all five datasets, the RDKit and xyz2mol_tm (local) adapters select radical assignment for neutral open-shell inputs with `allowChargedFragments=False` and `allow_charged_fragments=False`, respectively. Closed-shell and charged inputs use the upstream formal-charge mode. The xyz2mol_tm adapter scopes the CLI valence table to each call: its radical mode changes C, N and O valences, and the next molecule must start with its own settings. When converting xyzgraph output to RDKit, disable implicit hydrogens on every atom because the XYZ already includes them. The cell2mol v2 molecular XYZ entry point accepts total charge and has no multiplicity parameter.
 
 Matching allows resonance and defaults to ignoring stereochemistry and metal
 coordination bonds. GEOM, BorylXAT and BDE default to `max_resonance=5000` and a
-5-second comparison limit; tmQMg-Corrected uses the publisher's 100,000 and
-60 seconds. These are source configurations executed by the same runner.
+5-second comparison limit. The standalone tmQMg-Corrected release specifies 100,000 and
+60 seconds. The cross-dataset timing comparison keeps its 100,000-state budget and uses the shared 5 s comparison deadline.
 Generic importers check composition, source charge, electron parity and formal
 radical count; these checks do not prove chemical correctness. tmQMg eligibility
 and input multiplicity come directly from the release: formal radical counts
@@ -71,10 +87,11 @@ extracting the archive. It only permits the RDKit molecule constructor when
 unpickling data.
 
 ```bash
-mkdir -p .local/datasets/geom .local/datasets/borylxat/21330198
+mkdir -p .local/datasets/geom
 curl --fail --location --continue-at - \
   'https://dataverse.harvard.edu/api/access/datafile/4327252?format=original' \
   --output .local/datasets/geom/rdkit_folder.tar.gz
+mkdir -p .local/datasets/borylxat/21330198
 curl --fail --location --continue-at - \
   'https://zenodo.org/records/21330198/files/BorylXAT-DB.db?download=1' \
   --output .local/datasets/borylxat/21330198/BorylXAT-DB.db
@@ -87,18 +104,25 @@ python -m benchmarks.dataset_xyz_benchmark.prepare \
   --out .local/datasets/benchmark-cases/geom-drugs.sqlite
 python -m benchmarks.dataset_xyz_benchmark.prepare \
   --dataset borylxat --source .local/datasets/borylxat/21330198/BorylXAT-DB.db \
-  --out .local/datasets/benchmark-cases/borylxat.sqlite
+  --out .local/datasets/benchmark-cases/borylxat-optimized.sqlite
+
+mkdir -p .local/datasets/bde
+curl --fail --location --continue-at - \
+  https://ndownloader.figshare.com/files/22357962 \
+  --output .local/datasets/bde/20200415_radical_database.sdf.gz
+python -m benchmarks.dataset_xyz_benchmark.prepare \
+  --dataset bde --source .local/datasets/bde/20200415_radical_database.sdf.gz \
+  --out .local/datasets/benchmark-cases/bde.sqlite
 ```
 
 The pinned GEOM archive is 50,137,579,520 bytes, MD5
-`e8f2168b7050652db22c976be25c450e`. BorylXAT v2 is 291,348,480 bytes, MD5
-`d486fbcc36f856bbebf303b5cda4950f`. Full imports reject other files.
-`--limit-molecules N` permits a small pilot, marks it explicitly, and imports
-**all conformers** of each selected molecule. Its archive-order selection is
-for pipeline validation only. An interrupted import remains marked incomplete
+`e8f2168b7050652db22c976be25c450e`. BorylXAT imports verify the published database size and MD5. Rebuild older stores to use optimized component geometries with reaction-derived labels.
+For a GEOM pilot, `--limit-molecules N` imports **all conformers** of the first N
+parents in archive order and marks the store as a pilot. Omit this option to
+reproduce the fixed benchmark cohorts above. An interrupted import remains marked incomplete
 and cannot be benchmarked. Importing again requires a new output file.
 
-Run the existing BorylXAT fixtures without a network download:
+Run the separate Zenodo regression fixtures offline:
 
 ```bash
 python -m benchmarks.dataset_xyz_benchmark.prepare \
@@ -175,8 +199,11 @@ unlocked policies, never a publisher-pinned comparison limit. A worker crash or
 timeout is retained in the result table.
 Returned graphs are compared even when the adapter reports an API error.
 Input reading, process startup, warmup and reference comparison are outside the
-timed adapter call. xyz2mol_tm's transition-metal entry point is not an organic
-baseline for GEOM, BorylXAT or BDE; it is available for tmQMg.
+timed adapter call. Use `--method xyz2mol_tm` for every dataset. The worker reads the element symbols
+from each XYZ before timing. An element on the upstream TMC list (including La
+and Lu) selects the Hückel entry. All other inputs use `xyz2mol_local.xyz2mol`.
+The result detail records the entry as `upstream_entry`. The explicit
+`--method xyz2mol_tm_local` option still selects the general entry directly.
 
 ```bash
 python -m benchmarks.dataset_xyz_benchmark.run \
