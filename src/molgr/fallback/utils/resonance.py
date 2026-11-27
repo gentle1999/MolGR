@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Dict, List, Optional, Protocol, Sequence, Tuple, cast
 
 from openbabel import openbabel as ob
@@ -31,7 +32,7 @@ from molgr.fallback.utils.electrons import (
     set_unpaired_electron_count,
     set_unresolved_two_electron_center,
 )
-from molgr.fallback.utils.ob_graph import atom_bonds, atom_neighbors, mol_atoms, mol_bonds
+from molgr.fallback.utils.ob_graph import atom_bonds, atom_neighbors, indexed_atoms, indexed_bonds
 
 from . import smarts
 
@@ -107,6 +108,8 @@ class _LimitedDiscrepancyUffLiteGainTraversalPolicy:
         context: ResonanceTraversalContext,
         moves: Sequence[ResonanceTraversalMove],
     ) -> Optional[Sequence[ResonanceTraversalMove]]:
+        if len(moves) < 2:
+            return moves
         ordered_moves = _order_uff_lite_gain_moves(context.current_omol, moves)
         return [move for move, _score in ordered_moves]
 
@@ -253,7 +256,7 @@ def build_resonance_state_key(omol: pybel.Molecule) -> ResonanceStateKey:
 
     obmol = cast(ob.OBMol, omol.OBMol)
     atom_keys: List[ResonanceAtomKey] = []
-    for atom in mol_atoms(obmol):
+    for atom in indexed_atoms(obmol):
         atom_keys.append(
             (
                 atom.GetAtomicNum(),
@@ -266,9 +269,9 @@ def build_resonance_state_key(omol: pybel.Molecule) -> ResonanceStateKey:
         )
 
     bond_keys: List[ResonanceBondKey] = []
-    for bond in mol_bonds(obmol):
-        begin_idx = cast(ob.OBAtom, bond.GetBeginAtom()).GetIdx()
-        end_idx = cast(ob.OBAtom, bond.GetEndAtom()).GetIdx()
+    for bond in indexed_bonds(obmol):
+        begin_idx = bond.GetBeginAtomIdx()
+        end_idx = bond.GetEndAtomIdx()
         if begin_idx > end_idx:
             begin_idx, end_idx = end_idx, begin_idx
         bond_keys.append((begin_idx, end_idx, bond.GetBondOrder(), bool(bond.IsAromatic())))
@@ -294,30 +297,11 @@ def build_processed_resonance_key(omol: pybel.Molecule) -> ProcessedResonanceKey
 def _build_resonance_search_context(
     omol: pybel.Molecule,
 ) -> Tuple[ResonanceStateKey, ResonanceBondIndexMap]:
-    obmol = cast(ob.OBMol, omol.OBMol)
-    atom_keys: List[ResonanceAtomKey] = []
-    for atom in mol_atoms(obmol):
-        atom_keys.append(
-            (
-                atom.GetAtomicNum(),
-                atom.GetFormalCharge(),
-                get_unpaired_electron_count(atom),
-                get_lone_pair_count(atom),
-                has_unresolved_two_electron_center(atom),
-                bool(atom.IsAromatic()),
-            )
-        )
+    """Index the bond entries that radical shifts can update in the initial state key."""
 
-    bond_index_map: ResonanceBondIndexMap = {}
-    bond_keys: List[ResonanceBondKey] = []
-    for bond in mol_bonds(obmol):
-        begin_idx = cast(ob.OBAtom, bond.GetBeginAtom()).GetIdx()
-        end_idx = cast(ob.OBAtom, bond.GetEndAtom()).GetIdx()
-        if begin_idx > end_idx:
-            begin_idx, end_idx = end_idx, begin_idx
-        bond_index_map[(begin_idx, end_idx)] = len(bond_keys)
-        bond_keys.append((begin_idx, end_idx, bond.GetBondOrder(), bool(bond.IsAromatic())))
-    return (tuple(atom_keys), tuple(bond_keys)), bond_index_map
+    key = build_resonance_state_key(omol)
+    bond_index_map = {(begin, end): i for i, (begin, end, _, _) in enumerate(key[1])}
+    return key, bond_index_map
 
 
 def _increment_resonance_state_key(
@@ -376,19 +360,18 @@ def _enumerate_one_step_resonance_moves(
     result: List[_IndexedResonanceTraversalMove] = []
     for idxs in res:
         atom1 = cast(ob.OBAtom, obmol.GetAtom(idxs[0]))
+        if get_unpaired_electron_count(atom1) != 1:
+            continue
         atom3 = cast(ob.OBAtom, obmol.GetAtom(idxs[2]))
+        target_radicals = get_unpaired_electron_count(atom3)
+        if target_radicals > 1 or has_unresolved_two_electron_center(atom3):
+            continue
         bond1 = cast(ob.OBBond, obmol.GetBond(idxs[0], idxs[1]))
         bond2 = cast(ob.OBBond, obmol.GetBond(idxs[1], idxs[2]))
-        if (
-            get_unpaired_electron_count(atom1) == 1
-            and get_unpaired_electron_count(atom3) <= 1
-            and bond1.GetBondOrder() <= 2
-            and bond2.GetBondOrder() >= 2
-            and not has_unresolved_two_electron_center(atom3)
-        ):
+        if bond1.GetBondOrder() <= 2 and bond2.GetBondOrder() >= 2:
             post_target_valence = atom3.GetTotalValence() - 1
             target_unresolved = (
-                get_unpaired_electron_count(atom3) == 1
+                target_radicals == 1
                 and atom3.GetAtomicNum() in (6, 7, 14, 15)
                 and atom3.GetFormalCharge() == 0
                 and get_lone_pair_count(atom3) == 0
@@ -476,8 +459,8 @@ def _get_bond_order_with_overrides(
 ) -> int:
     override = bond_order_overrides.get(
         _bond_pair(
-            cast(int, cast(ob.OBAtom, bond.GetBeginAtom()).GetIdx()),
-            cast(int, cast(ob.OBAtom, bond.GetEndAtom()).GetIdx()),
+            cast(int, bond.GetBeginAtomIdx()),
+            cast(int, bond.GetEndAtomIdx()),
         )
     )
     if override is not None:
@@ -491,8 +474,8 @@ def _normalized_bond_order_with_overrides(
 ) -> float:
     override = bond_order_overrides.get(
         _bond_pair(
-            cast(int, cast(ob.OBAtom, bond.GetBeginAtom()).GetIdx()),
-            cast(int, cast(ob.OBAtom, bond.GetEndAtom()).GetIdx()),
+            cast(int, bond.GetBeginAtomIdx()),
+            cast(int, bond.GetEndAtomIdx()),
         )
     )
     if override is not None:
@@ -513,6 +496,7 @@ def _clamped_covalent_radius(atomic_num: int) -> float:
     return value if value > 0.0 else 0.75
 
 
+@lru_cache(maxsize=1024)
 def _estimate_uff_equilibrium_bond_length(
     atomic_num_a: int,
     atomic_num_b: int,
@@ -604,6 +588,7 @@ def _uff_lite_angle_energy(
     center_atom: ob.OBAtom,
     right_atom: ob.OBAtom,
     bond_order_overrides: _BondOrderOverrides,
+    ideal_angle: float,
 ) -> float:
     left_bond = cast(ob.OBBond, obmol.GetBond(left_atom.GetIdx(), center_atom.GetIdx()))
     right_bond = cast(ob.OBBond, obmol.GetBond(center_atom.GetIdx(), right_atom.GetIdx()))
@@ -615,7 +600,6 @@ def _uff_lite_angle_energy(
         return 0.0
 
     theta = math.radians(theta_degrees)
-    theta0 = _ideal_angle_radians_for_atom(center_atom, bond_order_overrides)
     left_order = _normalized_bond_order_with_overrides(left_bond, bond_order_overrides)
     right_order = _normalized_bond_order_with_overrides(right_bond, bond_order_overrides)
     left_r0 = _estimate_uff_equilibrium_bond_length(
@@ -636,7 +620,7 @@ def _uff_lite_angle_energy(
             0.5,
         )
     )
-    cos_delta = math.cos(theta) - math.cos(theta0)
+    cos_delta = math.cos(theta) - math.cos(ideal_angle)
     return stiffness * cos_delta * cos_delta
 
 
@@ -651,6 +635,9 @@ def _local_angle_strain_energy(
         if center_atom is None:
             continue
         neighbors = list(atom_neighbors(center_atom))
+        if len(neighbors) < 2:
+            continue
+        ideal_angle = _ideal_angle_radians_for_atom(center_atom, bond_order_overrides)
         for left_index in range(len(neighbors)):
             for right_index in range(left_index + 1, len(neighbors)):
                 total += _uff_lite_angle_energy(
@@ -659,6 +646,7 @@ def _local_angle_strain_energy(
                     center_atom,
                     neighbors[right_index],
                     bond_order_overrides,
+                    ideal_angle,
                 )
     return total
 

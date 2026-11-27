@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 from openbabel import openbabel as ob
 from openbabel import pybel
 
+from molgr.config import MolGRConfig
 from molgr.fallback.pipeline import reconstruct_without_metals
 from molgr.fallback.state import ReconstructionState
 from molgr.fallback.utils.electrons import (
@@ -41,6 +44,28 @@ def _state(omol: pybel.Molecule, *, source: str = "test") -> ReconstructionState
         phase_history=("prepared_no_metal_seed",),
         metadata={"source": source},
     )
+
+
+def test_ligand_topology_reuse_respects_configuration_and_graph_revision() -> None:
+    benzene = pybel.readstring("smi", "c1ccccc1")
+    benzene.addh()
+    state = _state(benzene)
+    annotate = no_metal_selection._annotate_no_metal_candidate_topology
+    config = MolGRConfig()
+    original = annotate(state, config=config)
+    assert annotate(state, config=MolGRConfig()) is original
+
+    config.organic_topology.aromatic_stability_benzene_score = 0.25
+    rescored = annotate(state, config=config)
+    assert rescored.aromatic_stability_score == pytest.approx(0.25)
+    assert original.aromatic_stability_score == pytest.approx(1.0)
+
+    set_unpaired_electron_count(benzene.OBMol.GetAtom(1), 1)
+    revised = replace(state, omol_revision=state.omol_revision + 1)
+    assert annotate(revised, config=config) == no_metal_selection.compute_organic_topology_metrics(
+        benzene, config.organic_topology
+    )
+    assert annotate(revised, config=config) is not rescored
 
 
 def _boron_neighbor_seed(

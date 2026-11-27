@@ -240,7 +240,7 @@ def _non_metal_atom_entries(obmol: ob.OBMol) -> tuple[ob.OBAtom, ...]:
 
 
 def _component_atom_index_groups(obmol: ob.OBMol) -> tuple[tuple[int, ...], ...]:
-    unseen = {int(atom.GetIdx()) for atom in mol_atoms(obmol)}
+    unseen = set(range(1, obmol.NumAtoms() + 1))
     components: list[tuple[int, ...]] = []
     while unseen:
         start_idx = min(unseen)
@@ -291,20 +291,34 @@ def _component_connectivity_signature(
 
 
 def _repeated_component_charge_asymmetry_count(obmol: ob.OBMol) -> int:
-    charges_by_connectivity: DefaultDict[tuple[int, ...], list[int]] = defaultdict(list)
-    for atom_indices in _component_atom_index_groups(obmol):
-        signature = _component_connectivity_signature(obmol, atom_indices)
-        charges_by_connectivity[signature].append(
+    """Count repeated ligand graphs whose components carry different net charges.
+
+    Connectivity signatures contain one label per atom. Only components of the
+    same size and with differing charges can contribute to the count.
+    """
+    components_by_size: DefaultDict[int, list[tuple[int, ...]]] = defaultdict(list)
+    for indices in _component_atom_index_groups(obmol):
+        components_by_size[len(indices)].append(indices)
+
+    count = 0
+    for components in components_by_size.values():
+        if len(components) < 2:
+            continue
+        charges = [
             sum(
                 int(cast(ob.OBAtom, obmol.GetAtom(atom_idx)).GetFormalCharge())
-                for atom_idx in atom_indices
+                for atom_idx in indices
             )
-        )
-    return sum(
-        1
-        for charges in charges_by_connectivity.values()
-        if len(charges) > 1 and min(charges) != max(charges)
-    )
+            for indices in components
+        ]
+        if min(charges) == max(charges):
+            continue
+        charges_by_connectivity: DefaultDict[tuple[int, ...], set[int]] = defaultdict(set)
+        for indices, charge in zip(components, charges):
+            signature = _component_connectivity_signature(obmol, indices)
+            charges_by_connectivity[signature].add(charge)
+        count += sum(len(net_charges) > 1 for net_charges in charges_by_connectivity.values())
+    return count
 
 
 def _haptic_arene_reduction_count(

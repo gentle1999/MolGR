@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import astuple
+from dataclasses import astuple, dataclass
 from typing import Optional, Sequence, cast
 
 from openbabel import openbabel as ob
+from openbabel import pybel
 
-from molgr.config import CONFIG, MolGRConfig
+from molgr.config import CONFIG, MolGRConfig, OrganicTopologyConfig
 from molgr.fallback.state import ReconstructionState
 from molgr.fallback.utils.bond_geometry import (
     azinium_geometry_conflict_count,
@@ -35,19 +36,25 @@ def _score_reconstruction_candidate(
     return candidate.full_score(config=config)
 
 
+@dataclass(frozen=True)
+class _LigandTopologyEvaluator:
+    """Key a frozen ligand's topology calculation by the scoring settings in effect."""
+
+    settings: tuple[float, ...]
+
+    def __call__(self, omol: pybel.Molecule) -> OrganicTopologyMetrics:
+        return compute_organic_topology_metrics(omol, OrganicTopologyConfig(*self.settings))
+
+
 def _annotate_no_metal_candidate_topology(
     candidate: ReconstructionState,
     *,
     config: MolGRConfig | None = None,
 ) -> OrganicTopologyMetrics:
     resolved_config = CONFIG if config is None else config
-    topology_config = resolved_config.organic_topology
     metrics = candidate.get_cached_omol_value(
-        f"organic_topology_metrics:{astuple(topology_config)!r}",
-        lambda omol: compute_organic_topology_metrics(
-            omol,
-            topology_config,
-        ),
+        "organic_topology_metrics",
+        _LigandTopologyEvaluator(astuple(resolved_config.organic_topology)),
     )
     candidate.metadata["organic_aromatic_atom_count"] = metrics.aromatic_atom_count
     candidate.metadata["organic_aromatic_ring_count"] = metrics.aromatic_ring_count
