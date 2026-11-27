@@ -178,4 +178,4 @@ tmQMg 运行器通过 `--methods xyz2mol_tm` 选择此方法。适配器调用 `
 
 ## 更多原始几何数据集
 
-[GEOM-QM9、GEOM-Drugs、BorylXAT-DB 与待确认的 BDE 来源](dataset_xyz_benchmark/README.zh-CN.md)：全部构象导入、按分子汇总、可续跑多进程及当前数据可用性。小规模流程验证与全量评测分开报告。
+[GEOM-QM9、GEOM-Drugs、BorylXAT-DB、tmQMg-Corrected 与 BDE](dataset_xyz_benchmark/README.zh-CN.md)：GEOM 固定抽样、按分子汇总、可续跑多进程及当前数据可用性。小规模流程验证与全量评测分开报告。

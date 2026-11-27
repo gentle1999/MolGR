@@ -2,22 +2,21 @@
 
 [English](README.md)
 
-这个入口读取原始坐标，对每个已发布构象重建，再按母分子等权汇总。
+这个入口读取原始坐标，对每个入选构象重建，再按母分子等权汇总。
 复用[已有算法适配器](../smiles_xyz_benchmark/methods)和匹配规则，重建输入不含参考键。
 原始下载、压缩 SQLite 输入、工作进程日志和逐构象结果均保存在 Git 忽略目录。
 
 ## 数据集状态
 
-| 数据集 | 来源 | 导入和评测范围 | 当前验证状态 |
-| --- | --- | --- | --- |
-| GEOM-QM9 | [GEOM 发布版](https://doi.org/10.7910/DVN/JNGTDF) | 全部已发布构象，按母分子分组 | 导入器单元测试通过；完整下载待完成 |
-| GEOM-Drugs | [GEOM 发布版](https://doi.org/10.7910/DVN/JNGTDF) | 全部已发布构象，按母分子分组 | 已用最先下载的 3 个完整分子、744 个构象验证入口；不具有抽样代表性 |
-| BorylXAT-DB | [Zenodo v2](https://doi.org/10.5281/zenodo.21330198) | 稳定结构；过渡态和其他类别单独保留，不纳入稳定分子图正确率 | 已有 30 个校正测试结构；完整数据库下载暂时返回 HTTP 403 |
-| BDE | 具体发布版尚待确认 | SDF 导入要求来源链接和明确的多重度属性 | 尚无该数据集的测量结果 |
-| tmQMg-Corrected | [2026-11-23 发布版](https://github.com/gentle1999/tmQMg-Corrected) | 固定发布版原生 Lewis 图；排除规则和比较预算来自 manifest | 全量导入计数验证通过；尚无全量性能成绩 |
+| 数据集 | 评估的分子类型 | 跨数据集对比采用的输入 |
+| --- | --- | --- |
+| [GEOM-QM9](https://doi.org/10.7910/DVN/JNGTDF) | 有机小分子 | 每个母分子固定取一个发布构象 |
+| [GEOM-Drugs](https://doi.org/10.7910/DVN/JNGTDF) | 药物样分子 | 固定抽取 100,000 个母分子，每个取一个构象 |
+| [BorylXAT-DB](https://doi.org/10.5281/zenodo.21330198) | 硼自由基及其卤原子转移反应组分 | 按结构键去重的优化反应物与产物，用映射反应 SMILES 作参考 |
+| [tmQMg-Corrected](https://github.com/gentle1999/tmQMg-Corrected) | 单重态过渡金属配合物 | 发布版中有原生 Lewis 参考图的结构 |
+| [BDE](https://doi.org/10.6084/m9.figshare.12158646.v1) | 有机小分子自由基碎片 | 每个含碳双重态碎片取发布 SDF 中的优化结构 |
 
-早期 tmQMg 性能对比 使用旧草案的 72,578 个目标，
-不是当前发布版成绩。小规模流程验证不是全量结果；新版标准需要重新评测。
+跨数据集对比中，每次重建限时 10 秒，随后独立进行的参考图比较限时 5 秒。各数据集分别统计匹配率，分母包括重建失败和超时的输入。
 
 ## 参考答案与构象口径
 
@@ -25,23 +24,33 @@
 指出，部分几何发生了解离，其图结构会与母分子 SMILES 不同。因此每个构象使用它随附的
 `rd_mol` 图作为参考，母分子 SMILES 仅用于汇总分组。发布图由 xyz2mol 赋值，
 对这类算法而言，参考匹配率仍不构成独立的化学正确率。
-保留构象能量、简并度、来源 ID 和统计权重，但不据此筛选或加权。
-每个已存储构象使用一次；`totalconfs` 和简并度不会生成额外坐标记录。
+入选构象保留发布时的坐标、能量、简并度、来源 ID 和统计权重。
+
+下列两条 GEOM 命令均使用种子 `20261125`。QM9 按归档顺序为每个母分子选取一个构象，并记录每个入选构象的参考图状态。Drugs 对 `summary_drugs.json` 中去重的 pickle 路径按带种子的 SHA-256 排序，依次选出 100,000 个母分子。若归档成员缺失、构象集为空或抽中构象的参考图不合格，则顺延至下一个母分子。两套数据均由数据集名、种子和归档成员路径确定构象，通过拒绝采样均匀选取从零开始的构象编号。对合格参考图，若查询仅指定一个确切元素，可将其转换为普通 RDKit 原子用于评分，同时记录源图和评分图的哈希。
+
+[QM9 输入索引](manifests/geom-qm9.csv.gz)和 [Drugs 输入索引](manifests/geom-drugs.csv.gz)按输入库顺序列出实际选中的母分子和构象，格式为 gzip 压缩的 CSV。要读取某条记录的几何，从固定发布归档中打开 `archive_member` 指定的 pickle，取 `entry["conformers"][conformer_index]["rd_mol"]` 即可。
+
+| 字段 | 含义 |
+| --- | --- |
+| `archive_parent_index` | 母分子在对应子集中从 0 开始的索引。按 tar 中的物理顺序，仅计入该子集的普通 `.pickle` 文件。 |
+| `conformer_index` | 在该母分子发布的 `conformers` 列表中从 0 开始的索引。 |
+| `case_id`、`source_geom_id` | 前者是从 1 开始的 SQLite 输入编号，后者是发布者给入选构象分配的 `geom_id`。 |
+| `reference_status` | 筛选 `valid` 即得实际评分清单。QM9 收录全部 133,232 条抽样记录，其中 133,123 条参与评分；Drugs 的 100,000 条均参与评分。 |
+| `sample_rank`（仅 Drugs） | 资格筛选和母分子去重前的抽样名次，从 1 开始。跳过的候选会留下空号。 |
 
 电荷来自数据源。GEOM 的零／一个形式自由基电子分别按源图推定为单重态／双重态；
 多自由基图不能单独确定自旋耦合，多重度保持未确定。
-BorylXAT 开壳层类别还要求自旋密度之和与一个未配对电子一致。
-连续的自旋密度不被当作整数原子自由基数。
 
-BorylXAT 的 B 和反应物／产物配合物复用[源图校正与几何校验](../../tests/data/borylxat/README.md)。
-校正失败的参考保持无法判定，不用 MolGR 输出替代。
-其他稳定类别保留源图，检查组成、电荷和自由基数。
-过渡态不赋予整数键图的参考正确率。全量导入必须通过官方文件大小和 MD5 检查；
-目前尚未在全部源数据库记录上验证导入器。
+BorylXAT 使用 Zenodo v2 的 `BorylXAT-DB.db`。每条反应关联四个独立优化的结构：反应物侧的硼自由基配合物（`complex_r`）和含氯底物（`Cl`），产物侧的硼氯配合物（`complex_p`）和碳自由基（`c_radical`）。坐标取各自 `GS_OPT` 计算的最后一帧。每个组分分别重建，重复出现的结构键只计一次。
+
+参考图来自反应记录中 mapped reaction SMILES 对应侧的片段。用映射号追踪从碳转移到硼的氯，确认片段角色；逐个验证显式氢和其他原子在两侧守恒。组分坐标保留其原始原子顺序，图比较允许原子重排。没有反应标注或标注冲突的结构单列为无法判定。
+
+BDE 使用 St. John 等人发布的优化结构 SDF。保留含碳且键表标有一个未配对电子的记录，并核对逐原子自旋密度（`AtomSpins`）之和在 1 的 ±0.0001 内。闭壳层母分子和无碳碎片不进入分母。电荷取自 SDF 的形式电荷，适配器接收显式氢坐标、总电荷和双重态多重度，各算法按自身接口取用。评分使用同一记录的键表。
+
+五套数据共用同一规则：对于中性开壳层输入，RDKit 和 xyz2mol_tm 通用入口分别使用 `allowChargedFragments=False` 和 `allow_charged_fragments=False` 启用自由基赋值。闭壳层和带净电荷的输入采用上游的形式电荷赋值。xyz2mol_tm 在每次调用中独立设置价态表，自由基模式对 C、N、O 价态的调整只对当前分子生效。xyzgraph 的输出转为 RDKit 图时，须禁用隐式补氢，因为 XYZ 已含全部氢原子。cell2mol v2 的分子 XYZ 入口接收总电荷，没有多重度参数。
 
 匹配允许共振，默认忽略立体标记和金属配位键。GEOM、BorylXAT 和 BDE 默认使用
-`max_resonance=5000`、比较限时 5 秒；tmQMg-Corrected 使用发布版规定的
-100,000 和 60 秒。这些设置保存为数据源配置，由同一运行器执行，不另设评分入口。
+`max_resonance=5000`、比较限时 5 秒。tmQMg-Corrected 独立发布版的设置为 100,000 和 60 秒。跨数据集耗时对比沿用其 100,000 个状态的搜索预算，比较限时统一为 5 秒。
 通用导入器检查元素组成、源电荷、电子奇偶性和形式自由基数，但这些检查不证明化学正确性。
 tmQMg 的资格和输入多重度直接采用发布版，不能用形式自由基数重新推断耦合自旋。
 所有数据源均保存原生 RDKit 参考图和 SHA-256；SMILES 仅供展示，不参与参考图还原。
@@ -55,10 +64,11 @@ tmQMg 的资格和输入多重度直接采用发布版，不能用形式自由�
 反序列化时仅允许 RDKit 分子构造器。
 
 ```bash
-mkdir -p .local/datasets/geom .local/datasets/borylxat/21330198
+mkdir -p .local/datasets/geom
 curl --fail --location --continue-at - \
   'https://dataverse.harvard.edu/api/access/datafile/4327252?format=original' \
   --output .local/datasets/geom/rdkit_folder.tar.gz
+mkdir -p .local/datasets/borylxat/21330198
 curl --fail --location --continue-at - \
   'https://zenodo.org/records/21330198/files/BorylXAT-DB.db?download=1' \
   --output .local/datasets/borylxat/21330198/BorylXAT-DB.db
@@ -71,17 +81,23 @@ python -m benchmarks.dataset_xyz_benchmark.prepare \
   --out .local/datasets/benchmark-cases/geom-drugs.sqlite
 python -m benchmarks.dataset_xyz_benchmark.prepare \
   --dataset borylxat --source .local/datasets/borylxat/21330198/BorylXAT-DB.db \
-  --out .local/datasets/benchmark-cases/borylxat.sqlite
+  --out .local/datasets/benchmark-cases/borylxat-optimized.sqlite
+
+mkdir -p .local/datasets/bde
+curl --fail --location --continue-at - \
+  https://ndownloader.figshare.com/files/22357962 \
+  --output .local/datasets/bde/20200415_radical_database.sdf.gz
+python -m benchmarks.dataset_xyz_benchmark.prepare \
+  --dataset bde --source .local/datasets/bde/20200415_radical_database.sdf.gz \
+  --out .local/datasets/benchmark-cases/bde.sqlite
 ```
 
 固定的 GEOM 文件为 50,137,579,520 字节，MD5 为
-`e8f2168b7050652db22c976be25c450e`；BorylXAT v2 为 291,348,480 字节，MD5 为
-`d486fbcc36f856bbebf303b5cda4950f`。全量导入拒绝不匹配文件。
-`--limit-molecules N` 可用于小规模流程验证，仍导入所选分子的**全部构象**，
-并明确标记为 pilot。归档顺序选择不能作为随机抽样。
+`e8f2168b7050652db22c976be25c450e`。BorylXAT 导入校验发布数据库的大小和 MD5；已有输入库需重新准备，以使用独立优化的坐标与反应标注。
+GEOM 的 `--limit-molecules N` 按归档顺序取前 N 个母分子的**全部构象**，并将输入库标记为 pilot。复现上表的正式 benchmark 时省略该选项。
 导入中断后保留未完成标记，不能开始评测；重新导入需使用新的输出文件。
 
-无需下载即可验证已有 BorylXAT 测试结构：
+另有独立的 Zenodo 回归夹具，可离线运行：
 
 ```bash
 python -m benchmarks.dataset_xyz_benchmark.prepare \
@@ -147,7 +163,7 @@ Linux 入口使用持久的 spawn 工作进程，默认重建限时 30 秒，匹
 `--comparison-timeout` 只允许覆盖未锁定的配置，不能改写发布版固定的比较限时。
 进程崩溃和超时仍写入结果；算法报错后保留的图照常匹配。
 计时不包含输入读取、进程启动、预热和参考匹配。
-xyz2mol_tm 的过渡金属入口可用于 tmQMg，不作为 GEOM、BorylXAT 或 BDE 的有机基线。
+五套数据均可使用 `--method xyz2mol_tm`。工作进程在计时前读取每个 XYZ 的元素符号。含上游 TMC 列表中任一元素（包括 La 和 Lu）的结构走 Hückel 入口，其余结构走 `xyz2mol_local.xyz2mol`。逐条结果中的 `upstream_entry` 记录实际入口。显式传入 `--method xyz2mol_tm_local` 仍可直接使用通用入口。
 
 ```bash
 python -m benchmarks.dataset_xyz_benchmark.run \
