@@ -158,17 +158,6 @@ def _state_key(state: ReconstructionState) -> tuple[object, int]:
     return resonance_utils.build_resonance_state_key(state.omol), state.given_charge
 
 
-def _enumeration_key(
-    state: ReconstructionState,
-    *,
-    track_discrepancy: bool,
-) -> tuple[object, ...]:
-    state_key = _state_key(state)
-    if not track_discrepancy:
-        return state_key
-    return (*state_key, int(state.metadata.get(_CHARGE_SEPARATION_DISCREPANCY_KEY, 0)))
-
-
 def _resolved_seed(
     state: ReconstructionState,
     *,
@@ -242,14 +231,13 @@ def enumerate_neighbor_radical_seeds(
     while pending and len(expanded) < _MAX_NEIGHBOR_RADICAL_SEEDS:
         current = pending.pop()
         current_key = _state_key(current)
-        enumeration_key = _enumeration_key(
-            current,
-            track_discrepancy=exact_discrepancy is not None,
+        current_discrepancy = int(current.metadata.get(_CHARGE_SEPARATION_DISCREPANCY_KEY, 0))
+        enumeration_key = (
+            current_key if exact_discrepancy is None else (*current_key, current_discrepancy)
         )
         if enumeration_key in expanded:
             continue
         expanded.add(enumeration_key)
-        current_discrepancy = int(current.metadata.get(_CHARGE_SEPARATION_DISCREPANCY_KEY, 0))
         if exact_discrepancy is not None and current_discrepancy > exact_discrepancy:
             continue
         pairs = neighbor_radical_bond_pairs(current.omol)

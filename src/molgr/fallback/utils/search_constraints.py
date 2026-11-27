@@ -10,7 +10,7 @@ from molgr.fallback.utils.electrons import (
     get_unpaired_electron_count,
     has_unresolved_two_electron_center,
 )
-from molgr.fallback.utils.ob_graph import mol_atoms
+from molgr.fallback.utils.ob_graph import indexed_atoms
 
 
 REQUIRED_NITROSONIUM_OXYGEN = "MOLGR_REQUIRED_NITROSONIUM_OXYGEN"
@@ -23,7 +23,7 @@ def require_nitrosonium(nitrogen: ob.OBAtom, oxygen: ob.OBAtom) -> None:
 
 def search_constraints_satisfied(mol: ob.OBMol) -> bool:
     """Check final candidates only; intermediate electronic states may differ."""
-    for nitrogen in mol_atoms(mol):
+    for nitrogen in indexed_atoms(mol):
         index = _get_int_data(nitrogen, REQUIRED_NITROSONIUM_OXYGEN)
         if index == 0:
             continue

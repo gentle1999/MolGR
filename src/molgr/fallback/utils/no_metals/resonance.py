@@ -95,11 +95,15 @@ def _candidate_key(state: ReconstructionState) -> tuple[object, int]:
     return resonance_utils.build_resonance_state_key(state.omol), state.given_charge
 
 
-def _deduplicate_states(states: Iterable[ReconstructionState]) -> list[ReconstructionState]:
+def _index_unique_states(
+    states: Iterable[ReconstructionState],
+) -> dict[tuple[object, int], ReconstructionState]:
+    """Keep the first seed for each resonance graph and remaining charge, in input order."""
+
     unique: dict[tuple[object, int], ReconstructionState] = {}
     for state in states:
         unique.setdefault(_candidate_key(state), state)
-    return list(unique.values())
+    return unique
 
 
 def build_resonance_seed_pool(
@@ -206,10 +210,11 @@ def expand_boron_neighbor_radical_seeds(
     combination while both budgets allow it. Bound the pool as in neighbor seed
     enumeration, retaining all original seeds even when already over the cap.
     """
-    pool = _deduplicate_states(states)
+    unique = _index_unique_states(states)
+    pool = list(unique.values())
     if not any(s.given_charge > 0 and s.total_radical_electrons > 0 for s in pool):
         return pool
-    seen = {_candidate_key(state) for state in pool}
+    seen = set(unique)
     next_index = 0
     while next_index < len(pool) and len(pool) < _MAX_BORON_NEIGHBOR_SEEDS:
         state = pool[next_index]
@@ -255,9 +260,9 @@ def expand_resonance_seed_pool_stage(
 ) -> list[ReconstructionState]:
     """Retain every input seed and add the changed result of one optional stage."""
 
-    pool = _deduplicate_states(states)
-    additions: list[ReconstructionState] = []
-    for state in pool:
+    unique = _index_unique_states(states)
+    # Only the cloned graph is normalized; the original seed keys remain valid.
+    for state in list(unique.values()):
         machine = OmolStateMachine.from_reconstruction_state(state).branch(
             None,
             omol=_clone_omol(state.omol),
@@ -270,8 +275,9 @@ def expand_resonance_seed_pool_stage(
         else:
             hit = machine.run_omol_stage(phase, cast(_OmolStage, stage))
         if hit:
-            additions.append(machine.freeze_like(state))
-    return _deduplicate_states((*pool, *additions))
+            candidate = machine.freeze_like(state)
+            unique.setdefault(_candidate_key(candidate), candidate)
+    return list(unique.values())
 
 
 def _register_traversal_label(
@@ -390,11 +396,6 @@ def search_resonance_candidates(
                 "full_resonance_normalization",
                 full_normalization_stage,
             )
-        unresolved_indices = [
-            int(atom.GetIdx())
-            for atom in mol_atoms(cast(ob.OBMol, machine.omol.OBMol))
-            if has_unresolved_two_electron_center(atom)
-        ]
         processed_key = (
             resonance_utils.build_processed_resonance_key(machine.omol),
             machine.given_charge,
@@ -406,6 +407,11 @@ def search_resonance_candidates(
             )
             continue
         search_session.seen_processed_states.add(processed_key)
+        unresolved_indices = [
+            int(atom.GetIdx())
+            for atom in mol_atoms(cast(ob.OBMol, machine.omol.OBMol))
+            if has_unresolved_two_electron_center(atom)
+        ]
         if not validation_stage(
             machine.omol,
             raw.seed.total_charge,

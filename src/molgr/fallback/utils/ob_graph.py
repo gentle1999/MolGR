@@ -13,6 +13,16 @@ atom_neighbors = cast("Callable[[ob.OBAtom], Iterator[ob.OBAtom]]", ob.OBAtomAto
 atom_bonds = cast("Callable[[ob.OBAtom], Iterator[ob.OBBond]]", ob.OBAtomBondIter)
 
 
+def indexed_atoms(mol: ob.OBMol) -> Iterator[ob.OBAtom]:
+    """Visit one-based atom indices in OBMol order while membership stays fixed."""
+    return map(mol.GetAtom, range(1, mol.NumAtoms() + 1))
+
+
+def indexed_bonds(mol: ob.OBMol) -> Iterator[ob.OBBond]:
+    """Visit zero-based bond indices in OBMol order while membership stays fixed."""
+    return map(mol.GetBond, range(mol.NumBonds()))
+
+
 def mol_rings(mol: ob.OBMol) -> Iterable[ob.OBRing]:
     """Return the perceived smallest set of smallest rings from the original molecule."""
     return cast("Iterable[ob.OBRing]", mol.GetSSSR())
