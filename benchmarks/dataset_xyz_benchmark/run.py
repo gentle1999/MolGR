@@ -31,7 +31,25 @@ from benchmarks.dataset_xyz_benchmark.prepare import SCHEMA_VERSION, file_hash
 from benchmarks.smiles_xyz_benchmark.methods import METHOD_IDS, get_method_registry
 
 
+DATASET_METHOD_IDS = (*METHOD_IDS, "xyz2mol_tm_local")
 ROOT = Path(__file__).resolve().parents[2]
+# Mirrors xyz2mol_tmc.TRANSITION_METALS. Keep routing available without the optional package.
+# fmt: off
+_XYZ2MOL_TMC_ELEMENTS = frozenset({
+    "Sc", "Ti", "V", "Cr", "Mn", "Fe", "Co", "Ni", "Cu", "Zn",
+    "Y",  "Zr", "Nb", "Mo", "Tc", "Ru", "Rh", "Pd", "Ag", "Cd",
+    "La", "Lu", "Hf", "Ta", "W",  "Re", "Os", "Ir", "Pt", "Au", "Hg",
+})
+# fmt: on
+
+
+def xyz2mol_entry(xyz: str) -> str:
+    """Choose the upstream entry from the XYZ atom list before timing reconstruction."""
+    for row in xyz.splitlines()[2:]:
+        fields = row.split(maxsplit=1)
+        if fields and fields[0] in _XYZ2MOL_TMC_ELEMENTS:
+            return "xyz2mol_tm"
+    return "xyz2mol_tm_local"
 
 
 def reconstruction_input(xyz, charge, multiplicity):
@@ -57,8 +75,9 @@ def worker(conn, cpu, source, method_id, log, policy):
         RDLogger.DisableLog("rdApp.*")
         CONFIG.cpp_backend.max_threads = 1
         CONFIG.cpp_backend.target_bucket_parallel_max_threads = 1
-        method = get_method_registry((method_id,))[0]
-        warmed = False
+        entries = (method_id, "xyz2mol_tm_local") if method_id == "xyz2mol_tm" else (method_id,)
+        methods = {method.method_id: method for method in get_method_registry(entries)}
+        warmed = set()
         conn.send(("ready", None))
         while True:
             case_id = conn.recv()
@@ -70,11 +89,13 @@ def worker(conn, cpu, source, method_id, log, policy):
             ).fetchone()
             xyz, charge, multiplicity, native, digest, reference_status = row
             case = reconstruction_input(zlib.decompress(xyz).decode(), charge, multiplicity)
-            if not warmed:
+            entry = xyz2mol_entry(case["xyz_block"]) if method_id == "xyz2mol_tm" else method_id
+            method = methods[entry]
+            if entry not in warmed:
                 conn.send(("warmup", None))
                 with suppress(Exception):
                     method.run(dict(case))
-                warmed = True
+                warmed.add(entry)
             conn.send(("method", None))
             started = time.perf_counter()
             output = None
@@ -88,6 +109,8 @@ def worker(conn, cpu, source, method_id, log, policy):
             except Exception as exc:
                 record = {"status": "error", "error": repr(exc)}
             record.update(method_ms=(time.perf_counter() - started) * 1000, decision=None)
+            if method_id == "xyz2mol_tm":
+                record["upstream_entry"] = entry
             conn.send(("comparison", record))
             # The reference graph is never passed to the reconstruction adapter.
             reference = {"reference_status": reference_status, "ground_truth_rdmol": None}
@@ -108,7 +131,7 @@ def run(source, out, method, workers, timeout=30.0, comparison_timeout=None):
         raise ValueError("Latency harness requires Linux CPU affinity")
     if workers < 1 or not math.isfinite(timeout) or timeout <= 0:
         raise ValueError("Worker count and timeouts must be positive")
-    if method not in METHOD_IDS:
+    if method not in DATASET_METHOD_IDS:
         raise ValueError(f"Unknown method: {method}")
     out.mkdir(parents=True, exist_ok=True)
     source = source.resolve()
@@ -317,7 +340,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cases", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--method", choices=METHOD_IDS, required=True)
+    parser.add_argument("--method", choices=DATASET_METHOD_IDS, required=True)
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--timeout", type=float, default=30)
     parser.add_argument(

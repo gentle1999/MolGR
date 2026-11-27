@@ -322,3 +322,73 @@ def test_missing_reference_is_unresolved_without_trusting_method_equivalence(
     summary = summarize_results([result])[0]
     assert summary["count"] == 0
     assert summary["reference_unresolved_count"] == 1
+
+
+def test_xyzgraph_explicit_hydrogen_geometry_keeps_methyl_radical() -> None:
+    from benchmarks.smiles_xyz_benchmark.methods.xyzgraph_cheminf_full import _graph_to_rdkit_mol
+
+    nx = pytest.importorskip("networkx")
+    graph = nx.Graph()
+    graph.add_node(0, symbol="C")
+    for i in (1, 2, 3):
+        graph.add_node(i, symbol="H")
+        graph.add_edge(0, i, bond_order=1)
+    mol = _graph_to_rdkit_mol(graph)
+    Chem.SanitizeMol(mol)
+    carbon = mol.GetAtomWithIdx(0)
+    assert carbon.GetNumImplicitHs() == 0
+    assert carbon.GetNumRadicalElectrons() == 1
+
+
+@pytest.mark.parametrize("method_id", ["rdkit_determine_bonds", "xyz2mol_tm_local"])
+def test_neutral_methyl_radical_without_charge_assignment_error(method_id: str) -> None:
+    if method_id == "xyz2mol_tm_local":
+        pytest.importorskip("xyz2mol_tm.huckel_to_smiles.xyz2mol_local")
+    (method,) = get_method_registry((method_id,))
+    result = method.run(
+        {
+            "xyz_block": "4\nmethyl\nC 0 0 0\nH 1.08 0 0\nH -0.54 .935 0\nH -0.54 -.935 0\n",
+            "total_charge": 0,
+            "total_radical_electrons": 1,
+        }
+    )
+    assert result.status == "ok", result.error
+    assert Chem.MolToSmiles(Chem.RemoveHs(result.rdkit_mol)) == "[CH3]"
+
+
+@pytest.mark.parametrize(
+    ("charge", "radicals", "charged_fragments"),
+    [(0, 0, True), (0, 1, False), (0, 2, False), (-1, 1, True), (1, 0, True)],
+)
+def test_fragment_assignment_uses_charge_and_spin(charge, radicals, charged_fragments):
+    from benchmarks.smiles_xyz_benchmark.methods.base import allow_charged_fragments
+
+    assert allow_charged_fragments(charge, radicals) is charged_fragments
+
+
+def test_xyz2mol_radical_valences_do_not_leak_into_the_next_call(monkeypatch):
+    upstream = pytest.importorskip("xyz2mol_tm.huckel_to_smiles.xyz2mol_local")
+    baseline = upstream.atomic_valence
+    before = {z: tuple(values) for z, values in baseline.items()}
+    seen = []
+
+    def record_and_exit(*args, allow_charged_fragments, **kwargs):
+        seen.append(
+            (
+                allow_charged_fragments,
+                tuple(upstream.atomic_valence[7]),
+                tuple(upstream.atomic_valence[8]),
+            )
+        )
+        upstream.atomic_valence[7] = [99]
+        raise SystemExit(1)
+
+    monkeypatch.setattr(upstream, "xyz2mol", record_and_exit)
+    (method,) = get_method_registry(("xyz2mol_tm_local",))
+    case = {"xyz_block": "1\ncarbon\nC 0 0 0\n", "total_charge": 0}
+    for radicals in (1, 0):
+        result = method.run(dict(case, total_radical_electrons=radicals))
+        assert result.status == "error"
+        assert upstream.atomic_valence is baseline
+        assert {z: tuple(values) for z, values in baseline.items()} == before
+    assert seen == [(False, (3, 2), (2, 1)), (True, before[7], before[8])]

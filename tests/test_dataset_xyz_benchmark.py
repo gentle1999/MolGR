@@ -360,3 +360,21 @@ def test_bde_selects_only_carbon_containing_doublets(tmp_path):
         list(bde_cases(source))
     with pytest.raises(ValueError, match="checksum"):
         prepare(source, tmp_path / "cases.sqlite", "bde")
+
+
+@pytest.mark.parametrize(
+    ("element", "entry"),
+    [
+        ("Fe", "xyz2mol_tm"),
+        ("La", "xyz2mol_tm"),
+        ("Lu", "xyz2mol_tm"),
+        ("B", "xyz2mol_tm_local"),
+        ("C", "xyz2mol_tm_local"),
+        ("Cl", "xyz2mol_tm_local"),
+    ],
+)
+def test_xyz2mol_routing_uses_xyz_atoms_only(element, entry):
+    from benchmarks.dataset_xyz_benchmark.run import xyz2mol_entry
+
+    xyz = f"2\nFe in comment\nH 0 0 0\n{element} 1 0 0\n"
+    assert xyz2mol_entry(xyz) == entry
