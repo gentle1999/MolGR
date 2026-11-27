@@ -346,7 +346,7 @@ def main():
     parser.add_argument(
         "--comparison-timeout",
         type=float,
-        help="Override the source policy only when it is not publisher-pinned",
+        help="Graph comparison wall time in seconds (default: source limit; may shorten a pinned limit)",
     )
     args = parser.parse_args()
     run(args.cases, args.out, args.method, args.workers, args.timeout, args.comparison_timeout)

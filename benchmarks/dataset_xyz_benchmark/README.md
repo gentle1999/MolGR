@@ -194,8 +194,12 @@ MolGR's software license does not replace dataset licenses.
 Run each method separately; multiprocessing distributes molecules/conformers,
 with one logical CPU and one native thread per worker. The Linux harness uses
 persistent spawned workers, a default 30-second reconstruction timeout and the
-source-configured comparison timeout. `--comparison-timeout` may override only
-unlocked policies, never a publisher-pinned comparison limit. A worker crash or
+source-configured comparison timeout. For the five-dataset comparison, use
+`--timeout 10 --comparison-timeout 5` for every dataset, including tmQMg-Corrected.
+Omit `--comparison-timeout` to use the source default (60 s for tmQMg-Corrected).
+An explicit deadline can shorten a pinned limit. The run provenance records both
+the source policy and the effective policy. Use separate output directories for
+runs with different limits. A worker crash or
 timeout is retained in the result table.
 Returned graphs are compared even when the adapter reports an API error.
 Input reading, process startup, warmup and reference comparison are outside the
@@ -208,7 +212,7 @@ The result detail records the entry as `upstream_entry`. The explicit
 ```bash
 python -m benchmarks.dataset_xyz_benchmark.run \
   --cases .local/datasets/benchmark-cases/geom-drugs.sqlite \
-  --method molgr_cpp --workers 14 \
+  --method molgr_cpp --workers 64 --timeout 10 --comparison-timeout 5 \
   --out .local/reports/dataset-performance/geom-drugs
 python -m benchmarks.dataset_xyz_benchmark.report \
   --cases .local/datasets/benchmark-cases/geom-drugs.sqlite \

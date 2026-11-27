@@ -160,7 +160,8 @@ MolGR 的软件许可不替代数据许可。
 
 每种方法独立运行，多进程分配分子／构象，每个工作进程绑定一个逻辑 CPU，内部一个原生线程。
 Linux 入口使用持久的 spawn 工作进程，默认重建限时 30 秒，匹配限时由数据源配置决定。
-`--comparison-timeout` 只允许覆盖未锁定的配置，不能改写发布版固定的比较限时。
+复现五套数据的对比时，全部使用 `--timeout 10 --comparison-timeout 5`，包括 tmQMg-Corrected。
+省略 `--comparison-timeout` 时沿用数据源默认值（tmQMg-Corrected 为 60 秒）。显式限时可以缩短发布版的时限。运行记录分别保存来源策略和实际策略。不同限时的结果写入不同目录。
 进程崩溃和超时仍写入结果；算法报错后保留的图照常匹配。
 计时不包含输入读取、进程启动、预热和参考匹配。
 五套数据均可使用 `--method xyz2mol_tm`。工作进程在计时前读取每个 XYZ 的元素符号。含上游 TMC 列表中任一元素（包括 La 和 Lu）的结构走 Hückel 入口，其余结构走 `xyz2mol_local.xyz2mol`。逐条结果中的 `upstream_entry` 记录实际入口。显式传入 `--method xyz2mol_tm_local` 仍可直接使用通用入口。
@@ -168,7 +169,7 @@ Linux 入口使用持久的 spawn 工作进程，默认重建限时 30 秒，匹
 ```bash
 python -m benchmarks.dataset_xyz_benchmark.run \
   --cases .local/datasets/benchmark-cases/geom-drugs.sqlite \
-  --method molgr_cpp --workers 14 \
+  --method molgr_cpp --workers 64 --timeout 10 --comparison-timeout 5 \
   --out .local/reports/dataset-performance/geom-drugs
 python -m benchmarks.dataset_xyz_benchmark.report \
   --cases .local/datasets/benchmark-cases/geom-drugs.sqlite \
