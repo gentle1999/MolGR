@@ -297,7 +297,9 @@ def test_unified_worker_uses_only_input_state_and_compares_native_error_graph(re
         return SimpleNamespace(decision=SimpleNamespace(value="equivalent"), reason="native graph")
 
     monkeypatch.setattr(
-        runner, "get_method_registry", lambda ids: [SimpleNamespace(run=reconstruct)]
+        runner,
+        "get_method_registry",
+        lambda ids: [SimpleNamespace(method_id="molgr_cpp", run=reconstruct)],
     )
     monkeypatch.setattr(equivalence, "evaluate_equivalence", compare)
     monkeypatch.setattr(runner.os, "sched_setaffinity", lambda *args: None, raising=False)
